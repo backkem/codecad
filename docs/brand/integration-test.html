@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CodeCAD Brand Integration Test</title>
+<link rel="icon" type="image/svg+xml" href="icon-mark.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Jost:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   CodeCAD Design Tokens
+   ============================================================ */
+:root {
+  /* Palette */
+  --void:       #0A0E14;
+  --accent:     #FFB000;
+  --text:       #E8E8E8;
+  --text-muted: #6B7280;
+  --grid:       #151A22;
+  --success:    #34D399;
+  --error:      #EF4444;
+
+  /* Typography */
+  --font-heading: 'Jost', sans-serif;
+  --font-code:    'JetBrains Mono', monospace;
+
+  /* Spacing */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 32px;
+  --space-xl: 64px;
+}
+
+/* ============================================================
+   Reset & Base
+   ============================================================ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--void);
+  color: var(--text);
+  font-family: var(--font-heading);
+  font-weight: 400;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+/* ============================================================
+   The Crosshair (CSS-only, positionable)
+   ============================================================
+
+   Usage: add class "crosshair" to any positioned container.
+   The crosshair extends to container edges via pseudo-elements.
+   Override --ch-x / --ch-y to reposition the intersection.
+   ------------------------------------------------------------ */
+.crosshair {
+  --ch-x: 50%;
+  --ch-y: 50%;
+  position: relative;
+  overflow: hidden;
+}
+.crosshair::before,
+.crosshair::after {
+  content: '';
+  position: absolute;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 1;
+}
+/* Vertical line */
+.crosshair::before {
+  left: var(--ch-x);
+  top: 0;
+  bottom: 0;
+  width: 1.5px;
+  transform: translateX(-50%);
+}
+/* Horizontal line */
+.crosshair::after {
+  top: var(--ch-y);
+  left: 0;
+  right: 0;
+  height: 1.5px;
+  transform: translateY(-50%);
+}
+
+/* ============================================================
+   Layout
+   ============================================================ */
+.container {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: var(--space-lg) var(--space-lg);
+}
+
+section {
+  margin-bottom: var(--space-xl);
+}
+
+section > h2 {
+  font-family: var(--font-code);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  margin-bottom: var(--space-lg);
+  padding-bottom: var(--space-sm);
+  border-bottom: 1px solid #1E2430;
+}
+
+/* ============================================================
+   Header with docs-header.svg
+   ============================================================ */
+.brand-header {
+  width: 100%;
+  aspect-ratio: 960 / 200;
+  background: url('docs-header.svg') center/cover no-repeat;
+  margin-bottom: var(--space-xl);
+}
+
+/* ============================================================
+   Logo display
+   ============================================================ */
+.logo-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xl);
+  flex-wrap: wrap;
+}
+.logo-row img, .logo-row object {
+  height: 80px;
+}
+.logo-row .icon-mark {
+  height: 64px;
+  width: 64px;
+}
+
+/* ============================================================
+   Color swatches
+   ============================================================ */
+.swatches {
+  display: flex;
+  gap: var(--space-md);
+  flex-wrap: wrap;
+}
+.swatch {
+  width: 120px;
+}
+.swatch-block {
+  width: 120px;
+  height: 72px;
+  border-radius: 4px;
+  border: 1px solid #1E2430;
+}
+.swatch-label {
+  font-family: var(--font-code);
+  font-size: 12px;
+  margin-top: var(--space-xs);
+  color: var(--text-muted);
+}
+.swatch-hex {
+  font-family: var(--font-code);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+/* ============================================================
+   Typography samples
+   ============================================================ */
+.type-sample {
+  margin-bottom: var(--space-lg);
+}
+.type-sample .label {
+  font-family: var(--font-code);
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: var(--space-xs);
+}
+
+h1 {
+  font-family: var(--font-heading);
+  font-weight: 500;
+  font-size: 42px;
+  line-height: 1.2;
+  letter-spacing: 0.5px;
+}
+
+h3 {
+  font-family: var(--font-heading);
+  font-weight: 500;
+  font-size: 24px;
+  line-height: 1.3;
+}
+
+.code-sample {
+  font-family: var(--font-code);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+/* ============================================================
+   Code block
+   ============================================================ */
+pre {
+  background: #0D1117;
+  border: 1px solid #1E2430;
+  border-radius: 6px;
+  padding: var(--space-md);
+  overflow-x: auto;
+  font-family: var(--font-code);
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--text);
+}
+pre .kw   { color: #C792EA; }
+pre .str  { color: #C3E88D; }
+pre .num  { color: #F78C6C; }
+pre .fn   { color: #82AAFF; }
+pre .cmt  { color: var(--text-muted); }
+pre .obj  { color: var(--accent); }
+
+/* ============================================================
+   Crosshair demo panel
+   ============================================================ */
+.viewport-demo {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: var(--void);
+  border: 1px solid #1E2430;
+  border-radius: 6px;
+  --ch-x: 35%;
+  --ch-y: 45%;
+}
+.viewport-demo .geom {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+
+/* ============================================================
+   Voice samples
+   ============================================================ */
+.voice-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-md);
+}
+.voice-card {
+  padding: var(--space-md);
+  border-radius: 6px;
+  font-family: var(--font-code);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.voice-card.do   { background: #0D1A0D; border: 1px solid #1A3A1A; }
+.voice-card.dont { background: #1A0D0D; border: 1px solid #3A1A1A; }
+.voice-card .tag {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  margin-bottom: var(--space-sm);
+}
+.voice-card.do .tag   { color: var(--success); }
+.voice-card.dont .tag { color: var(--error); }
+
+/* ============================================================
+   Status bar demo
+   ============================================================ */
+.status-bar {
+  display: flex;
+  gap: var(--space-lg);
+  padding: var(--space-sm) var(--space-md);
+  background: #0D1117;
+  border: 1px solid #1E2430;
+  border-radius: 4px;
+  font-family: var(--font-code);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.status-bar .active { color: var(--text); }
+.status-bar .accent { color: var(--accent); }
+
+/* ============================================================
+   Taglines
+   ============================================================ */
+.tagline {
+  font-family: var(--font-heading);
+  font-weight: 500;
+  font-size: 28px;
+  color: var(--text);
+  padding: var(--space-md) 0;
+  border-bottom: 1px solid #1E2430;
+}
+.tagline:last-child { border-bottom: none; }
+</style>
+</head>
+<body>
+
+<!-- Docs header banner -->
+<div class="brand-header"></div>
+
+<div class="container">
+
+  <!-- ==================== LOGOS ==================== -->
+  <section>
+    <h2>01 / Logo + Mark</h2>
+    <div class="logo-row">
+      <img src="logo.svg" alt="CodeCAD logo">
+      <img src="icon-mark.svg" alt="CodeCAD icon mark" class="icon-mark">
+      <img src="crosshair.svg" alt="Crosshair element" class="icon-mark" style="background:transparent;">
+    </div>
+  </section>
+
+  <!-- ==================== PALETTE ==================== -->
+  <section>
+    <h2>02 / Palette</h2>
+    <div class="swatches">
+      <div class="swatch">
+        <div class="swatch-block" style="background:#0A0E14;"></div>
+        <div class="swatch-hex">#0A0E14</div>
+        <div class="swatch-label">void</div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-block" style="background:#FFB000; border-color:#FFB000;"></div>
+        <div class="swatch-hex">#FFB000</div>
+        <div class="swatch-label">accent (amber)</div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-block" style="background:#E8E8E8;"></div>
+        <div class="swatch-hex">#E8E8E8</div>
+        <div class="swatch-label">text</div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-block" style="background:#6B7280;"></div>
+        <div class="swatch-hex">#6B7280</div>
+        <div class="swatch-label">muted</div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-block" style="background:#151A22;"></div>
+        <div class="swatch-hex">#151A22</div>
+        <div class="swatch-label">grid</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== TYPOGRAPHY ==================== -->
+  <section>
+    <h2>03 / Typography</h2>
+    <div class="type-sample">
+      <div class="label">Jost 500 / Headings</div>
+      <h1>Code compiled to live geometry.</h1>
+    </div>
+    <div class="type-sample">
+      <div class="label">Jost 400 / Body</div>
+      <p>Agent-first 2D CAD. You state your mechanical intent. The agent writes deterministic drawing code. The geometry renders live in the browser viewport.</p>
+    </div>
+    <div class="type-sample">
+      <div class="label">JetBrains Mono 400 / Code</div>
+      <div class="code-sample">cad.addLine([0, 0], [5, 0], { layer: "S_WALL" })</div>
+    </div>
+  </section>
+
+  <!-- ==================== CODE BLOCK ==================== -->
+  <section>
+    <h2>04 / Code Block Styling</h2>
+    <pre><span class="cmt">// Draw a room outline and place a socket</span>
+<span class="obj">cad</span>.<span class="fn">addLayer</span>(<span class="str">"S_WALL"</span>, { color: [<span class="num">255</span>, <span class="num">255</span>, <span class="num">255</span>] })
+<span class="obj">cad</span>.<span class="fn">addPolyline</span>([
+  [<span class="num">0</span>, <span class="num">0</span>], [<span class="num">5</span>, <span class="num">0</span>], [<span class="num">5</span>, <span class="num">4</span>], [<span class="num">0</span>, <span class="num">4</span>]
+], { closed: <span class="kw">true</span>, layer: <span class="str">"S_WALL"</span> })
+
+<span class="obj">cad</span>.<span class="fn">place</span>(<span class="str">"SOCKET_DOUBLE"</span>, { at: [<span class="num">4.7</span>, <span class="num">1.2</span>], rotation: <span class="num">90</span> })</pre>
+  </section>
+
+  <!-- ==================== CROSSHAIR DEMO ==================== -->
+  <section>
+    <h2>05 / Crosshair as CSS Element</h2>
+    <div class="viewport-demo crosshair">
+      <svg class="geom" viewBox="0 0 960 540" preserveAspectRatio="xMidYMid meet">
+        <!-- Sample floor plan geometry in the viewport -->
+        <g stroke="#E8E8E8" stroke-width="0.8" fill="none" opacity="0.6" transform="translate(200,80)">
+          <rect x="0" y="0" width="300" height="220"/>
+          <line x1="140" y1="0" x2="140" y2="140"/>
+          <line x1="0" y1="140" x2="220" y2="140"/>
+          <line x1="300" y1="100" x2="420" y2="100"/>
+          <rect x="320" y="20" width="100" height="180"/>
+          <rect x="440" y="20" width="160" height="180"/>
+          <line x1="520" y1="20" x2="520" y2="200"/>
+          <circle cx="80" cy="180" r="10"/>
+          <circle cx="360" cy="60" r="8"/>
+        </g>
+      </svg>
+    </div>
+    <p style="margin-top:var(--space-sm); font-size:13px; color:var(--text-muted); font-family:var(--font-code);">
+      Pure CSS crosshair via ::before/::after pseudo-elements. Position with --ch-x / --ch-y custom properties.
+    </p>
+  </section>
+
+  <!-- ==================== STATUS BAR ==================== -->
+  <section>
+    <h2>06 / Status Bar</h2>
+    <div class="status-bar">
+      <span class="accent">READY</span>
+      <span>X: <span class="active">3,580</span></span>
+      <span>Y: <span class="active">1,204</span></span>
+      <span>Grid: <span class="active">0.1m</span></span>
+      <span>Entities: <span class="active">342</span></span>
+      <span>Layer: <span class="active">S_WALL</span></span>
+      <span>Ortho: ON</span>
+    </div>
+  </section>
+
+  <!-- ==================== VOICE ==================== -->
+  <section>
+    <h2>07 / Voice</h2>
+    <div class="voice-grid">
+      <div class="voice-card do">
+        <div class="tag">Do</div>
+        Generate radial array.<br>
+        State intent. Get geometry.<br>
+        Agents write code. Geometry appears.
+      </div>
+      <div class="voice-card dont">
+        <div class="tag">Don't</div>
+        Let's help you create amazing designs!<br>
+        Our powerful AI assistant will...<br>
+        Simply click the intuitive toolbar...
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== TAGLINES ==================== -->
+  <section>
+    <h2>08 / Taglines</h2>
+    <div class="tagline">Code compiled to live geometry.</div>
+    <div class="tagline">State intent. Generate precise CAD.</div>
+    <div class="tagline">The programmable canvas.</div>
+  </section>
+
+</div>
+</body>
+</html>

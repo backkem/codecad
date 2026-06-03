@@ -1,0 +1,15 @@
+package cadview:sandbox@0.1.0;
+
+interface cad {
+    cad-call: func(method: string, args: string) -> result<string, string>;
+    rpc-call: func(method: string, args: string) -> result<string, string>;
+    read-file: func(path: string) -> result<string, string>;
+}
+
+world cadview-runtime {
+    import cad;
+    import wasi:cli/stdout@0.2.10;
+    import wasi:cli/stderr@0.2.10;
+
+    export run: func(program: string) -> result<string, string>;
+}

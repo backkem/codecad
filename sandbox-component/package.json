@@ -1,0 +1,11 @@
+{
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@bytecodealliance/componentize-js": "^0.20.0",
+    "@bytecodealliance/jco": "^1.19.0"
+  },
+  "scripts": {
+    "build": "jco componentize runtime-wrapper.js --wit ../wit/ --world-name cadview-runtime -o cadview-sandbox.wasm"
+  }
+}

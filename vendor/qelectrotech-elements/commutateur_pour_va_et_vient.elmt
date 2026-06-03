@@ -1,0 +1,29 @@
+<definition version="0.100.0" type="element" link_type="simple" width="30" height="40" hotspot_x="15" hotspot_y="15">
+    <uuid uuid="{bee72912-9d50-e151-cf26-4c2436ed349a}"/>
+    <names>
+        <name lang="ar">مُبدّل وسط سلّم</name>
+        <name lang="ca">Interruptor intermedi per a commutació bidireccional</name>
+        <name lang="cs">Křížový přepínač</name>
+        <name lang="de">Kreuzschalter</name>
+        <name lang="el">Διακόπτης εναλλαγής μεσαίος</name>
+        <name lang="en">Intermediate switch</name>
+        <name lang="fr">Commutateur intermédiaire pour va-et-vient</name>
+        <name lang="it">Invertitore</name>
+        <name lang="nl">Kruisschakelaar</name>
+        <name lang="pl">Łącznik krzyżowy</name>
+        <name lang="zh">双控转换开关</name>
+    </names>
+    <informations>EN 60617: 11-14-07</informations>
+    <description>
+        <dynamic_text x="-2" y="-36.95" z="1" text_width="-1" Halignment="AlignLeft" Valignment="AlignTop" frame="false" rotation="0" keep_visual_rotation="false" text_from="ElementInfo" uuid="{8fba9811-1666-41ca-87e8-73bc3c1143c7}" font="Liberation Sans,9,-1,5,50,0,0,0,0,0,Regular">
+            <text></text>
+            <info_name>label</info_name>
+        </dynamic_text>
+        <polygon x1="-2" y1="10" x2="-9" y2="20" x3="-12" y3="18" closed="false" antialias="true" style="line-style:normal;line-weight:normal;filling:none;color:black"/>
+        <polygon x1="2" y1="10" x2="9" y2="20" x3="12" y3="18" closed="false" antialias="true" style="line-style:normal;line-weight:normal;filling:none;color:black"/>
+        <polygon x1="-2" y1="0" x2="-9" y2="-11" x3="-12" y3="-9" closed="false" antialias="true" style="line-style:normal;line-weight:normal;filling:none;color:black"/>
+        <polygon x1="2" y1="0" x2="9" y2="-11" x3="12" y3="-9" closed="false" antialias="true" style="line-style:normal;line-weight:normal;filling:none;color:black"/>
+        <ellipse x="-5" y="0" width="10" height="10" style="line-style:normal;line-weight:normal;filling:none;color:black" antialias="true"/>
+        <terminal uuid="{880259de-e196-4fd4-9fd1-c50bb7f19011}" name="" x="0" y="0" orientation="n" type="Generic"/>
+    </description>
+</definition>

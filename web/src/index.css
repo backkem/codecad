@@ -1,0 +1,392 @@
+/* CodeCAD brand: void bg, off-white text, amber crosshair only */
+@import url("https://fonts.googleapis.com/css2?family=Jost:wght@400;500&family=JetBrains+Mono:wght@400&display=swap");
+
+:root {
+  --void: #0a0e14;
+  --text: #e8e8e8;
+  --muted: #6b7280;
+  --grid: #151a22;
+  --accent: #ffb000; /* amber: crosshair only */
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--void);
+  color: var(--text);
+  font-family: "Jost", system-ui, sans-serif;
+  font-size: 14px;
+}
+
+#root {
+  width: 100%;
+  height: 100%;
+}
+
+/* ── Tab bar ─────────────────────────────────────────────────────────── */
+
+.tab-bar {
+  display: flex;
+  align-items: stretch;
+  background: #0d1117;
+  border-bottom: 1px solid #1e2430;
+  height: 32px;
+  flex-shrink: 0;
+  pointer-events: auto;
+  z-index: 20;
+  overflow-x: auto;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+  border-right: 1px solid #1e2430;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.tab:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.tab.active {
+  color: var(--text);
+  background: var(--void);
+  border-bottom: 2px solid var(--accent);
+}
+
+.tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+
+.tab-close {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+.tab-close:hover {
+  color: var(--text);
+}
+
+.tab-add {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 14px;
+  padding: 0 12px;
+  cursor: pointer;
+}
+
+.tab-add:hover {
+  color: var(--accent);
+}
+
+/* ── Viewport area ───────────────────────────────────────────────────── */
+
+.viewport-area {
+  flex: 1;
+  position: relative;
+  min-height: 0;
+}
+
+.viewport-container {
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.viewport-container.focused {
+  outline: none;
+}
+
+.viewport-container canvas {
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+}
+
+/* ── Document picker ─────────────────────────────────────────────────── */
+
+.doc-picker-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+}
+
+.doc-picker {
+  background: #0d1117;
+  border: 1px solid var(--muted);
+  border-radius: 6px;
+  min-width: 320px;
+  max-width: 480px;
+  max-height: 60vh;
+  overflow-y: auto;
+  font-family: "JetBrains Mono", monospace;
+}
+
+.doc-picker-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid #1e2430;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.doc-picker-header button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.doc-picker-loading,
+.doc-picker-error,
+.doc-picker-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.doc-picker-error {
+  color: #f87171;
+}
+
+.doc-picker-folder {
+  padding: 8px 14px 4px;
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.doc-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 14px;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.doc-picker-item:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.doc-picker-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.doc-picker-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.doc-picker-meta {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.doc-picker-badge {
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.doc-picker-new {
+  border-bottom: 1px solid #1e2430;
+}
+
+.doc-picker-new .doc-picker-name {
+  color: var(--accent);
+}
+
+/* ── App root ────────────────────────────────────────────────────────── */
+
+.app-root {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Drop overlay ────────────────────────────────────────────────────── */
+
+.drop-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(255, 176, 0, 0.08);
+  border: 2px dashed var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  pointer-events: none;
+}
+
+.drop-message {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 16px;
+  color: var(--accent);
+  padding: 16px 32px;
+  background: rgba(10, 14, 20, 0.9);
+  border-radius: 6px;
+}
+
+/* ── Layer panel ─────────────────────────────────────────────────────── */
+
+.layer-panel {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 10;
+  pointer-events: auto;
+}
+
+.layer-toggle {
+  display: block;
+  background: rgba(14, 18, 26, 0.92);
+  border: 1px solid var(--muted);
+  color: var(--text);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.layer-panel[data-open="true"] .layer-toggle {
+  margin-left: auto;
+  border-bottom: none;
+  border-radius: 3px 3px 0 0;
+}
+
+.layer-toggle:hover {
+  border-color: var(--text);
+}
+
+.layer-list {
+  background: rgba(14, 18, 26, 0.92);
+  border: 1px solid var(--muted);
+  border-radius: 0 0 3px 3px;
+  min-width: 180px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.layer-header {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 6px 10px 4px;
+  border-bottom: 1px solid #1e2430;
+}
+
+.layer-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  cursor: pointer;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  user-select: none;
+}
+
+.layer-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.layer-row[data-visible="false"] .layer-name {
+  color: var(--muted);
+}
+
+.layer-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  flex-shrink: 0;
+}
+
+.layer-row input[type="checkbox"] {
+  accent-color: var(--text);
+  width: 12px;
+  height: 12px;
+}
+
+.layer-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layer-count {
+  color: var(--muted);
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+/* Scrollbar styling */
+.layer-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.layer-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.layer-list::-webkit-scrollbar-thumb {
+  background: var(--muted);
+  border-radius: 2px;
+}

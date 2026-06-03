@@ -1,0 +1,23 @@
+[package]
+name = "cadview-server"
+version = "0.1.0"
+edition = "2021"
+description = "HTTP + WebTransport server: document store, Yrs sync, script sandbox"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+cadview-core = { path = "../cadview-core" }
+cadview-sandbox = { path = "../cadview-sandbox" }
+kurbo = "0.13"
+wtransport = "0.7"
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[dev-dependencies]
+tempfile = "3"

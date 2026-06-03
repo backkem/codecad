@@ -1,0 +1,15 @@
+[package]
+name = "cadview-sandbox"
+version = "0.1.0"
+edition = "2021"
+description = "Wasmtime WASM component sandbox for server-side JS script execution"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+wasmtime = { version = "44.0", features = ["component-model"] }
+wasmtime-wasi = "44.0"
+wasmtime-wasi-http = "44.0"
+dirs = "6"
+anyhow = "1"
+thiserror = "2"

@@ -1,0 +1,26 @@
+<definition version="0.100.0" type="element" link_type="simple" width="40" height="20" hotspot_x="19" hotspot_y="10">
+    <uuid uuid="{bd665ef2-d78f-caef-5805-e936779bdc8c}"/>
+    <names>
+        <name lang="ar">نقطة إنتظار لجهاز إضاءة</name>
+        <name lang="ca">Punt d'espera d'il·luminació</name>
+        <name lang="cs">Vývod pro svítidlo</name>
+        <name lang="de">Leuchtenauslaß</name>
+        <name lang="en">Lighting outlet position</name>
+        <name lang="fr">Point d'attente d'appareil d'éclairage</name>
+        <name lang="it">Punto luce</name>
+        <name lang="nl">aansluitdoos licht</name>
+        <name lang="pl">Wypust oświetleniowy</name>
+        <name lang="zh">照明2</name>
+    </names>
+    <informations>EN 60617: 11-15-01</informations>
+    <description>
+        <dynamic_text x="-12" y="-23.95" z="1" text_width="-1" Halignment="AlignLeft" Valignment="AlignTop" frame="false" rotation="0" keep_visual_rotation="false" text_from="ElementInfo" uuid="{9c9b8df7-955b-4579-9994-97e27cbd68f1}" font="Liberation Sans,9,-1,5,50,0,0,0,0,0,Regular">
+            <text></text>
+            <info_name>label</info_name>
+        </dynamic_text>
+        <line x1="-10" y1="0" x2="10" y2="0" end1="none" end2="none" length1="1.5" length2="1.5" style="line-style:normal;line-weight:normal;filling:none;color:black" antialias="false"/>
+        <line x1="17" y1="-7" x2="3" y2="7" end1="none" end2="none" length1="1.5" length2="1.5" style="line-style:normal;line-weight:normal;filling:none;color:black" antialias="false"/>
+        <line x1="3" y1="-7" x2="17" y2="7" end1="none" end2="none" length1="1.5" length2="1.5" style="line-style:normal;line-weight:normal;filling:none;color:black" antialias="false"/>
+        <terminal uuid="{a08bb4c2-3e79-4a63-8ce7-e6044b4bd97d}" name="" x="-10" y="0" orientation="w" type="Generic"/>
+    </description>
+</definition>

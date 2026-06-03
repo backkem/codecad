@@ -1,0 +1,26 @@
+<definition version="0.100.0" type="element" link_type="simple" width="20" height="30" hotspot_x="8" hotspot_y="15">
+    <uuid uuid="{2b1fdb26-4111-6ff7-a4a6-d12c3f985fc4}"/>
+    <names>
+        <name lang="ar">مفتاح</name>
+        <name lang="ca">Interruptor</name>
+        <name lang="cs">Vypínač</name>
+        <name lang="de">Schalter</name>
+        <name lang="el">Διακόπτης</name>
+        <name lang="en">Switch</name>
+        <name lang="fr">Interrupteur,</name>
+        <name lang="it">Interruttore</name>
+        <name lang="nl">Schakelaar</name>
+        <name lang="pl">Łącznik, symbol ogólny</name>
+        <name lang="zh">开关</name>
+    </names>
+    <informations>EN 60617: 11-14-01</informations>
+    <description>
+        <line x1="2" y1="0" x2="9" y2="-11" end1="none" end2="none" length1="1.5" length2="1.5" style="line-style:normal;line-weight:normal;filling:none;color:black" antialias="true"/>
+        <dynamic_text x="3" y="-9.95" z="2" text_width="-1" Halignment="AlignLeft" Valignment="AlignTop" frame="false" rotation="0" keep_visual_rotation="false" text_from="ElementInfo" uuid="{0029f960-e30b-4375-803a-134dbc05f887}" font="Liberation Sans,9,-1,5,50,0,0,0,0,0,Regular">
+            <text></text>
+            <info_name>label</info_name>
+        </dynamic_text>
+        <ellipse x="-5" y="0" width="10" height="10" style="line-style:normal;line-weight:normal;filling:none;color:black" antialias="true"/>
+        <terminal uuid="{a85ab71d-e59f-490c-92ad-9db6980f938c}" name="" x="0" y="0" orientation="n" type="Generic"/>
+    </description>
+</definition>

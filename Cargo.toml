@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/cadview-core",
+    "crates/cadview-web",
+    "crates/cadview-server",
+    "crates/cadview-sandbox",
+    "crates/mtext",
+]
+
+[workspace.package]
+license = "MIT"
+repository = "https://github.com/backkem/codecad"

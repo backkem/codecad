@@ -1,0 +1,27 @@
+<definition version="0.100.0" type="element" link_type="simple" width="70" height="20" hotspot_x="35" hotspot_y="10">
+    <uuid uuid="{708035a7-7f0d-17b4-ba58-701bc3fa8486}"/>
+    <names>
+        <name lang="ar">مصباح فليوريسنت</name>
+        <name lang="ca">Làmpada fluorescent</name>
+        <name lang="cs">Zářivka</name>
+        <name lang="de">Leuchtstofflampe</name>
+        <name lang="el">Λάμπα φθορισμού</name>
+        <name lang="en">Fluorescent lamp</name>
+        <name lang="fr">Lampe à fluorescence</name>
+        <name lang="it">Lampada ﬂuorescente, segno generale</name>
+        <name lang="nl">TL lamp</name>
+        <name lang="pl">Świetlówka</name>
+        <name lang="zh">荧光灯</name>
+    </names>
+    <informations>EN 60617: 11-15-04</informations>
+    <description>
+        <dynamic_text x="-7" y="-21.95" z="1" text_width="-1" Halignment="AlignLeft" Valignment="AlignTop" frame="false" rotation="0" keep_visual_rotation="false" text_from="ElementInfo" uuid="{d041b7ae-d304-4f7b-b534-8ce568aeac1b}" font="Liberation Sans,9,-1,5,50,0,0,0,0,0,Regular">
+            <text></text>
+            <info_name>label</info_name>
+        </dynamic_text>
+        <line x1="-30" y1="-3" x2="-30" y2="3" end1="none" end2="none" length1="1.5" length2="1.5" style="line-style:normal;line-weight:normal;filling:none;color:black" antialias="false"/>
+        <line x1="30" y1="-3" x2="30" y2="3" end1="none" end2="none" length1="1.5" length2="1.5" style="line-style:normal;line-weight:normal;filling:none;color:black" antialias="false"/>
+        <line x1="-30" y1="0" x2="30" y2="0" end1="none" end2="none" length1="1.5" length2="1.5" style="line-style:normal;line-weight:normal;filling:none;color:black" antialias="false"/>
+        <terminal uuid="{31cebdf4-b076-4057-8d81-726d0057f56c}" name="" x="0" y="0" orientation="n" type="Generic"/>
+    </description>
+</definition>

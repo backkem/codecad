@@ -1,0 +1,10 @@
+[package]
+name = "mtext"
+version = "0.1.0"
+edition = "2021"
+description = "DWG MText formatting parser"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# None - pure std parser

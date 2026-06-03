@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 200">
+  <defs>
+    <!-- Dot grid pattern -->
+    <pattern id="dotgrid" width="20" height="20" patternUnits="userSpaceOnUse">
+      <circle cx="10" cy="10" r="0.6" fill="#1E2430"/>
+    </pattern>
+  </defs>
+
+  <!-- Background -->
+  <rect width="960" height="200" fill="#0A0E14"/>
+  <rect width="960" height="200" fill="url(#dotgrid)"/>
+
+  <!-- Ghosted floor plan fragments (low opacity, suggesting architecture) -->
+  <g stroke="#2A3040" stroke-width="0.75" fill="none" opacity="0.4">
+    <!-- Outer walls -->
+    <rect x="180" y="30" width="280" height="150" rx="0"/>
+    <!-- Interior walls -->
+    <line x1="300" y1="30" x2="300" y2="130"/>
+    <line x1="180" y1="110" x2="380" y2="110"/>
+    <line x1="380" y1="70" x2="460" y2="70"/>
+    <!-- Door swings -->
+    <path d="M 300 110 Q 320 110 320 130" stroke-width="0.5"/>
+    <path d="M 380 70 Q 380 90 400 90" stroke-width="0.5"/>
+    <!-- Rooms right side -->
+    <rect x="500" y="50" width="160" height="100"/>
+    <line x1="580" y1="50" x2="580" y2="150"/>
+    <line x1="500" y1="100" x2="660" y2="100"/>
+    <!-- Stairs -->
+    <line x1="700" y1="60" x2="760" y2="60"/>
+    <line x1="700" y1="70" x2="760" y2="70"/>
+    <line x1="700" y1="80" x2="760" y2="80"/>
+    <line x1="700" y1="90" x2="760" y2="90"/>
+    <line x1="700" y1="100" x2="760" y2="100"/>
+    <line x1="700" y1="60" x2="700" y2="100"/>
+    <line x1="760" y1="60" x2="760" y2="100"/>
+    <!-- Dimension line -->
+    <line x1="180" y1="192" x2="460" y2="192" stroke-width="0.4"/>
+    <line x1="180" y1="188" x2="180" y2="196" stroke-width="0.4"/>
+    <line x1="460" y1="188" x2="460" y2="196" stroke-width="0.4"/>
+    <!-- Window marks -->
+    <line x1="220" y1="28" x2="260" y2="28" stroke-width="1.5"/>
+    <line x1="340" y1="28" x2="370" y2="28" stroke-width="1.5"/>
+    <line x1="520" y1="48" x2="560" y2="48" stroke-width="1.5"/>
+    <!-- Bathroom fixtures -->
+    <circle cx="420" cy="140" r="8"/>
+    <rect x="430" y="125" width="15" height="20" rx="2"/>
+    <!-- Random detail geometry, far right -->
+    <rect x="800" y="80" width="80" height="60"/>
+    <line x1="840" y1="80" x2="840" y2="140"/>
+    <circle cx="820" cy="110" r="5"/>
+    <circle cx="860" cy="110" r="5"/>
+  </g>
+
+  <!-- Crosshair: positioned at lower-left third -->
+  <line x1="120" y1="0" x2="120" y2="200" stroke="#FFB000" stroke-width="1.2"/>
+  <line x1="0" y1="150" x2="960" y2="150" stroke="#FFB000" stroke-width="1.2"/>
+</svg>

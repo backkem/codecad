@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Standalone crosshair element, transparent background.
+       Drop into any composition. Scales to container. -->
+
+  <!-- Crosshair lines -->
+  <line x1="64" y1="0" x2="64" y2="128" stroke="#FFB000" stroke-width="1.5"/>
+  <line x1="0" y1="64" x2="128" y2="64" stroke="#FFB000" stroke-width="1.5"/>
+
+  <!-- Center circle -->
+  <circle cx="64" cy="64" r="12" fill="none" stroke="#FFB000" stroke-width="1.5"/>
+</svg>

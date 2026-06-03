@@ -1,0 +1,28 @@
+<definition version="0.100.0" type="element" link_type="simple" width="20" height="30" hotspot_x="10" hotspot_y="17">
+    <uuid uuid="{d8773cd0-569d-ba98-0a58-4a31a9bb9515}"/>
+    <names>
+        <name lang="ar">زرّ ضاغط مُضيئ</name>
+        <name lang="ca">Polsador amb llum indicadora</name>
+        <name lang="cs">Tlačítko s indikací</name>
+        <name lang="de">Drucktaster beleuchtet</name>
+        <name lang="el">Μπουτόν φωτιζόμενο</name>
+        <name lang="en">Push-button with indicator lamp</name>
+        <name lang="fr">Bouton-poussoir lumineux</name>
+        <name lang="it">Pulsante luminoso</name>
+        <name lang="nl">Drukknop met lamp</name>
+        <name lang="pl">Przycisk podświetlony</name>
+        <name lang="zh">发光按钮</name>
+    </names>
+    <informations>EN 60617: 11-14-11</informations>
+    <description>
+        <dynamic_text x="6" y="-22.95" z="1" text_width="-1" Halignment="AlignLeft" Valignment="AlignTop" frame="false" rotation="0" keep_visual_rotation="false" text_from="ElementInfo" uuid="{a5c6797b-de3e-45cd-8d96-0e7b6605a8d6}" font="Liberation Sans,9,-1,5,50,0,0,0,0,0,Regular">
+            <text></text>
+            <info_name>label</info_name>
+        </dynamic_text>
+        <line x1="-3" y1="3" x2="3" y2="-3" end1="none" end2="none" length1="1.5" length2="1.5" style="line-style:normal;line-weight:normal;filling:none;color:black" antialias="false"/>
+        <line x1="-3" y1="-3" x2="3" y2="3" end1="none" end2="none" length1="1.5" length2="1.5" style="line-style:normal;line-weight:normal;filling:none;color:black" antialias="false"/>
+        <ellipse x="-7.5" y="-7.5" width="15" height="15" style="line-style:normal;line-weight:normal;filling:none;color:black" antialias="true"/>
+        <ellipse x="-4.25" y="-4.25" width="8.5" height="8.5" style="line-style:normal;line-weight:normal;filling:none;color:black" antialias="true"/>
+        <terminal uuid="{1660b255-41ff-4374-a5d6-aee8d4e9f166}" name="" x="0" y="-8" orientation="n" type="Generic"/>
+    </description>
+</definition>

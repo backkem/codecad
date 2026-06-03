@@ -1,0 +1,31 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Node / TypeScript
+node_modules/
+*.tsbuildinfo
+
+# Build output
+dist/
+**/cadview-sandbox.wasm
+
+# Working docs (prefixed with _)
+**/_*.md
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editor
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.code-workspace
+
+# Env
+.env
+.env.*

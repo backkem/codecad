@@ -668,14 +668,18 @@ fn text_to_curve_entities(
     let mut out = Vec::new();
     for path in &paths {
         if path.elements().is_empty() { continue; }
-        let closed = matches!(path.elements().last(), Some(kurbo::PathEl::ClosePath));
-        *next_id += 1;
-        out.push(DrawEntity {
-            id: EntityId(*next_id),
-            layer: layer.to_string(),
-            color,
-            shape: Shape::CurvePath { path: path.clone(), closed },
-        });
+        // Split multi-contour glyph paths into individual subpaths
+        for subpath in crate::dispatch::split_subpaths(path) {
+            if subpath.elements().is_empty() { continue; }
+            let closed = matches!(subpath.elements().last(), Some(kurbo::PathEl::ClosePath));
+            *next_id += 1;
+            out.push(DrawEntity {
+                id: EntityId(*next_id),
+                layer: layer.to_string(),
+                color,
+                shape: Shape::CurvePath { path: subpath, closed },
+            });
+        }
     }
     out
 }

@@ -441,12 +441,22 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
             doc.ensure_layer(&a.layer);
             let color = a.color.map_or_else(|| doc.layer_color(&a.layer), |c| Color::rgb(c[0], c[1], c[2]));
 
-            let glyph_paths = text::text_to_paths(&a.text, a.at[0], a.at[1], a.height);
-            let ids = add_glyph_paths(doc, &glyph_paths, &a.layer, color);
+            let id = doc.alloc_id();
+            doc.entities.push(DrawEntity {
+                id,
+                layer: a.layer.clone(),
+                color,
+                shape: Shape::Text {
+                    text: a.text.clone(),
+                    position: kurbo::Point::new(a.at[0], a.at[1]),
+                    height: a.height,
+                    rotation: 0.0,
+                },
+            });
 
             let width = text::text_width(&a.text, a.height);
             Ok(serde_json::json!({
-                "ids": ids.iter().map(|id| format!("e_{}", id.0)).collect::<Vec<_>>(),
+                "id": format!("e_{}", id.0),
                 "width": width,
                 "height": a.height,
                 "at": a.at,
@@ -1133,18 +1143,39 @@ pub(crate) fn add_glyph_paths(
     let mut ids = Vec::new();
     for path in glyph_paths {
         if path.elements().is_empty() { continue; }
-        // Check if the path is closed (ends with ClosePath)
-        let closed = matches!(path.elements().last(), Some(kurbo::PathEl::ClosePath));
-        let id = doc.alloc_id();
-        doc.entities.push(DrawEntity {
-            id,
-            layer: layer.to_string(),
-            color,
-            shape: Shape::CurvePath { path: path.clone(), closed },
-        });
-        ids.push(id);
+        // Split multi-contour BezPaths into individual subpaths.
+        // Glyphs like "A" have outer + inner contours; each needs
+        // its own entity so the renderer draws all of them.
+        for subpath in split_subpaths(path) {
+            if subpath.elements().is_empty() { continue; }
+            let closed = matches!(subpath.elements().last(), Some(kurbo::PathEl::ClosePath));
+            let id = doc.alloc_id();
+            doc.entities.push(DrawEntity {
+                id,
+                layer: layer.to_string(),
+                color,
+                shape: Shape::CurvePath { path: subpath, closed },
+            });
+            ids.push(id);
+        }
     }
     ids
+}
+
+/// Split a BezPath with multiple MoveTo's into separate subpaths.
+pub fn split_subpaths(path: &BezPath) -> Vec<BezPath> {
+    let mut subpaths = Vec::new();
+    let mut current = BezPath::new();
+    for el in path.elements() {
+        if matches!(el, kurbo::PathEl::MoveTo(_)) && !current.elements().is_empty() {
+            subpaths.push(std::mem::replace(&mut current, BezPath::new()));
+        }
+        current.push(*el);
+    }
+    if !current.elements().is_empty() {
+        subpaths.push(current);
+    }
+    subpaths
 }
 
 fn default_layer() -> String { "0".to_string() }

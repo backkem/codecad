@@ -107,7 +107,7 @@ class CodecadViewer extends HTMLElement {
     const badge = document.createElement("a");
     badge.className = "badge";
     badge.textContent = "CodeCAD";
-    badge.href = "https://github.com/nicholasgasior/codecad";
+    badge.href = "https://github.com/backkem/codecad";
     badge.target = "_blank";
     badge.rel = "noopener";
 

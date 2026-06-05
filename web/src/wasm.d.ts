@@ -25,6 +25,10 @@ declare module "cadview-wasm" {
   ): string;
   export function stop_renderer(renderer_key: string): string;
 
+  // Binary export (returns bytes for browser download)
+  export function export_dwg_bytes(session_id: string): Uint8Array;
+  export function export_pdf_bytes(session_id: string): Uint8Array;
+
   // Yrs sync (per-session, takes explicit session_id)
   export function yrs_state_vector(session_id: string): Uint8Array;
   export function yrs_apply_update(

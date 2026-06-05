@@ -14,6 +14,7 @@ export default defineConfig({
       "cadview-wasm": resolve(distDir, "cadview-web.js"),
     },
   },
+  base: "./", // relative paths so app works from any subdirectory
   build: {
     outDir: distDir,
     emptyOutDir: false, // keep wasm-bindgen output (.js, .wasm)

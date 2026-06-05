@@ -36,35 +36,11 @@ code { font-family: "JetBrains Mono", monospace; font-size: 13px; }
   padding: 80px 0 48px;
 }
 
-.hero h1 {
-  font-family: "Jost", sans-serif;
-  font-weight: 500;
-  font-size: 42px;
-  letter-spacing: -0.02em;
+.hero .logo {
+  width: 320px;
+  max-width: 80%;
+  height: auto;
   margin-bottom: 12px;
-}
-
-.hero .crosshair {
-  display: inline-block;
-  width: 28px;
-  height: 28px;
-  position: relative;
-  vertical-align: middle;
-  margin-right: 4px;
-}
-.hero .crosshair::before,
-.hero .crosshair::after {
-  content: "";
-  position: absolute;
-  background: var(--accent);
-}
-.hero .crosshair::before {
-  width: 2px; height: 100%;
-  left: 50%; transform: translateX(-50%);
-}
-.hero .crosshair::after {
-  height: 2px; width: 100%;
-  top: 50%; transform: translateY(-50%);
 }
 
 .hero .tagline {

@@ -529,6 +529,30 @@ pub fn stop_renderer(renderer_key: &str) -> String {
     }
 }
 
+// ── Binary export (DWG / PDF bytes for browser download) ────────────
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn export_dwg_bytes(session_id: &str) -> Result<Vec<u8>, JsValue> {
+    let reg = SESSIONS.lock().unwrap();
+    let session = reg.sessions.get(session_id)
+        .ok_or_else(|| JsValue::from_str(&format!("session '{}' not found", session_id)))?;
+    cadview_core::export_dwg_bytes(&session.doc)
+        .map_err(|e| JsValue::from_str(&format!("DWG export failed: {e}")))
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn export_pdf_bytes(session_id: &str) -> Vec<u8> {
+    let reg = SESSIONS.lock().unwrap();
+    let session = match reg.sessions.get(session_id) {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
+    let opts = cadview_core::pdf::PdfOptions::default();
+    cadview_core::export_pdf_bytes(&session.doc, &opts)
+}
+
 // ── Entry points ──────────────────────────────────────────────────────
 
 #[cfg(feature = "embed-dwg")]

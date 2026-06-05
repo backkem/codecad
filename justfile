@@ -12,16 +12,20 @@ build-wasm:
 build-web:
     cd web && pnpm build
 
-# Build server
-build-server:
+# Build sandbox API setup (cad-api.ts -> IIFE for server-side scripts)
+build-sandbox-api:
+    cd web && pnpm exec vite build --config vite.sandbox.config.ts
+
+# Build server (rebuilds sandbox API first)
+build-server: build-sandbox-api
     cargo build -p cadview-server --release
 
 # Build single packed binary (frontend + WASM baked in)
-build-packed: build-wasm build-web
+build-packed: build-wasm build-web build-sandbox-api
     cargo build -p cadview-server --release --features embedded-dist
 
 # Build packed binary with examples too
-build-packed-full: build-wasm build-web
+build-packed-full: build-wasm build-web build-sandbox-api
     cargo build -p cadview-server --release --features embedded-dist,embedded-examples
 
 # Build embeddable viewer (ESM library, no React)
@@ -40,6 +44,7 @@ build-site: build-wasm clean-dist build-web build-embed
     cp dist-embed/codecad-viewer.js dist-embed/cadview-web.js dist-embed/cadview-web_bg.wasm _site/embed/
     cp examples/*.dwg examples/*.png _site/examples/
     cp docs/brand/icon-mark.svg _site/assets/favicon.svg
+    cp docs/brand/logo.svg _site/assets/logo.svg
 
 # Remove stale hashed assets from dist/
 clean-dist:

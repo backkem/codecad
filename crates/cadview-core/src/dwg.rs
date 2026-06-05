@@ -60,13 +60,29 @@ pub fn export_pdf_bytes(doc: &Document, opts: &pdf::PdfOptions) -> Vec<u8> {
 
 /// Save a Document as a DWG file via acadrust.
 /// Converts our Shape types back to acadrust entities.
+/// Export a Document as DWG bytes (no filesystem access needed).
+pub fn export_dwg_bytes(doc: &Document) -> Result<Vec<u8>> {
+    let cad = build_cad_document(doc)?;
+    acadrust::DwgWriter::write_to_vec(&cad)
+        .with_context(|| "writing DWG to bytes")
+}
+
 pub fn save_dwg(doc: &Document, path: &str) -> Result<()> {
+    let cad = build_cad_document(doc)?;
+    if path.ends_with(".dxf") {
+        acadrust::DxfWriter::new(&cad).write_to_file(path)
+            .with_context(|| format!("writing DXF to {path}"))
+    } else {
+        acadrust::DwgWriter::write_to_file(path, &cad)
+            .with_context(|| format!("writing DWG to {path}"))
+    }
+}
+
+fn build_cad_document(doc: &Document) -> Result<acadrust::document::CadDocument> {
     use acadrust::entities::{self as ae, Entity};
     use acadrust::tables::TableEntry;
     use acadrust::types::vector::Vector3;
 
-    // Use AC1015 (R2000) for maximum compatibility. AC1032 from-scratch
-    // produces files that some viewers reject.
     let mut cad = acadrust::document::CadDocument::with_version(
         acadrust::types::DxfVersion::AC1015,
     );
@@ -184,13 +200,7 @@ pub fn save_dwg(doc: &Document, path: &str) -> Result<()> {
         cad.header.model_space_extents_max = Vector3::new(xmax, ymax, 0.0);
     }
 
-    if path.ends_with(".dxf") {
-        acadrust::DxfWriter::new(&cad).write_to_file(path)
-            .with_context(|| format!("writing DXF to {path}"))
-    } else {
-        acadrust::DwgWriter::write_to_file(path, &cad)
-            .with_context(|| format!("writing DWG to {path}"))
-    }
+    Ok(cad)
 }
 
 /// Save a Document as a DWG overlay on top of an existing DWG file.

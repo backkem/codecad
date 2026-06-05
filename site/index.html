@@ -11,14 +11,14 @@
 
 <div class="container">
   <section class="hero">
-    <h1><span class="crosshair"></span> CodeCAD</h1>
+    <img src="assets/logo.svg" alt="CodeCAD" class="logo">
     <p class="tagline">
       Open-source 2D CAD that runs in the browser. Every drawing operation
       is a function call. Script it, automate it, point an AI at it.
     </p>
     <div class="actions">
       <a href="app/" class="btn btn-primary">Open App</a>
-      <a href="https://github.com/nicholasgasior/codecad" class="btn">GitHub</a>
+      <a href="https://github.com/backkem/codecad" class="btn">GitHub</a>
     </div>
   </section>
 
@@ -53,7 +53,10 @@
 }
 
 <span class="fn">cad.measure</span>([<span class="num">0</span>, <span class="num">0</span>], [<span class="num">150</span>, <span class="num">0</span>], { <span class="str">offset</span>: <span class="num">30</span> })</pre>
+    <codecad-viewer src="examples/01-flange-plate.dwg" style="width:100%;height:400px;margin-top:16px;border-radius:6px"></codecad-viewer>
   </section>
+
+  <script type="module" src="embed/codecad-viewer.js"></script>
 
   <section class="examples-section">
     <h2>Example drawings</h2>
@@ -107,7 +110,7 @@
   </section>
 
   <footer class="footer">
-    <a href="https://github.com/nicholasgasior/codecad">MIT License</a>
+    <a href="https://github.com/backkem/codecad">MIT License</a>
     &middot; Built with Rust, WASM, and TypeScript
   </footer>
 </div>

@@ -7,6 +7,8 @@
 
 import init, {
   cad_call,
+  export_dwg_bytes,
+  export_pdf_bytes,
   session_create,
   session_current,
   session_destroy,
@@ -219,8 +221,8 @@ const viewport = {
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
-function downloadBlob(content: string, filename: string, mime: string) {
-  const blob = new Blob([content], { type: mime });
+function downloadBlob(content: string | ArrayBuffer | Uint8Array, filename: string, mime: string) {
+  const blob = new Blob([content as BlobPart], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -295,8 +297,24 @@ export const cad = {
       }
       return result;
     }
-    console.warn("[CodeCAD] DWG export requires the server. Saving as JSON instead.");
-    return cad.save(path.replace(/\.dwg$/i, ".json"));
+    // Standalone: export DWG bytes via WASM and trigger browser download
+    const sid = cad.currentSession();
+    if (!sid) return { ok: false, error: "no session" };
+    const bytes = export_dwg_bytes(sid);
+    downloadBlob(bytes, path, "application/octet-stream");
+    return { ok: true, path };
+  },
+  savePdf: async (path = "output.pdf") => {
+    if (_serverAvailable) {
+      await flushAndWaitSync();
+      const sid = cad.currentSession();
+      return rpcCall("savePdf", { path }, sid ?? undefined);
+    }
+    const sid = cad.currentSession();
+    if (!sid) return { ok: false, error: "no session" };
+    const bytes = export_pdf_bytes(sid);
+    downloadBlob(bytes, path, "application/pdf");
+    return { ok: true, path };
   },
 
   // HTTP API

@@ -9,6 +9,8 @@ multiple browsers.
   <img src="docs/brand/readme-hero.png" alt="CodeCAD" width="100%">
 </p>
 
+**[Try it in your browser](https://backkem.github.io/codecad/app/)** -- no install needed.
+
 Built in Rust and WASM. No license server, no vendor lock-in. You own the
 tool and the data.
 

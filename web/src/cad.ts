@@ -192,15 +192,17 @@ async function detectRenderer(): Promise<"vello" | "egui"> {
 }
 
 const viewport = {
-  start(canvasId: string, sessionId: string): void {
+  /** Attach a renderer to a canvas for the given session. Returns an opaque key for stop(). */
+  start(canvas: HTMLCanvasElement, sessionId: string): string {
     const result = JSON.parse(
-      start_renderer(canvasId, sessionId, _rendererType),
+      start_renderer(canvas, sessionId, _rendererType),
     );
     if (result.error) throw new Error(result.error);
+    return result.key;
   },
 
-  stop(canvasId: string): void {
-    const result = JSON.parse(stop_renderer(canvasId));
+  stop(rendererKey: string): void {
+    const result = JSON.parse(stop_renderer(rendererKey));
     if (result.error) throw new Error(result.error);
   },
 
@@ -473,6 +475,13 @@ let _initialSessionId = "default";
 
 export function getInitialSessionId(): string {
   return _initialSessionId;
+}
+
+/** Lightweight init for embed viewers: WASM + renderer detection only.
+ *  No server detection, no session creation, no WebTransport. */
+export async function initCadEmbed(): Promise<void> {
+  await init();
+  _rendererType = await detectRenderer();
 }
 
 export async function initCad(): Promise<void> {

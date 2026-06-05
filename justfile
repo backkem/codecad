@@ -24,6 +24,10 @@ build-packed: build-wasm build-web
 build-packed-full: build-wasm build-web
     cargo build -p cadview-server --release --features embedded-dist,embedded-examples
 
+# Build embeddable viewer (ESM library, no React)
+build-embed:
+    cd web && pnpm exec vite build --config vite.embed.config.ts
+
 # Remove stale hashed assets from dist/ (keeps current build only)
 clean-dist:
     cd dist/assets && ls -1 cadview-web_bg-*.wasm | sort | head -n -1 | xargs -r rm -v

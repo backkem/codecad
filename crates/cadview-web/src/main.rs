@@ -6,8 +6,6 @@ use std::collections::HashMap;
 use std::sync::{Mutex, LazyLock};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen::JsCast;
 
 #[cfg(all(target_arch = "wasm32", feature = "vello-renderer"))]
 mod vello_render;
@@ -15,7 +13,11 @@ mod vello_render;
 // ── Types ─────────────────────────────────────────────────────────────
 
 type SessionId = String;
-type CanvasId = String;
+type RendererKey = String;
+// CanvasId removed: renderers now receive HtmlCanvasElement directly.
+
+#[cfg(target_arch = "wasm32")]
+static NEXT_RENDERER_KEY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -131,11 +133,11 @@ struct SessionRegistry {
     sessions: HashMap<SessionId, DocumentSession>,
     /// Which session `cad_call` targets (set by `session_use`).
     js_target: Option<SessionId>,
-    /// Map of canvas_id -> session_id for active renderers.
-    renderers: HashMap<CanvasId, SessionId>,
-    /// Repaint callbacks per canvas_id. Renderers register on start.
+    /// Map of renderer_key -> session_id for active renderers.
+    renderers: HashMap<RendererKey, SessionId>,
+    /// Repaint callbacks per renderer_key. Renderers register on start.
     #[allow(dead_code)]
-    repaint_fns: HashMap<CanvasId, RepaintFn>,
+    repaint_fns: HashMap<RendererKey, RepaintFn>,
     /// Monotonic counter for Yrs client IDs (each session needs a unique one).
     next_client_id: u64,
 }
@@ -464,52 +466,44 @@ pub fn cad_call(method: &str, args_json: &str) -> String {
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
-pub fn start_renderer(canvas_id: &str, session_id: &str, renderer_type: &str) -> String {
+pub fn start_renderer(canvas: web_sys::HtmlCanvasElement, session_id: &str, renderer_type: &str) -> String {
+    let key = format!("rv_{}", NEXT_RENDERER_KEY.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
     {
         let mut reg = SESSIONS.lock().unwrap();
         if !reg.sessions.contains_key(session_id) {
             return format!(r#"{{"error":"session '{}' not found"}}"#, session_id);
         }
-        reg.renderers.insert(canvas_id.to_string(), session_id.to_string());
+        reg.renderers.insert(key.clone(), session_id.to_string());
     }
 
     #[cfg(feature = "vello-renderer")]
     if renderer_type == "vello" {
-        vello_render::start(canvas_id, session_id);
-        return format!(r#"{{"ok":true,"canvas":"{}","session":"{}","renderer":"vello"}}"#, canvas_id, session_id);
+        vello_render::start(canvas, session_id, &key);
+        return format!(r#"{{"ok":true,"key":"{}","session":"{}","renderer":"vello"}}"#, key, session_id);
     }
 
     let _ = renderer_type; // suppress unused warning when vello feature is off
-    start_egui_renderer(canvas_id, session_id)
+    start_egui_renderer(canvas, session_id, &key)
 }
 
 #[cfg(target_arch = "wasm32")]
-fn start_egui_renderer(canvas_id: &str, session_id: &str) -> String {
-    let canvas_id_owned = canvas_id.to_string();
+fn start_egui_renderer(canvas: web_sys::HtmlCanvasElement, session_id: &str, renderer_key: &str) -> String {
     let session_id_owned = session_id.to_string();
+    let key_owned = renderer_key.to_string();
 
+    let app = CadViewApp {
+        session_id: session_id_owned.clone(),
+        renderer_key: key_owned.clone(),
+    };
+
+    let key_for_repaint = key_owned.clone();
     wasm_bindgen_futures::spawn_local(async move {
-        let canvas = web_sys::window()
-            .unwrap()
-            .document()
-            .unwrap()
-            .get_element_by_id(&canvas_id_owned)
-            .unwrap_or_else(|| panic!("canvas element '{}' not found", canvas_id_owned))
-            .dyn_into::<web_sys::HtmlCanvasElement>()
-            .unwrap();
-
-        let app = CadViewApp {
-            session_id: session_id_owned.clone(),
-            canvas_id: canvas_id_owned.clone(),
-        };
-
-        let cid_for_repaint = canvas_id_owned.clone();
         eframe::WebRunner::new()
             .start(canvas, eframe::WebOptions::default(), Box::new(move |cc| {
                 // Register repaint callback so setLayerVisible can wake egui
                 let ctx = cc.egui_ctx.clone();
                 let mut reg = SESSIONS.lock().unwrap();
-                reg.repaint_fns.insert(cid_for_repaint, RepaintFn(Box::new(move || {
+                reg.repaint_fns.insert(key_for_repaint, RepaintFn(Box::new(move || {
                     ctx.request_repaint();
                 })));
                 Ok(Box::new(app))
@@ -518,20 +512,20 @@ fn start_egui_renderer(canvas_id: &str, session_id: &str) -> String {
             .expect("failed to start eframe renderer");
     });
 
-    format!(r#"{{"ok":true,"canvas":"{}","session":"{}","renderer":"egui"}}"#, canvas_id, session_id)
+    format!(r#"{{"ok":true,"key":"{}","session":"{}","renderer":"egui"}}"#, renderer_key, session_id)
 }
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
-pub fn stop_renderer(canvas_id: &str) -> String {
+pub fn stop_renderer(renderer_key: &str) -> String {
     let mut reg = SESSIONS.lock().unwrap();
-    if reg.renderers.remove(canvas_id).is_some() {
-        reg.repaint_fns.remove(canvas_id);
-        // The CadViewApp will see it's no longer in the renderers map
-        // and stop requesting repaints. React should remove the canvas element.
+    if reg.renderers.remove(renderer_key).is_some() {
+        reg.repaint_fns.remove(renderer_key);
+        // The CadViewApp/Vello will see it's no longer in the renderers map
+        // and stop requesting repaints. The caller should remove the canvas element.
         r#"{"ok":true}"#.to_string()
     } else {
-        format!(r#"{{"error":"no renderer on canvas '{}'"}}"#, canvas_id)
+        format!(r#"{{"error":"no renderer for key '{}'"}}"#, renderer_key)
     }
 }
 
@@ -574,7 +568,7 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |_cc| Ok(Box::new(CadViewApp {
             session_id: "default".to_string(),
-            canvas_id: "native".to_string(),
+            renderer_key: "native".to_string(),
         }))),
     )
 }
@@ -603,7 +597,7 @@ fn main() {
 
 struct CadViewApp {
     session_id: SessionId,
-    canvas_id: CanvasId,
+    renderer_key: RendererKey,
 }
 
 impl CadViewApp {
@@ -622,7 +616,7 @@ impl eframe::App for CadViewApp {
 
         // Check if this renderer is still registered
         let mut reg = SESSIONS.lock().unwrap();
-        let still_active = reg.renderers.get(&self.canvas_id) == Some(&self.session_id);
+        let still_active = reg.renderers.get(&self.renderer_key) == Some(&self.session_id);
         if !still_active {
             ui.painter().text(
                 rect.center(),

@@ -56,28 +56,37 @@ pub async fn run_script(
     });
 
     // Build rpc_call handler.
-    // RPC resolve uses CWD (project root) so loadElmt etc. can access files
-    // across the project tree, not just the script's directory.
+    // Reads resolve relative to base_dir (script directory when run via
+    // exec_file, CWD for inline scripts). Writes go to CWD.
     let doc_r = doc.clone();
-    let rpc_base_dir = std::env::current_dir()
-        .unwrap_or_else(|_| base_dir.to_path_buf())
+    let read_base = base_dir
         .canonicalize()
+        .unwrap_or_else(|_| base_dir.to_path_buf());
+    let write_base = std::env::current_dir()
         .unwrap_or_else(|_| base_dir.to_path_buf());
     let rpc_sandbox = sandbox.clone();
     let rpc_handler = Box::new(move |method: &str, args: &str| -> Result<String, String> {
-        // Helper: resolve a path relative to project root, sandboxed.
+        // Helper: resolve a read path relative to base_dir (script directory).
         let resolve = |p: &str| -> Result<PathBuf, String> {
-            // Try as absolute first, then relative to project root.
             let candidate = PathBuf::from(p);
             let joined = if candidate.is_absolute() {
                 candidate
             } else {
-                rpc_base_dir.join(p)
+                read_base.join(p)
             };
             let resolved = joined
                 .canonicalize()
                 .map_err(|e| format!("resolve '{p}': {e}"))?;
             Ok(resolved)
+        };
+        // Helper: resolve a write path relative to CWD.
+        let resolve_write = |p: &str| -> PathBuf {
+            let candidate = PathBuf::from(p);
+            if candidate.is_absolute() {
+                candidate
+            } else {
+                write_base.join(p)
+            }
         };
 
         // Path-bearing methods: resolve path then delegate to cad_call.
@@ -99,13 +108,15 @@ pub async fn run_script(
                 let a: serde_json::Value =
                     serde_json::from_str(args).map_err(|e| e.to_string())?;
                 let path = a["path"].as_str().unwrap_or("cadview-output.json");
+                let resolved = resolve_write(path);
                 let doc = doc_r.lock().unwrap();
                 let entities: Vec<cadview_core::EntityJson> =
                     doc.entities.iter().map(|e| e.to_json()).collect();
                 let json = serde_json::to_string_pretty(&entities).map_err(|e| e.to_string())?;
-                std::fs::write(path, &json).map_err(|e| format!("write {path}: {e}"))?;
+                std::fs::write(&resolved, &json).map_err(|e| format!("write {path}: {e}"))?;
                 Ok(format!(
-                    r#"{{"ok":true,"path":"{path}","entities":{}}}"#,
+                    r#"{{"ok":true,"path":"{}","entities":{}}}"#,
+                    resolved.display(),
                     entities.len()
                 ))
             }
@@ -113,10 +124,12 @@ pub async fn run_script(
                 let a: serde_json::Value =
                     serde_json::from_str(args).map_err(|e| e.to_string())?;
                 let path = a["path"].as_str().unwrap_or("output.dwg");
+                let resolved = resolve_write(path);
                 let doc = doc_r.lock().unwrap();
-                cadview_core::save_dwg(&doc, path).map_err(|e| format!("dwg: {e}"))?;
+                cadview_core::save_dwg(&doc, &resolved.to_string_lossy()).map_err(|e| format!("dwg: {e}"))?;
                 Ok(format!(
-                    r#"{{"ok":true,"path":"{path}","entities":{}}}"#,
+                    r#"{{"ok":true,"path":"{}","entities":{}}}"#,
+                    resolved.display(),
                     doc.entities.len()
                 ))
             }
@@ -124,12 +137,14 @@ pub async fn run_script(
                 let a: serde_json::Value =
                     serde_json::from_str(args).map_err(|e| e.to_string())?;
                 let path = a["path"].as_str().unwrap_or("output.pdf");
+                let resolved = resolve_write(path);
                 let doc = doc_r.lock().unwrap();
                 let opts = cadview_core::pdf::PdfOptions::default();
                 let bytes = cadview_core::export_pdf_bytes(&doc, &opts);
-                std::fs::write(path, &bytes).map_err(|e| format!("pdf: {e}"))?;
+                std::fs::write(&resolved, &bytes).map_err(|e| format!("pdf: {e}"))?;
                 Ok(format!(
-                    r#"{{"ok":true,"path":"{path}","bytes":{}}}"#,
+                    r#"{{"ok":true,"path":"{}","bytes":{}}}"#,
+                    resolved.display(),
                     bytes.len()
                 ))
             }

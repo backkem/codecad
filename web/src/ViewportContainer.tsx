@@ -7,30 +7,23 @@ interface Props {
   onFocus: () => void;
 }
 
-let canvasCounter = 0;
-
 export function ViewportContainer({ sessionId, focused, onFocus }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const canvasIdRef = useRef<string>("");
+  const rendererKeyRef = useRef<string>("");
 
   useEffect(() => {
-    const canvasId = `cv_${++canvasCounter}`;
-    canvasIdRef.current = canvasId;
-
     const canvas = canvasRef.current;
     if (!canvas) return;
-    canvas.id = canvasId;
 
-    // Start the eframe renderer for this session
     try {
-      cad.viewport.start(canvasId, sessionId);
+      rendererKeyRef.current = cad.viewport.start(canvas, sessionId);
     } catch (e) {
       console.error(`[CodeCAD] Failed to start renderer for ${sessionId}:`, e);
     }
 
     return () => {
       try {
-        cad.viewport.stop(canvasIdRef.current);
+        cad.viewport.stop(rendererKeyRef.current);
       } catch {
         // Session may already be destroyed
       }

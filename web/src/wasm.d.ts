@@ -19,11 +19,11 @@ declare module "cadview-wasm" {
 
   // Renderer lifecycle (per canvas, renderer_type = "vello" | "egui")
   export function start_renderer(
-    canvas_id: string,
+    canvas: HTMLCanvasElement,
     session_id: string,
     renderer_type: string,
   ): string;
-  export function stop_renderer(canvas_id: string): string;
+  export function stop_renderer(renderer_key: string): string;
 
   // Yrs sync (per-session, takes explicit session_id)
   export function yrs_state_vector(session_id: string): Uint8Array;

@@ -30,7 +30,8 @@ struct VelloState {
     target_view: wgpu::TextureView,
     blitter: wgpu::util::TextureBlitter,
     session_id: String,
-    canvas_id: String,
+    renderer_key: String,
+    canvas: HtmlCanvasElement,
     /// Block/text expansion cache. Cleared on entity count change.
     expanded: Vec<DrawEntity>,
     expanded_count: usize,
@@ -66,20 +67,11 @@ fn create_target_texture(device: &wgpu::Device, width: u32, height: u32) -> (wgp
 }
 
 /// Start a Vello renderer on the given canvas for the given session.
-pub fn start(canvas_id: &str, session_id: &str) {
-    let canvas_id = canvas_id.to_string();
+pub fn start(canvas: HtmlCanvasElement, session_id: &str, renderer_key: &str) {
     let session_id = session_id.to_string();
+    let renderer_key = renderer_key.to_string();
 
     wasm_bindgen_futures::spawn_local(async move {
-        let canvas = web_sys::window()
-            .unwrap()
-            .document()
-            .unwrap()
-            .get_element_by_id(&canvas_id)
-            .unwrap_or_else(|| panic!("canvas '{}' not found", canvas_id))
-            .dyn_into::<HtmlCanvasElement>()
-            .unwrap();
-
         let (device, queue, surface, surface_config, renderer, target_texture, target_view, blitter) =
             match init_gpu(&canvas).await {
                 Ok(s) => s,
@@ -99,7 +91,8 @@ pub fn start(canvas_id: &str, session_id: &str) {
             target_view,
             blitter,
             session_id,
-            canvas_id,
+            renderer_key,
+            canvas: canvas.clone(),
             expanded: Vec::new(),
             expanded_count: 0,
             path_cache: HashMap::new(),
@@ -135,11 +128,11 @@ pub fn start(canvas_id: &str, session_id: &str) {
         // client-side commands (zoomTo, setLayerVisible, Yrs sync) can wake us up.
         {
             let sched = Rc::clone(&schedule_frame);
-            let cid = state.borrow().canvas_id.clone();
+            let rk = state.borrow().renderer_key.clone();
             let sid = state.borrow().session_id.clone();
             let mut reg = SESSIONS.lock().unwrap();
-            reg.renderers.insert(cid.clone(), sid);
-            reg.repaint_fns.insert(cid, crate::RepaintFn(Box::new(move || { sched(); })));
+            reg.renderers.insert(rk.clone(), sid);
+            reg.repaint_fns.insert(rk, crate::RepaintFn(Box::new(move || { sched(); })));
         }
 
         // Re-render on canvas resize (browser window resize, layout change)
@@ -168,7 +161,7 @@ pub fn start(canvas_id: &str, session_id: &str) {
             let still_active = {
                 let reg = SESSIONS.lock().unwrap();
                 let s = state_clone.borrow();
-                reg.renderers.get(&s.canvas_id)
+                reg.renderers.get(&s.renderer_key)
                     .is_some_and(|sid| sid == &s.session_id)
             };
             if !still_active { return; }
@@ -192,24 +185,17 @@ pub fn start(canvas_id: &str, session_id: &str) {
             // Handle resize
             let resized = {
                 let s = state_clone.borrow();
-                let canvas_el = web_sys::window().unwrap()
-                    .document().unwrap()
-                    .get_element_by_id(&s.canvas_id);
+                let c = &s.canvas;
+                let dpr = web_sys::window().unwrap().device_pixel_ratio();
+                let w = (c.client_width() as f64 * dpr) as u32;
+                let h = (c.client_height() as f64 * dpr) as u32;
+                c.set_width(w);
+                c.set_height(h);
                 drop(s);
-                if let Some(el) = canvas_el {
-                    let c: HtmlCanvasElement = el.unchecked_into();
-                    let dpr = web_sys::window().unwrap().device_pixel_ratio();
-                    let w = (c.client_width() as f64 * dpr) as u32;
-                    let h = (c.client_height() as f64 * dpr) as u32;
-                    c.set_width(w);
-                    c.set_height(h);
-                    let mut s = state_clone.borrow_mut();
-                    if w != s.surface_config.width || h != s.surface_config.height {
-                        s.resize(w, h);
-                        true
-                    } else {
-                        false
-                    }
+                let mut s = state_clone.borrow_mut();
+                if w != s.surface_config.width || h != s.surface_config.height {
+                    s.resize(w, h);
+                    true
                 } else {
                     false
                 }

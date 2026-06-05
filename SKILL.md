@@ -1,3 +1,8 @@
+---
+name: codecad
+description: Create and modify 2D CAD drawings via CodeCAD. Use when asked to draw, sketch, or produce technical drawings (floor plans, mechanical sections, schematics, geometric constructions).
+---
+
 # CodeCAD drawing skill
 
 ## Purpose

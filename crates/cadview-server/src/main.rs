@@ -6,6 +6,7 @@
 //! Multi-document: uses a DocumentRegistry backed by a DocumentStore
 //! (single file or folder). Documents are lazy-loaded on first access.
 
+pub mod assets;
 mod http;
 pub mod registry;
 pub mod script;
@@ -25,19 +26,53 @@ use tokio::sync::Mutex;
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
-    let dist_dir = find_dist_dir()?;
-    tracing::info!("Serving dist from: {}", dist_dir.display());
+    // Parse CLI flags
+    let mut dist_override: Option<PathBuf> = None;
+    let mut examples_override: Option<PathBuf> = None;
+    let mut positional: Vec<String> = Vec::new();
 
-    // Build document store + registry from CLI args
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args_iter = std::env::args().skip(1);
+    while let Some(arg) = args_iter.next() {
+        match arg.as_str() {
+            "--dist" => {
+                dist_override = Some(PathBuf::from(
+                    args_iter.next().expect("--dist requires a path argument"),
+                ));
+            }
+            "--examples" => {
+                examples_override = Some(PathBuf::from(
+                    args_iter.next().expect("--examples requires a path argument"),
+                ));
+            }
+            _ => positional.push(arg),
+        }
+    }
+
+    // Resolve asset providers
+    let dist: Box<dyn assets::AssetProvider> = match dist_override {
+        Some(path) => {
+            tracing::info!("Dist from disk: {}", path.display());
+            Box::new(assets::DiskAssets::new(path))
+        }
+        None => assets::default_dist()?,
+    };
+
+    let _examples: Option<Box<dyn assets::AssetProvider>> = match examples_override {
+        Some(path) => {
+            tracing::info!("Examples from disk: {}", path.display());
+            Some(Box::new(assets::DiskAssets::new(path)))
+        }
+        None => assets::default_examples(),
+    };
+
     let token = std::env::var("CADVIEW_TOKEN").unwrap_or_else(|_| "cadview-local-dev".to_string());
 
-    let registry = if args.is_empty() {
+    let registry = if positional.is_empty() {
         // No args: FolderStore on cwd
         tracing::info!("No path specified, scanning cwd for .dwg files");
         DocumentRegistry::new(Box::new(FolderStore::new(std::env::current_dir()?)))
     } else {
-        let path = PathBuf::from(&args[0]);
+        let path = PathBuf::from(&positional[0]);
         if path.is_dir() {
             tracing::info!("Folder mode: scanning {} for .dwg files", path.display());
             DocumentRegistry::new(Box::new(FolderStore::new(path)))
@@ -49,7 +84,7 @@ async fn main() -> anyhow::Result<()> {
             let key = store.key().to_string();
             let mut reg = DocumentRegistry::new(Box::new(store));
             // Pre-load the single file
-            let doc = cadview_core::load_dwg(&args[0])?;
+            let doc = cadview_core::load_dwg(&positional[0])?;
             let entity_count = doc.entities.len();
             reg.insert(key.clone(), doc, Some(abs_str));
             tracing::info!("Loaded {entity_count} entities from {key}");
@@ -85,7 +120,7 @@ async fn main() -> anyhow::Result<()> {
     // HTTP server
     let http_port = 8765;
     let http_state = Arc::new(http::HttpState {
-        dist_dir,
+        dist,
         cert_hash,
         wt_port,
         registry: registry.clone(),
@@ -135,18 +170,3 @@ async fn accept_wt_sessions(
     }
 }
 
-fn find_dist_dir() -> anyhow::Result<PathBuf> {
-    let candidates = [
-        PathBuf::from("dist"),
-        PathBuf::from("../../dist"),
-    ];
-    for p in &candidates {
-        if p.join("index.html").exists() {
-            return Ok(std::fs::canonicalize(p)?);
-        }
-    }
-    anyhow::bail!(
-        "Cannot find dist/index.html. Run from the cadview workspace root, \
-         or pass the dist directory as an argument."
-    )
-}

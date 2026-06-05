@@ -67,6 +67,7 @@ crates/
       src/main.rs             # entry: HTTP (axum) + WebTransport (wtransport)
       src/store.rs            # DocumentStore trait (SingleFileStore, FolderStore)
       src/registry.rs         # DocumentRegistry: lazy-loading, per-doc SyncDoc + broadcast
+      src/assets.rs           # AssetProvider trait: embedded (rust-embed) or disk
       src/http.rs             # static file serving, /api/documents, /api/run, auth
       src/transport.rs        # WebTransport: stream classification, per-doc sync, RPC
       src/script.rs           # server-side JS execution: run_script, exec_file
@@ -99,9 +100,9 @@ crates/
       ViewportContainer.tsx   # per-session canvas + eframe WebRunner lifecycle
       LayerPanel.tsx          # layer visibility toggle panel
       index.css               # CodeCAD brand styles (void/amber/off-white)
+  SKILL.md                    # drawing skill: techniques, patterns, creed
   dist/                       # build output (WASM + Vite bundle)
   docs/
-    SKILL.md                  # drawing skill: techniques, patterns, creed
     architecture.md           # stack, design decisions, AI drawing vision
     api-surface.md            # JS API design (generic core + domain exercises)
     _todo.md                  # working TODO
@@ -171,6 +172,10 @@ just rebuild     # same as build (alias)
 just build-wasm  # Rust -> WASM + wasm-bindgen
 just build-web   # Vite bundles TS/React + WASM into dist/
 just build-server # native server binary
+
+just build-packed      # single binary with frontend baked in
+just build-packed-full # same + examples/ baked in
+just clean-dist        # remove stale hashed WASM from dist/
 ```
 
 **IMPORTANT**: after changing cadview-web Rust code, you must run
@@ -219,6 +224,21 @@ RUST_LOG=info cargo run -p cadview-server
 
 Opens http://localhost:8765. Tab bar for multiple documents.
 Drag-and-drop .dwg files onto the browser to open them.
+
+CLI flags: `--dist <path>` overrides dist asset source (load from
+disk instead of embedded). `--examples <path>` overrides examples
+source. These work regardless of compile-time feature flags.
+
+### Packed binary (single-file deploy)
+
+```bash
+just build-packed      # bake dist/ into the binary
+just build-packed-full # bake dist/ + examples/ into the binary
+```
+
+Uses `rust-embed` behind feature flags `embedded-dist` and
+`embedded-examples`. The resulting binary needs no dist/ directory.
+`--dist <path>` still works to override at runtime.
 
 ### Dev mode (Vite HMR for frontend, no server)
 
@@ -424,7 +444,7 @@ cadview-server: 8 tests (store backends, registry, broadcast isolation).
 
 Before drawing anything, read these in order:
 
-1. **`docs/SKILL.md`** - core creed, required workflow, fillet offset
+1. **`SKILL.md`** - core creed, required workflow, fillet offset
    rules, involute gear patterns, polar copy technique.
 2. **`docs/api-surface.md`** - JS API design, block system, mutation
    on selections, layer semantics, worked exercises.

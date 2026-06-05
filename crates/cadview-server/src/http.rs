@@ -1,17 +1,17 @@
 //! HTTP server: serves dist/, document list API, cert hash injection, auth.
 
+use crate::assets::{self, AssetProvider};
 use crate::registry::DocumentRegistry;
 use axum::extract::State;
 use axum::http::{header, StatusCode};
 use axum::response::{Html, IntoResponse, Json};
 use axum::routing::{get, post};
 use axum::Router;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub struct HttpState {
-    pub dist_dir: PathBuf,
+    pub dist: Box<dyn AssetProvider>,
     pub cert_hash: Vec<u8>,
     pub wt_port: u16,
     pub registry: Arc<Mutex<DocumentRegistry>>,
@@ -59,14 +59,14 @@ fn check_bearer(expected: &str, req: &axum::http::Request<axum::body::Body>) -> 
 // ── Static file handlers ────────────────────────────────────────────
 
 async fn index_handler(State(state): State<Arc<HttpState>>) -> impl IntoResponse {
-    let html_path = state.dist_dir.join("index.html");
-    let html = match std::fs::read_to_string(&html_path) {
-        Ok(s) => s,
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("Cannot read index.html: {e}"))
+    let bytes = match state.dist.get("index.html") {
+        Some(b) => b,
+        None => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Cannot read index.html")
                 .into_response();
         }
     };
+    let html = String::from_utf8_lossy(&bytes).into_owned();
 
     // Inject cert hash, WT port, and auth token
     let hash_hex: Vec<String> = state.cert_hash.iter().map(|b| format!("0x{b:02x}")).collect();
@@ -85,27 +85,12 @@ async fn static_handler(
     State(state): State<Arc<HttpState>>,
     axum::extract::Path(path): axum::extract::Path<String>,
 ) -> impl IntoResponse {
-    let file_path = state.dist_dir.join(&path);
-
-    if !file_path.starts_with(&state.dist_dir) {
-        return (StatusCode::FORBIDDEN, "Forbidden").into_response();
-    }
-
-    match std::fs::read(&file_path) {
-        Ok(bytes) => {
-            let content_type = match file_path.extension().and_then(|e| e.to_str()) {
-                Some("html") => "text/html; charset=utf-8",
-                Some("js") => "application/javascript; charset=utf-8",
-                Some("wasm") => "application/wasm",
-                Some("css") => "text/css; charset=utf-8",
-                Some("png") => "image/png",
-                Some("jpg" | "jpeg") => "image/jpeg",
-                Some("svg") => "image/svg+xml",
-                _ => "application/octet-stream",
-            };
-            ([(header::CONTENT_TYPE, content_type)], bytes).into_response()
+    match state.dist.get(&path) {
+        Some(bytes) => {
+            let ct = assets::content_type(&path);
+            ([(header::CONTENT_TYPE, ct)], bytes.into_owned()).into_response()
         }
-        Err(_) => (StatusCode::NOT_FOUND, "Not Found").into_response(),
+        None => (StatusCode::NOT_FOUND, "Not Found").into_response(),
     }
 }
 

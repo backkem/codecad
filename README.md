@@ -65,7 +65,7 @@ See [docs/architecture.md](docs/architecture.md) for the full design and
 ## Docs
 
 - [API surface](docs/api-surface.md) -- full JS API, block system, worked exercises
-- [Drawing skill](docs/SKILL.md) -- techniques, patterns, fillet/offset rules
+- [Drawing skill](SKILL.md) -- techniques, patterns, fillet/offset rules
 - [Contributing](CONTRIBUTING.md) -- build, test, code style
 
 ## License

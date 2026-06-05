@@ -529,8 +529,7 @@ pub(crate) fn shape_to_entity_type(
             if contour.len() < 2 {
                 return None;
             }
-            let pts: Vec<Vector2> =
-                contour.iter().map(|p| Vector2::new(p.x, p.y)).collect();
+            let pts: Vec<Vector2> = contour.iter().map(|p| Vector2::new(p.x, p.y)).collect();
             let mut e = ae::LwPolyline::from_points(pts);
             if *closed {
                 e.close();

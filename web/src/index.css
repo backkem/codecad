@@ -390,3 +390,56 @@ body {
   background: var(--muted);
   border-radius: 2px;
 }
+
+/* ── Document picker: section label + examples grid ─────────────── */
+
+.doc-picker-section-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  padding: 12px 12px 4px;
+}
+
+.examples-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 4px 12px 12px;
+}
+
+.example-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--grid);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+  font-family: inherit;
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+.example-card:hover {
+  border-color: var(--muted);
+}
+.example-card img {
+  width: 100%;
+  aspect-ratio: 4/3;
+  object-fit: cover;
+  display: block;
+  background: #000;
+}
+.example-card-title {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 6px 8px 2px;
+}
+.example-card-desc {
+  font-size: 10px;
+  color: var(--muted);
+  padding: 0 8px 6px;
+  line-height: 1.3;
+}

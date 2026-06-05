@@ -217,6 +217,18 @@ const viewport = {
   },
 };
 
+// ── Helpers ─────────────────────────────────────────────────────────
+
+function downloadBlob(content: string, filename: string, mime: string) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 // ── Build CAD API from shared definition ────────────────────────────
 
 const cadCore = buildCadApi({
@@ -253,34 +265,38 @@ export const cad = {
     return JSON.parse(raw) as string | null;
   },
 
-  // Override save/saveDwg to flush sync + rename tabs
+  // Override save/saveDwg to flush sync + rename tabs.
+  // Falls back to browser download when no server is connected.
   save: async (path = "cadview-output.json") => {
-    await flushAndWaitSync();
-    const sid = cad.currentSession();
-    const result = await rpcCall("save", { path }, sid ?? undefined);
-    if (sid && _onTabRenamed) {
-      const name =
-        path
-          .replace(/\.[^.]+$/, "")
-          .split("/")
-          .pop() || path;
-      _onTabRenamed(sid, name);
+    if (_serverAvailable) {
+      await flushAndWaitSync();
+      const sid = cad.currentSession();
+      const result = await rpcCall("save", { path }, sid ?? undefined);
+      if (sid && _onTabRenamed) {
+        const name = path.replace(/\.[^.]+$/, "").split("/").pop() || path;
+        _onTabRenamed(sid, name);
+      }
+      return result;
     }
-    return result;
+    // Standalone: download JSON via browser
+    const entities = cad.entities();
+    const json = JSON.stringify(entities, null, 2);
+    downloadBlob(json, path, "application/json");
+    return { ok: true, path, entities: entities.length };
   },
   saveDwg: async (path = "output.dwg") => {
-    await flushAndWaitSync();
-    const sid = cad.currentSession();
-    const result = await rpcCall("saveDwg", { path }, sid ?? undefined);
-    if (sid && _onTabRenamed) {
-      const name =
-        path
-          .replace(/\.[^.]+$/, "")
-          .split("/")
-          .pop() || path;
-      _onTabRenamed(sid, name);
+    if (_serverAvailable) {
+      await flushAndWaitSync();
+      const sid = cad.currentSession();
+      const result = await rpcCall("saveDwg", { path }, sid ?? undefined);
+      if (sid && _onTabRenamed) {
+        const name = path.replace(/\.[^.]+$/, "").split("/").pop() || path;
+        _onTabRenamed(sid, name);
+      }
+      return result;
     }
-    return result;
+    console.warn("[CodeCAD] DWG export requires the server. Saving as JSON instead.");
+    return cad.save(path.replace(/\.dwg$/i, ".json"));
   },
 
   // HTTP API
@@ -472,9 +488,14 @@ async function listenForServerUpdates(
 // ── Init ─────────────────────────────────────────────────────────────
 
 let _initialSessionId = "default";
+let _serverAvailable = false;
 
 export function getInitialSessionId(): string {
   return _initialSessionId;
+}
+
+export function isServerAvailable(): boolean {
+  return _serverAvailable;
 }
 
 /** Lightweight init for embed viewers: WASM + renderer detection only.
@@ -504,12 +525,13 @@ export async function initCad(): Promise<void> {
   let initialDocId = "default";
   try {
     const docs = await cad.api.listDocuments();
+    _serverAvailable = true;
     if (docs.length > 0) {
       const loaded = docs.find((d) => d.loaded) ?? docs[0];
       initialDocId = loaded.id;
     }
   } catch {
-    // No server or API unavailable
+    _serverAvailable = false;
   }
 
   _initialSessionId = initialDocId;

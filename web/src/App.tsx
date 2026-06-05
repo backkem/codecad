@@ -1,6 +1,7 @@
 import { type DragEvent, useCallback, useEffect, useState } from "react";
 import { cad, type EntityJson, getInitialSessionId, onTabRenamed } from "./cad";
 import { DocumentPicker } from "./DocumentPicker";
+import { exampleDwgUrl } from "./examples-manifest";
 import { LayerPanel } from "./LayerPanel";
 import { TabBar } from "./TabBar";
 import { ViewportContainer } from "./ViewportContainer";
@@ -40,6 +41,21 @@ export function App() {
         prev.map((t) => (t.id === sessionId ? { ...t, label: newLabel } : t)),
       );
     });
+
+    // Auto-load DWG from ?file=URL parameter
+    const fileUrl = new URLSearchParams(window.location.search).get("file");
+    if (fileUrl) {
+      fetch(fileUrl)
+        .then((r) => {
+          if (!r.ok) throw new Error(`${r.status}`);
+          return r.arrayBuffer();
+        })
+        .then((buf) => {
+          const name = fileUrl.split("/").pop() || "remote.dwg";
+          loadBytesAsTab(name, new Uint8Array(buf));
+        })
+        .catch((e) => console.error(`[CodeCAD] ?file= load failed: ${e}`));
+    }
   }, []);
 
   // Switch active tab
@@ -91,30 +107,43 @@ export function App() {
     activateTab(id);
   }
 
-  // Load a dropped DWG file into a new tab
-  function loadDroppedFile(file: File) {
-    const label = file.name.replace(/\.dwg$/i, "");
-    const id = `drop-${Date.now()}-${file.name}`;
+  // Load DWG bytes into a new tab
+  function loadBytesAsTab(name: string, bytes: Uint8Array) {
+    const label = name.replace(/\.dwg$/i, "");
+    const id = `file-${Date.now()}-${name}`;
     try {
       cad.sessions.create(id);
     } catch (e) {
-      console.warn("Failed to create session for dropped file:", e);
+      console.warn("Failed to create session:", e);
       return;
     }
     setTabs((prev) => [...prev, { id, label }]);
     activateTab(id);
+    try {
+      const result = cad.sessions.loadDwgBytes(id, bytes);
+      console.log(`[CodeCAD] Loaded ${name}: ${result.entities} entities`);
+    } catch (e) {
+      console.error(`[CodeCAD] Failed to parse ${name}:`, e);
+    }
+  }
 
-    // Read the file and load DWG bytes into the session
+  // Load a dropped DWG file into a new tab
+  function loadDroppedFile(file: File) {
     file.arrayBuffer().then((buf) => {
-      try {
-        const result = cad.sessions.loadDwgBytes(id, new Uint8Array(buf));
-        console.log(
-          `[CodeCAD] Loaded ${file.name}: ${result.entities} entities`,
-        );
-      } catch (e) {
-        console.error(`[CodeCAD] Failed to parse ${file.name}:`, e);
-      }
+      loadBytesAsTab(file.name, new Uint8Array(buf));
     });
+  }
+
+  // Load an example drawing by ID
+  function loadExample(exampleId: string) {
+    const url = exampleDwgUrl(exampleId);
+    fetch(url)
+      .then((r) => {
+        if (!r.ok) throw new Error(`${r.status}`);
+        return r.arrayBuffer();
+      })
+      .then((buf) => loadBytesAsTab(`${exampleId}.dwg`, new Uint8Array(buf)))
+      .catch((e) => console.error(`[CodeCAD] Failed to load example: ${e}`));
   }
 
   // Close a tab
@@ -259,6 +288,8 @@ export function App() {
         onClose={() => setPickerOpen(false)}
         onSelect={openDocument}
         onNewDrawing={newDrawing}
+        onLoadFile={loadBytesAsTab}
+        onLoadExample={loadExample}
         openTabIds={tabs.map((t) => t.id)}
       />
     </div>

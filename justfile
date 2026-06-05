@@ -28,9 +28,22 @@ build-packed-full: build-wasm build-web
 build-embed:
     cd web && pnpm exec vite build --config vite.embed.config.ts
 
-# Remove stale hashed assets from dist/ (keeps current build only)
+# Build GH Pages site: homepage + app + embed + examples
+build-site: build-wasm clean-dist build-web build-embed
+    rm -rf _site
+    mkdir -p _site/app _site/embed _site/examples _site/assets
+    cp site/index.html site/site.css _site/
+    cp dist/index.html _site/app/
+    cp -r dist/assets _site/app/
+    cp dist/cadview-web.js _site/app/
+    cp dist/cadview-web_bg.wasm _site/app/
+    cp dist-embed/codecad-viewer.js dist-embed/cadview-web.js dist-embed/cadview-web_bg.wasm _site/embed/
+    cp examples/*.dwg examples/*.png _site/examples/
+    cp docs/brand/icon-mark.svg _site/assets/favicon.svg
+
+# Remove stale hashed assets from dist/
 clean-dist:
-    cd dist/assets && ls -1 cadview-web_bg-*.wasm | sort | head -n -1 | xargs -r rm -v
+    rm -f dist/assets/cadview-web_bg-*.wasm dist/assets/index-*.js dist/assets/index-*.css
 
 # Full rebuild: WASM + frontend + server (in order)
 rebuild: build-wasm build-web build-server

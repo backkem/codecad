@@ -1,0 +1,215 @@
+@import url("https://fonts.googleapis.com/css2?family=Jost:wght@400;500&family=JetBrains+Mono:wght@400&display=swap");
+
+:root {
+  --void: #0a0e14;
+  --text: #e8e8e8;
+  --muted: #6b7280;
+  --grid: #151a22;
+  --accent: #ffb000;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--void);
+  color: var(--text);
+  font-family: "Jost", system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--text); }
+a:hover { color: var(--accent); }
+code { font-family: "JetBrains Mono", monospace; font-size: 13px; }
+
+.container {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* ── Hero ────────────────────────────────────────────────────────── */
+
+.hero {
+  text-align: center;
+  padding: 80px 0 48px;
+}
+
+.hero h1 {
+  font-family: "Jost", sans-serif;
+  font-weight: 500;
+  font-size: 42px;
+  letter-spacing: -0.02em;
+  margin-bottom: 12px;
+}
+
+.hero .crosshair {
+  display: inline-block;
+  width: 28px;
+  height: 28px;
+  position: relative;
+  vertical-align: middle;
+  margin-right: 4px;
+}
+.hero .crosshair::before,
+.hero .crosshair::after {
+  content: "";
+  position: absolute;
+  background: var(--accent);
+}
+.hero .crosshair::before {
+  width: 2px; height: 100%;
+  left: 50%; transform: translateX(-50%);
+}
+.hero .crosshair::after {
+  height: 2px; width: 100%;
+  top: 50%; transform: translateY(-50%);
+}
+
+.hero .tagline {
+  color: var(--muted);
+  font-size: 17px;
+  max-width: 520px;
+  margin: 0 auto 32px;
+}
+
+.hero .actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+.btn {
+  display: inline-block;
+  padding: 10px 24px;
+  border-radius: 4px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 13px;
+  text-decoration: none;
+  border: 1px solid var(--muted);
+  transition: border-color 0.15s, color 0.15s;
+}
+.btn:hover { border-color: var(--text); color: var(--text); }
+.btn-primary {
+  background: var(--text);
+  color: var(--void);
+  border-color: var(--text);
+}
+.btn-primary:hover { background: #fff; color: var(--void); }
+
+/* ── Features ────────────────────────────────────────────────────── */
+
+.features {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+  padding: 48px 0;
+}
+
+.feature h3 {
+  font-size: 14px;
+  font-weight: 500;
+  margin-bottom: 6px;
+}
+
+.feature p {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* ── Code sample ────────────────────────────────────────────────── */
+
+.code-section {
+  padding: 48px 0;
+}
+
+.code-section h2 {
+  font-size: 18px;
+  font-weight: 500;
+  margin-bottom: 16px;
+}
+
+pre {
+  background: var(--grid);
+  border-radius: 6px;
+  padding: 20px 24px;
+  overflow-x: auto;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+pre .kw { color: #c678dd; }
+pre .str { color: #98c379; }
+pre .fn { color: #61afef; }
+pre .num { color: #d19a66; }
+pre .cmt { color: #5c6370; }
+
+/* ── Examples ────────────────────────────────────────────────────── */
+
+.examples-section {
+  padding: 48px 0;
+}
+
+.examples-section h2 {
+  font-size: 18px;
+  font-weight: 500;
+  margin-bottom: 20px;
+}
+
+.examples-gallery {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.example-link {
+  display: block;
+  text-decoration: none;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--grid);
+  transition: border-color 0.15s;
+}
+.example-link:hover { border-color: var(--muted); }
+
+.example-link img {
+  width: 100%;
+  aspect-ratio: 4/3;
+  object-fit: cover;
+  display: block;
+  background: #000;
+}
+
+.example-link .caption {
+  padding: 8px 10px;
+  font-size: 12px;
+}
+.example-link .caption .title { font-weight: 500; }
+.example-link .caption .desc {
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+/* ── Footer ──────────────────────────────────────────────────────── */
+
+.footer {
+  padding: 48px 0 32px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+  border-top: 1px solid var(--grid);
+}
+.footer a { color: var(--muted); }
+.footer a:hover { color: var(--text); }
+
+/* ── Responsive ──────────────────────────────────────────────────── */
+
+@media (max-width: 700px) {
+  .features { grid-template-columns: 1fr; }
+  .examples-gallery { grid-template-columns: repeat(2, 1fr); }
+  .hero h1 { font-size: 28px; }
+}

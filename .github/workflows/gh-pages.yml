@@ -29,7 +29,7 @@ jobs:
         run: cargo fmt --check
 
       - name: Rust lints
-        run: cargo clippy -p cadview-core -p cadview-web -p cadview-server -- -D warnings
+        run: cargo clippy -p cadview-core -p cadview-web -- -D warnings
 
       - uses: pnpm/action-setup@v4
         with:

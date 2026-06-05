@@ -525,23 +525,19 @@ pub(crate) fn shape_to_entity_type(
         Shape::CurvePath { path, closed } => {
             let contours = flatten_bezpath_adaptive(path, 0.1);
             // Write only the first contour as the entity type
-            if let Some(contour) = contours.first() {
-                if contour.len() >= 2 {
-                    let pts: Vec<Vector2> =
-                        contour.iter().map(|p| Vector2::new(p.x, p.y)).collect();
-                    let mut e = ae::LwPolyline::from_points(pts);
-                    if *closed {
-                        e.close();
-                    }
-                    e.set_layer(layer.to_string());
-                    e.set_color(color);
-                    ae::EntityType::LwPolyline(e)
-                } else {
-                    return None;
-                }
-            } else {
+            let contour = contours.first()?;
+            if contour.len() < 2 {
                 return None;
             }
+            let pts: Vec<Vector2> =
+                contour.iter().map(|p| Vector2::new(p.x, p.y)).collect();
+            let mut e = ae::LwPolyline::from_points(pts);
+            if *closed {
+                e.close();
+            }
+            e.set_layer(layer.to_string());
+            e.set_color(color);
+            ae::EntityType::LwPolyline(e)
         }
         Shape::Text {
             text,

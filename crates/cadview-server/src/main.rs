@@ -29,6 +29,7 @@ async fn main() -> anyhow::Result<()> {
     // Parse CLI flags
     let mut dist_override: Option<PathBuf> = None;
     let mut examples_override: Option<PathBuf> = None;
+    let mut exec_script: Option<String> = None;
     let mut positional: Vec<String> = Vec::new();
 
     let mut args_iter = std::env::args().skip(1);
@@ -44,8 +45,18 @@ async fn main() -> anyhow::Result<()> {
                     args_iter.next().expect("--examples requires a path argument"),
                 ));
             }
+            "--exec" => {
+                exec_script = Some(
+                    args_iter.next().expect("--exec requires a script path"),
+                );
+            }
             _ => positional.push(arg),
         }
+    }
+
+    // Headless mode: run a script and exit (no HTTP/WebTransport server).
+    if let Some(script_path) = exec_script {
+        return run_headless(&positional, &script_path).await;
     }
 
     // Resolve asset providers
@@ -147,6 +158,54 @@ async fn main() -> anyhow::Result<()> {
         r = accept_wt_sessions(wt_endpoint, registry, sandbox) => {
             tracing::error!("WebTransport server exited: {r:?}");
         }
+    }
+
+    Ok(())
+}
+
+/// Headless mode: load an optional DWG, run a script, print output, exit.
+async fn run_headless(positional: &[String], script_path: &str) -> anyhow::Result<()> {
+    let sandbox = Arc::new(
+        script::create_sandbox().expect("Failed to initialize WASM sandbox"),
+    );
+
+    // Create registry with optional input DWG
+    let mut registry = DocumentRegistry::new(Box::new(store::FolderStore::new(
+        std::env::current_dir()?,
+    )));
+    let doc_key = if let Some(path_str) = positional.first() {
+        let path = PathBuf::from(path_str);
+        if path.is_file() {
+            let doc = cadview_core::load_dwg(path_str)?;
+            let entity_count = doc.entities.len();
+            let key = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            registry.insert(key.clone(), doc, Some(path_str.clone()));
+            tracing::info!("Loaded {entity_count} entities from {key}");
+            key
+        } else {
+            "default".to_string()
+        }
+    } else {
+        // Create empty document
+        let key = "default".to_string();
+        registry.insert(key.clone(), cadview_core::Document::default(), None);
+        key
+    };
+
+    let registry = Arc::new(Mutex::new(registry));
+
+    let output = script::exec_file(&sandbox, &registry, &doc_key, script_path, None)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+    if !output.stdout.is_empty() {
+        print!("{}", output.stdout);
+    }
+    if !output.stderr.is_empty() {
+        eprint!("{}", output.stderr);
+    }
+    if let Some(val) = &output.value {
+        println!("{val}");
     }
 
     Ok(())

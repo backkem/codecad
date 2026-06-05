@@ -8,6 +8,8 @@ node_modules/
 
 # Build output
 dist/
+dist-embed/
+_site/
 **/cadview-sandbox.wasm
 
 # Working docs (prefixed with _)

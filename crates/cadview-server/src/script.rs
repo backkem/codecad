@@ -114,11 +114,11 @@ pub async fn run_script(
                     doc.entities.iter().map(|e| e.to_json()).collect();
                 let json = serde_json::to_string_pretty(&entities).map_err(|e| e.to_string())?;
                 std::fs::write(&resolved, &json).map_err(|e| format!("write {path}: {e}"))?;
-                Ok(format!(
-                    r#"{{"ok":true,"path":"{}","entities":{}}}"#,
-                    resolved.display(),
-                    entities.len()
-                ))
+                Ok(serde_json::json!({
+                    "ok": true,
+                    "path": resolved.to_string_lossy(),
+                    "entities": entities.len(),
+                }).to_string())
             }
             "saveDwg" => {
                 let a: serde_json::Value =
@@ -127,11 +127,11 @@ pub async fn run_script(
                 let resolved = resolve_write(path);
                 let doc = doc_r.lock().unwrap();
                 cadview_core::save_dwg(&doc, &resolved.to_string_lossy()).map_err(|e| format!("dwg: {e}"))?;
-                Ok(format!(
-                    r#"{{"ok":true,"path":"{}","entities":{}}}"#,
-                    resolved.display(),
-                    doc.entities.len()
-                ))
+                Ok(serde_json::json!({
+                    "ok": true,
+                    "path": resolved.to_string_lossy(),
+                    "entities": doc.entities.len(),
+                }).to_string())
             }
             "savePdf" => {
                 let a: serde_json::Value =
@@ -142,11 +142,11 @@ pub async fn run_script(
                 let opts = cadview_core::pdf::PdfOptions::default();
                 let bytes = cadview_core::export_pdf_bytes(&doc, &opts);
                 std::fs::write(&resolved, &bytes).map_err(|e| format!("pdf: {e}"))?;
-                Ok(format!(
-                    r#"{{"ok":true,"path":"{}","bytes":{}}}"#,
-                    resolved.display(),
-                    bytes.len()
-                ))
+                Ok(serde_json::json!({
+                    "ok": true,
+                    "path": resolved.to_string_lossy(),
+                    "bytes": bytes.len(),
+                }).to_string())
             }
             "loadDwg" => {
                 let a: serde_json::Value =

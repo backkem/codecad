@@ -28,8 +28,8 @@ const positions = [
 //
 // Spiral path: (0,0)->(1,1)->(2,0)->(0,-2)->(-3,1)->(2,6)->(10,-2)
 const arcCenters = [
-    { cx: 0, cy: 1 },  // TL of sq0
-    { cx: 1, cy: 1 },  // TR of sq1
+    { cx: 1, cy: 0 },  // BR of sq0 (CW sweep, matches rest of spiral)
+    { cx: 0, cy: 0 },  // BL of sq1 (CW sweep)
     { cx: 0, cy: 1 },  // TL of sq2 (= point (0,0))
     { cx: 1, cy: 1 },  // TR of sq3 (= point (0,1))
     { cx: 1, cy: 0 },  // BR of sq4 (= point (2,1))

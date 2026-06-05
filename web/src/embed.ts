@@ -16,7 +16,7 @@ import {
   start_renderer,
   stop_renderer,
 } from "cadview-wasm";
-import { initCadEmbed } from "./cad";
+import { initCadEmbed, setLoadProgressCallback } from "./cad";
 
 let wasmReady: Promise<void> | null = null;
 let viewerCount = 0;
@@ -215,6 +215,10 @@ class CodecadViewer extends HTMLElement {
   private async initViewer() {
     // Singleton WASM init (shared across all <codecad-viewer> on the page)
     if (!wasmReady) {
+      const pctEl = this.loadingEl.querySelector("span");
+      setLoadProgressCallback((pct) => {
+        if (pctEl) pctEl.textContent = `loading ${pct}%`;
+      });
       wasmReady = initCadEmbed();
     }
     await wasmReady;

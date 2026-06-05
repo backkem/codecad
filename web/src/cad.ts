@@ -526,15 +526,65 @@ export function isServerAvailable(): boolean {
   return _serverAvailable;
 }
 
+/** Intercept fetch to track WASM download progress. Returns cleanup fn. */
+function trackWasmProgress(onProgress: (pct: number) => void): () => void {
+  const original = window.fetch;
+  const tracked: typeof fetch = async (input, init) => {
+    const response = await original(input, init);
+    const url = input instanceof Request ? input.url : input.toString();
+    if (!url.endsWith(".wasm")) return response;
+
+    const total = Number.parseInt(
+      response.headers.get("content-length") || "0",
+    );
+    if (!total || !response.body) return response;
+
+    const reader = response.body.getReader();
+    let received = 0;
+    const stream = new ReadableStream({
+      async pull(controller) {
+        const { done, value } = await reader.read();
+        if (done) {
+          controller.close();
+          return;
+        }
+        received += value.length;
+        onProgress(Math.round((received / total) * 100));
+        controller.enqueue(value);
+      },
+    });
+    return new Response(stream, {
+      headers: response.headers,
+      status: response.status,
+      statusText: response.statusText,
+    });
+  };
+  window.fetch = tracked;
+  return () => {
+    window.fetch = original;
+  };
+}
+
+/** Set the loader percentage text (works for both app and embed). */
+let _onLoadProgress: ((pct: number) => void) | null = null;
+
+export function setLoadProgressCallback(cb: (pct: number) => void): void {
+  _onLoadProgress = cb;
+}
+
 /** Lightweight init for embed viewers: WASM + renderer detection only.
  *  No server detection, no session creation, no WebTransport. */
 export async function initCadEmbed(): Promise<void> {
+  const cleanup = trackWasmProgress((pct) => _onLoadProgress?.(pct));
   await init();
+  cleanup();
   _rendererType = await detectRenderer();
 }
 
 export async function initCad(): Promise<void> {
+  const cleanup = trackWasmProgress((pct) => _onLoadProgress?.(pct));
   await init();
+  cleanup();
 
   const params = new URLSearchParams(window.location.search);
   const forced = params.get("renderer");

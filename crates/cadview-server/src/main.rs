@@ -42,13 +42,13 @@ async fn main() -> anyhow::Result<()> {
             }
             "--examples" => {
                 examples_override = Some(PathBuf::from(
-                    args_iter.next().expect("--examples requires a path argument"),
+                    args_iter
+                        .next()
+                        .expect("--examples requires a path argument"),
                 ));
             }
             "--exec" => {
-                exec_script = Some(
-                    args_iter.next().expect("--exec requires a script path"),
-                );
+                exec_script = Some(args_iter.next().expect("--exec requires a script path"));
             }
             _ => positional.push(arg),
         }
@@ -101,7 +101,10 @@ async fn main() -> anyhow::Result<()> {
             tracing::info!("Loaded {entity_count} entities from {key}");
             reg
         } else {
-            anyhow::bail!("Path '{}' is neither a file nor a directory", path.display());
+            anyhow::bail!(
+                "Path '{}' is neither a file nor a directory",
+                path.display()
+            );
         }
     };
 
@@ -111,14 +114,15 @@ async fn main() -> anyhow::Result<()> {
     let registry = Arc::new(Mutex::new(registry));
 
     // Initialize WASM sandbox for server-side script execution.
-    let sandbox = Arc::new(
-        script::create_sandbox().expect("Failed to initialize WASM sandbox"),
-    );
+    let sandbox = Arc::new(script::create_sandbox().expect("Failed to initialize WASM sandbox"));
     tracing::info!("WASM sandbox initialized");
 
     // TLS for WebTransport
     let identity = wtransport::Identity::self_signed(["localhost", "127.0.0.1", "::1"])?;
-    let cert_hash = identity.certificate_chain().as_slice()[0].hash().as_ref().to_vec();
+    let cert_hash = identity.certificate_chain().as_slice()[0]
+        .hash()
+        .as_ref()
+        .to_vec();
 
     let wt_config = wtransport::ServerConfig::builder()
         .with_bind_default(0)
@@ -165,20 +169,21 @@ async fn main() -> anyhow::Result<()> {
 
 /// Headless mode: load an optional DWG, run a script, print output, exit.
 async fn run_headless(positional: &[String], script_path: &str) -> anyhow::Result<()> {
-    let sandbox = Arc::new(
-        script::create_sandbox().expect("Failed to initialize WASM sandbox"),
-    );
+    let sandbox = Arc::new(script::create_sandbox().expect("Failed to initialize WASM sandbox"));
 
     // Create registry with optional input DWG
-    let mut registry = DocumentRegistry::new(Box::new(store::FolderStore::new(
-        std::env::current_dir()?,
-    )));
+    let mut registry =
+        DocumentRegistry::new(Box::new(store::FolderStore::new(std::env::current_dir()?)));
     let doc_key = if let Some(path_str) = positional.first() {
         let path = PathBuf::from(path_str);
         if path.is_file() {
             let doc = cadview_core::load_dwg(path_str)?;
             let entity_count = doc.entities.len();
-            let key = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let key = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             registry.insert(key.clone(), doc, Some(path_str.clone()));
             tracing::info!("Loaded {entity_count} entities from {key}");
             key
@@ -228,4 +233,3 @@ async fn accept_wt_sessions(
         });
     }
 }
-

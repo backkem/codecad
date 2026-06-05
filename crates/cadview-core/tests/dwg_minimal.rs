@@ -1,6 +1,5 @@
 ///! Generate minimal DWGs for AutoCAD compatibility testing.
 ///! Run: cargo test -p cadview-core --test dwg_minimal -- --nocapture
-
 use cadview_core::*;
 use kurbo::Point;
 
@@ -12,7 +11,12 @@ fn generate_minimal_dwgs() {
     // 1. Absolute minimum: one line
     {
         let mut doc = Document::new();
-        doc.add_line(Point::new(0.0, 0.0), Point::new(1000.0, 500.0), "0", Color::WHITE);
+        doc.add_line(
+            Point::new(0.0, 0.0),
+            Point::new(1000.0, 500.0),
+            "0",
+            Color::WHITE,
+        );
         let path = out.join("_test-1-line.dwg");
         save_dwg(&doc, path.to_str().unwrap()).expect("save failed");
         println!("Wrote: {}", path.display());
@@ -22,9 +26,21 @@ fn generate_minimal_dwgs() {
     {
         let mut doc = Document::new();
         doc.ensure_layer("TEST");
-        doc.add_line(Point::new(0.0, 0.0), Point::new(1000.0, 0.0), "TEST", Color::WHITE);
+        doc.add_line(
+            Point::new(0.0, 0.0),
+            Point::new(1000.0, 0.0),
+            "TEST",
+            Color::WHITE,
+        );
         doc.add_circle(Point::new(500.0, 250.0), 100.0, "TEST", Color::WHITE);
-        doc.add_arc(Point::new(200.0, 200.0), 50.0, 0.0, std::f64::consts::FRAC_PI_2, "TEST", Color::WHITE);
+        doc.add_arc(
+            Point::new(200.0, 200.0),
+            50.0,
+            0.0,
+            std::f64::consts::FRAC_PI_2,
+            "TEST",
+            Color::WHITE,
+        );
         let path = out.join("_test-2-mixed.dwg");
         save_dwg(&doc, path.to_str().unwrap()).expect("save failed");
         println!("Wrote: {}", path.display());
@@ -38,8 +54,19 @@ fn generate_minimal_dwgs() {
         let block = BlockDef {
             name: "TEST_SYMBOL".into(),
             shapes: vec![
-                (Shape::Circle(kurbo::Circle::new(Point::new(0.0, 0.0), 35.0)), "E_TEST".into(), Color::WHITE),
-                (Shape::Line(kurbo::Line::new(Point::new(-24.5, -24.5), Point::new(24.5, 24.5))), "E_TEST".into(), Color::WHITE),
+                (
+                    Shape::Circle(kurbo::Circle::new(Point::new(0.0, 0.0), 35.0)),
+                    "E_TEST".into(),
+                    Color::WHITE,
+                ),
+                (
+                    Shape::Line(kurbo::Line::new(
+                        Point::new(-24.5, -24.5),
+                        Point::new(24.5, 24.5),
+                    )),
+                    "E_TEST".into(),
+                    Color::WHITE,
+                ),
             ],
             insert_point: Point::new(0.0, 0.0),
             default_layer: "E_TEST".into(),
@@ -59,7 +86,12 @@ fn generate_minimal_dwgs() {
                 y_scale: 1.0,
             },
         });
-        doc.add_line(Point::new(0.0, 0.0), Point::new(1000.0, 0.0), "0", Color::WHITE);
+        doc.add_line(
+            Point::new(0.0, 0.0),
+            Point::new(1000.0, 0.0),
+            "0",
+            Color::WHITE,
+        );
 
         let path = out.join("_test-3-block.dwg");
         save_dwg(&doc, path.to_str().unwrap()).expect("save failed");
@@ -72,7 +104,11 @@ fn generate_minimal_dwgs() {
         if orig.exists() {
             let mut reader = acadrust::DwgReader::from_file(&orig).expect("open failed");
             let cad = reader.read().expect("read failed");
-            println!("Original: version={:?}, entities={}", cad.version, cad.entity_count());
+            println!(
+                "Original: version={:?}, entities={}",
+                cad.version,
+                cad.entity_count()
+            );
             let path = out.join("_test-4-roundtrip.dwg");
             acadrust::DwgWriter::write_to_file(path.to_str().unwrap(), &cad).expect("write failed");
             println!("Wrote: {}", path.display());

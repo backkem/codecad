@@ -1,9 +1,12 @@
-use cadview_core::{Document, EntityId, DrawEntity, Shape, triangulate_fill, flatten_bezpath_adaptive, tessellate_ellipse, tessellate_spline, tessellate_lwpolyline};
 use cadview_core::sync::SyncDoc;
+use cadview_core::{
+    flatten_bezpath_adaptive, tessellate_ellipse, tessellate_lwpolyline, tessellate_spline,
+    triangulate_fill, Document, DrawEntity, EntityId, Shape,
+};
 use eframe::egui;
 use egui::{Color32, Pos2, Stroke};
 use std::collections::HashMap;
-use std::sync::{Mutex, LazyLock};
+use std::sync::{LazyLock, Mutex};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
@@ -35,7 +38,11 @@ struct Camera {
 
 impl Camera {
     fn new() -> Self {
-        Self { center_x: 0.0, center_y: 0.0, zoom: 1.0 }
+        Self {
+            center_x: 0.0,
+            center_y: 0.0,
+            zoom: 1.0,
+        }
     }
 
     fn fit(bounds: (f64, f64, f64, f64), screen_w: f32, screen_h: f32) -> Self {
@@ -51,7 +58,6 @@ impl Camera {
             zoom: zoom_x.min(zoom_y),
         }
     }
-
 }
 
 type CachedFill = (f64, Vec<[f32; 2]>, Vec<u32>);
@@ -68,7 +74,13 @@ struct RenderCache {
 
 impl RenderCache {
     fn new() -> Self {
-        Self { fills: HashMap::new(), arcs: HashMap::new(), curves: HashMap::new(), expanded: Vec::new(), entity_count: 0 }
+        Self {
+            fills: HashMap::new(),
+            arcs: HashMap::new(),
+            curves: HashMap::new(),
+            expanded: Vec::new(),
+            entity_count: 0,
+        }
     }
     fn invalidate_if_changed(&mut self, entity_count: usize) {
         if entity_count != self.entity_count {
@@ -124,9 +136,10 @@ struct RepaintFn(Box<dyn Fn() + 'static>);
 unsafe impl Send for RepaintFn {}
 #[allow(dead_code)]
 impl RepaintFn {
-    fn call(&self) { (self.0)(); }
+    fn call(&self) {
+        (self.0)();
+    }
 }
-
 
 /// Global session registry. Single static, replaces all per-document statics.
 struct SessionRegistry {
@@ -168,12 +181,16 @@ pub fn session_create(session_id: &str) -> String {
     }
     let client_id = reg.next_client_id;
     reg.next_client_id += 1;
-    reg.sessions.insert(session_id.to_string(), DocumentSession::new(client_id));
+    reg.sessions
+        .insert(session_id.to_string(), DocumentSession::new(client_id));
     // Auto-set js_target if this is the first session
     if reg.js_target.is_none() {
         reg.js_target = Some(session_id.to_string());
     }
-    format!(r#"{{"ok":true,"session":"{}","client_id":{}}}"#, session_id, client_id)
+    format!(
+        r#"{{"ok":true,"session":"{}","client_id":{}}}"#,
+        session_id, client_id
+    )
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -217,14 +234,21 @@ pub fn session_current() -> String {
 #[wasm_bindgen]
 pub fn session_list() -> String {
     let reg = SESSIONS.lock().unwrap();
-    let items: Vec<String> = reg.sessions.iter().map(|(id, s)| {
-        let is_target = reg.js_target.as_deref() == Some(id.as_str());
-        let has_renderer = reg.renderers.values().any(|sid| sid == id);
-        format!(
-            r#"{{"id":"{}","entity_count":{},"js_target":{},"visible":{}}}"#,
-            id, s.doc.entities.len(), is_target, has_renderer
-        )
-    }).collect();
+    let items: Vec<String> = reg
+        .sessions
+        .iter()
+        .map(|(id, s)| {
+            let is_target = reg.js_target.as_deref() == Some(id.as_str());
+            let has_renderer = reg.renderers.values().any(|sid| sid == id);
+            format!(
+                r#"{{"id":"{}","entity_count":{},"js_target":{},"visible":{}}}"#,
+                id,
+                s.doc.entities.len(),
+                is_target,
+                has_renderer
+            )
+        })
+        .collect();
     format!("[{}]", items.join(","))
 }
 
@@ -245,7 +269,10 @@ pub fn session_load_dwg(session_id: &str, data: &[u8]) -> String {
             session.cache = RenderCache::new();
             session.initialized = false; // trigger auto-fit
             session.camera_cmd = Some(CameraCmd::FitAll);
-            format!(r#"{{"ok":true,"entities":{count},"_session":"{}"}}"#, session_id)
+            format!(
+                r#"{{"ok":true,"entities":{count},"_session":"{}"}}"#,
+                session_id
+            )
         }
         Err(e) => format!(r#"{{"error":"DWG parse failed: {}"}}"#, e),
     }
@@ -287,12 +314,17 @@ pub fn yrs_apply_update(session_id: &str, update: &[u8]) -> String {
     session.render_dirty = true;
     for (cid, sid) in &reg.renderers {
         if sid.as_str() == session_id {
-            if let Some(repaint) = reg.repaint_fns.get(cid) { repaint.call(); }
+            if let Some(repaint) = reg.repaint_fns.get(cid) {
+                repaint.call();
+            }
             break;
         }
     }
 
-    format!(r#"{{"ok":true,"entities":{count},"_session":"{}"}}"#, session_id)
+    format!(
+        r#"{{"ok":true,"entities":{count},"_session":"{}"}}"#,
+        session_id
+    )
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -342,7 +374,9 @@ pub fn cad_call(method: &str, args_json: &str) -> String {
             // Wake renderer
             for (cid, sid) in &reg.renderers {
                 if sid.as_str() == target_id {
-                    if let Some(repaint) = reg.repaint_fns.get(cid) { repaint.call(); }
+                    if let Some(repaint) = reg.repaint_fns.get(cid) {
+                        repaint.call();
+                    }
                     break;
                 }
             }
@@ -376,8 +410,8 @@ pub fn cad_call(method: &str, args_json: &str) -> String {
                 if let Ok(n) = num.parse::<u64>() {
                     if let Some(ent) = session.doc.entity(cadview_core::EntityId(n)) {
                         let (x0, y0, x1, y1) = ent.shape.bbox();
-                        let pad = ((x1-x0).max(y1-y0) * 0.5).max(10.0);
-                        let (bx0, by0, bx1, by1) = (x0-pad, y0-pad, x1+pad, y1+pad);
+                        let pad = ((x1 - x0).max(y1 - y0) * 0.5).max(10.0);
+                        let (bx0, by0, bx1, by1) = (x0 - pad, y0 - pad, x1 + pad, y1 + pad);
                         let cam = Camera::fit((bx0, by0, bx1, by1), sw, sh);
                         session.camera_cmd = Some(CameraCmd::FitBounds(bx0, by0, bx1, by1));
                         result = format!(
@@ -385,10 +419,16 @@ pub fn cad_call(method: &str, args_json: &str) -> String {
                             cam.center_x, cam.center_y, cam.zoom, target_id
                         );
                     } else {
-                        result = format!(r#"{{"error":"entity not found","_session":"{}"}}"#, target_id);
+                        result = format!(
+                            r#"{{"error":"entity not found","_session":"{}"}}"#,
+                            target_id
+                        );
                     }
                 } else {
-                    result = format!(r#"{{"error":"entity not found","_session":"{}"}}"#, target_id);
+                    result = format!(
+                        r#"{{"error":"entity not found","_session":"{}"}}"#,
+                        target_id
+                    );
                 }
             } else if let (Some(center), Some(zoom)) = (
                 v.get("center").and_then(|c| c.as_array()),
@@ -397,9 +437,15 @@ pub fn cad_call(method: &str, args_json: &str) -> String {
                 let cx = center[0].as_f64().unwrap_or(0.0);
                 let cy = center[1].as_f64().unwrap_or(0.0);
                 session.camera_cmd = Some(CameraCmd::SetView(cx, cy, zoom));
-                result = format!(r#"{{"center":[{},{}],"zoom":{},"_session":"{}"}}"#, cx, cy, zoom, target_id);
+                result = format!(
+                    r#"{{"center":[{},{}],"zoom":{},"_session":"{}"}}"#,
+                    cx, cy, zoom, target_id
+                );
             } else {
-                result = format!(r#"{{"error":"zoomTo needs {{bounds}}, {{id}}, or {{center, zoom}}","_session":"{}"}}"#, target_id);
+                result = format!(
+                    r#"{{"error":"zoomTo needs {{bounds}}, {{id}}, or {{center, zoom}}","_session":"{}"}}"#,
+                    target_id
+                );
             }
 
             // Wake renderer if camera changed
@@ -407,7 +453,9 @@ pub fn cad_call(method: &str, args_json: &str) -> String {
                 session.render_dirty = true;
                 for (cid, sid) in &reg.renderers {
                     if sid.as_str() == target_id {
-                        if let Some(repaint) = reg.repaint_fns.get(cid) { repaint.call(); }
+                        if let Some(repaint) = reg.repaint_fns.get(cid) {
+                            repaint.call();
+                        }
                         break;
                     }
                 }
@@ -449,14 +497,21 @@ pub fn cad_call(method: &str, args_json: &str) -> String {
     if session.sync_sv_before.is_none() {
         session.sync_sv_before = Some(session.sync.state_vector());
     }
-    let result = match session.sync.apply_mutation(&mut session.doc, method, args_json) {
+    let result = match session
+        .sync
+        .apply_mutation(&mut session.doc, method, args_json)
+    {
         Ok((result, _update)) => result, // update is coalesced at flush
         Err(e) => format!(r#"{{"error":{}}}"#, serde_json::json!(e)),
     };
 
     // Inject _session into the result JSON
     if result.starts_with('{') && result.ends_with('}') {
-        format!("{},\"_session\":\"{}\"}}", &result[..result.len()-1], target_id)
+        format!(
+            "{},\"_session\":\"{}\"}}",
+            &result[..result.len() - 1],
+            target_id
+        )
     } else {
         result
     }
@@ -466,8 +521,15 @@ pub fn cad_call(method: &str, args_json: &str) -> String {
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
-pub fn start_renderer(canvas: web_sys::HtmlCanvasElement, session_id: &str, renderer_type: &str) -> String {
-    let key = format!("rv_{}", NEXT_RENDERER_KEY.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+pub fn start_renderer(
+    canvas: web_sys::HtmlCanvasElement,
+    session_id: &str,
+    renderer_type: &str,
+) -> String {
+    let key = format!(
+        "rv_{}",
+        NEXT_RENDERER_KEY.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
     {
         let mut reg = SESSIONS.lock().unwrap();
         if !reg.sessions.contains_key(session_id) {
@@ -479,7 +541,10 @@ pub fn start_renderer(canvas: web_sys::HtmlCanvasElement, session_id: &str, rend
     #[cfg(feature = "vello-renderer")]
     if renderer_type == "vello" {
         vello_render::start(canvas, session_id, &key);
-        return format!(r#"{{"ok":true,"key":"{}","session":"{}","renderer":"vello"}}"#, key, session_id);
+        return format!(
+            r#"{{"ok":true,"key":"{}","session":"{}","renderer":"vello"}}"#,
+            key, session_id
+        );
     }
 
     let _ = renderer_type; // suppress unused warning when vello feature is off
@@ -487,7 +552,11 @@ pub fn start_renderer(canvas: web_sys::HtmlCanvasElement, session_id: &str, rend
 }
 
 #[cfg(target_arch = "wasm32")]
-fn start_egui_renderer(canvas: web_sys::HtmlCanvasElement, session_id: &str, renderer_key: &str) -> String {
+fn start_egui_renderer(
+    canvas: web_sys::HtmlCanvasElement,
+    session_id: &str,
+    renderer_key: &str,
+) -> String {
     let session_id_owned = session_id.to_string();
     let key_owned = renderer_key.to_string();
 
@@ -499,20 +568,30 @@ fn start_egui_renderer(canvas: web_sys::HtmlCanvasElement, session_id: &str, ren
     let key_for_repaint = key_owned.clone();
     wasm_bindgen_futures::spawn_local(async move {
         eframe::WebRunner::new()
-            .start(canvas, eframe::WebOptions::default(), Box::new(move |cc| {
-                // Register repaint callback so setLayerVisible can wake egui
-                let ctx = cc.egui_ctx.clone();
-                let mut reg = SESSIONS.lock().unwrap();
-                reg.repaint_fns.insert(key_for_repaint, RepaintFn(Box::new(move || {
-                    ctx.request_repaint();
-                })));
-                Ok(Box::new(app))
-            }))
+            .start(
+                canvas,
+                eframe::WebOptions::default(),
+                Box::new(move |cc| {
+                    // Register repaint callback so setLayerVisible can wake egui
+                    let ctx = cc.egui_ctx.clone();
+                    let mut reg = SESSIONS.lock().unwrap();
+                    reg.repaint_fns.insert(
+                        key_for_repaint,
+                        RepaintFn(Box::new(move || {
+                            ctx.request_repaint();
+                        })),
+                    );
+                    Ok(Box::new(app))
+                }),
+            )
             .await
             .expect("failed to start eframe renderer");
     });
 
-    format!(r#"{{"ok":true,"key":"{}","session":"{}","renderer":"egui"}}"#, renderer_key, session_id)
+    format!(
+        r#"{{"ok":true,"key":"{}","session":"{}","renderer":"egui"}}"#,
+        renderer_key, session_id
+    )
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -535,7 +614,9 @@ pub fn stop_renderer(renderer_key: &str) -> String {
 #[wasm_bindgen]
 pub fn export_dwg_bytes(session_id: &str) -> Result<Vec<u8>, JsValue> {
     let reg = SESSIONS.lock().unwrap();
-    let session = reg.sessions.get(session_id)
+    let session = reg
+        .sessions
+        .get(session_id)
         .ok_or_else(|| JsValue::from_str(&format!("session '{}' not found", session_id)))?;
     cadview_core::export_dwg_bytes(&session.doc)
         .map_err(|e| JsValue::from_str(&format!("DWG export failed: {e}")))
@@ -560,7 +641,6 @@ const DWG_BYTES: &[u8] = include_bytes!(concat!(env!("CODECAD_SAMPLE_DWG")));
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
-
     // Create a default session for native mode
     let mut reg = SESSIONS.lock().unwrap();
     let client_id = reg.next_client_id;
@@ -570,14 +650,15 @@ fn main() -> eframe::Result {
 
     #[cfg(feature = "embed-dwg")]
     {
-        session.doc = cadview_core::load_dwg_bytes(DWG_BYTES)
-            .expect("failed to parse embedded DWG");
+        session.doc =
+            cadview_core::load_dwg_bytes(DWG_BYTES).expect("failed to parse embedded DWG");
         session.sync.populate_from_document(&session.doc);
     }
 
     reg.sessions.insert("default".to_string(), session);
     reg.js_target = Some("default".to_string());
-    reg.renderers.insert("native".to_string(), "default".to_string());
+    reg.renderers
+        .insert("native".to_string(), "default".to_string());
     drop(reg);
 
     let options = eframe::NativeOptions {
@@ -590,16 +671,17 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "cadview",
         options,
-        Box::new(move |_cc| Ok(Box::new(CadViewApp {
-            session_id: "default".to_string(),
-            renderer_key: "native".to_string(),
-        }))),
+        Box::new(move |_cc| {
+            Ok(Box::new(CadViewApp {
+                session_id: "default".to_string(),
+                renderer_key: "native".to_string(),
+            }))
+        }),
     )
 }
 
 #[cfg(target_arch = "wasm32")]
 fn main() {
-
     // In WASM mode, don't start a renderer or create sessions automatically.
     // JS will call session_create() and start_renderer() as needed.
     // But if embed-dwg is on, create a default session for convenience.
@@ -609,8 +691,8 @@ fn main() {
         let client_id = reg.next_client_id;
         reg.next_client_id += 1;
         let mut session = DocumentSession::new(client_id);
-        session.doc = cadview_core::load_dwg_bytes(DWG_BYTES)
-            .expect("failed to parse embedded DWG");
+        session.doc =
+            cadview_core::load_dwg_bytes(DWG_BYTES).expect("failed to parse embedded DWG");
         session.sync.populate_from_document(&session.doc);
         reg.sessions.insert("default".to_string(), session);
         reg.js_target = Some("default".to_string());
@@ -636,7 +718,8 @@ impl eframe::App for CadViewApp {
         let sw = rect.width();
         let sh = rect.height();
 
-        ui.painter().rect_filled(rect, 0.0, Color32::from_rgb(30, 30, 30));
+        ui.painter()
+            .rect_filled(rect, 0.0, Color32::from_rgb(30, 30, 30));
 
         // Check if this renderer is still registered
         let mut reg = SESSIONS.lock().unwrap();
@@ -698,7 +781,9 @@ impl eframe::App for CadViewApp {
 
         // Re-lock for camera mutation
         let mut reg = SESSIONS.lock().unwrap();
-        let Some(session) = reg.sessions.get_mut(&self.session_id) else { return };
+        let Some(session) = reg.sessions.get_mut(&self.session_id) else {
+            return;
+        };
 
         let mut needs_repaint = auto_fit || has_camera_cmd || session.render_dirty;
         session.render_dirty = false;
@@ -715,7 +800,11 @@ impl eframe::App for CadViewApp {
         let zoom_factor = if pinch_zoom != 1.0 {
             pinch_zoom as f64
         } else if scroll_delta.abs() > 0.5 {
-            if scroll_delta > 0.0 { 1.08 } else { 1.0 / 1.08 }
+            if scroll_delta > 0.0 {
+                1.08
+            } else {
+                1.0 / 1.08
+            }
         } else {
             1.0
         };
@@ -762,15 +851,27 @@ impl eframe::App for CadViewApp {
         session.cache.invalidate_if_changed(entity_count);
 
         // Expand block inserts + text into cached flat shape list
-        if session.cache.expanded.is_empty() && doc.entities.iter().any(|e|
-            matches!(&e.shape, Shape::BlockInsert { .. } | Shape::Text { .. } | Shape::MText { .. })
-        ) {
+        if session.cache.expanded.is_empty()
+            && doc.entities.iter().any(|e| {
+                matches!(
+                    &e.shape,
+                    Shape::BlockInsert { .. } | Shape::Text { .. } | Shape::MText { .. }
+                )
+            })
+        {
             session.cache.expanded = cadview_core::expand_for_render(doc);
         }
 
         // All renderable entities: direct + expanded
-        let all_entities: Vec<&DrawEntity> = doc.entities.iter()
-            .filter(|e| !matches!(&e.shape, Shape::BlockInsert { .. } | Shape::Text { .. } | Shape::MText { .. }))
+        let all_entities: Vec<&DrawEntity> = doc
+            .entities
+            .iter()
+            .filter(|e| {
+                !matches!(
+                    &e.shape,
+                    Shape::BlockInsert { .. } | Shape::Text { .. } | Shape::MText { .. }
+                )
+            })
             .chain(session.cache.expanded.iter())
             .collect();
 
@@ -783,12 +884,20 @@ impl eframe::App for CadViewApp {
 
         // Pass 1: SolidFill
         for ent in &all_entities {
-            let Shape::SolidFill { boundary, holes } = &ent.shape else { continue };
-            if boundary.is_empty() { continue; }
-            if session.hidden_layers.iter().any(|n| n == &ent.layer) { continue; }
+            let Shape::SolidFill { boundary, holes } = &ent.shape else {
+                continue;
+            };
+            if boundary.is_empty() {
+                continue;
+            }
+            if session.hidden_layers.iter().any(|n| n == &ent.layer) {
+                continue;
+            }
 
             let (bx0, by0, bx1, by1) = ent.shape.bbox();
-            if bx1 < view_x0 || bx0 > view_x1 || by1 < view_y0 || by0 > view_y1 { continue; }
+            if bx1 < view_x0 || bx0 > view_x1 || by1 < view_y0 || by0 > view_y1 {
+                continue;
+            }
 
             let needs_update = match session.cache.fills.get(&ent.id) {
                 Some((cached_tol, _, _)) => world_tolerance < *cached_tol * 0.5,
@@ -799,12 +908,13 @@ impl eframe::App for CadViewApp {
                 session.cache.fills.insert(ent.id, (world_tolerance, t, i));
             }
             let (_, triangles, tri_indices) = session.cache.fills.get(&ent.id).unwrap();
-            if tri_indices.is_empty() { continue; }
+            if tri_indices.is_empty() {
+                continue;
+            }
 
             let base_color = Self::to_color32(&ent.color);
-            let fill_color = Color32::from_rgba_unmultiplied(
-                base_color.r(), base_color.g(), base_color.b(), 35,
-            );
+            let fill_color =
+                Color32::from_rgba_unmultiplied(base_color.r(), base_color.g(), base_color.b(), 35);
 
             let mut mesh = egui::Mesh::default();
             for &[x, y] in triangles.iter() {
@@ -822,16 +932,24 @@ impl eframe::App for CadViewApp {
 
         // Pass 2: strokes
         for ent in &all_entities {
-            if matches!(&ent.shape, Shape::SolidFill { .. }) { continue; }
-            if session.hidden_layers.iter().any(|n| n == &ent.layer) { continue; }
+            if matches!(&ent.shape, Shape::SolidFill { .. }) {
+                continue;
+            }
+            if session.hidden_layers.iter().any(|n| n == &ent.layer) {
+                continue;
+            }
 
             let (bx0, by0, bx1, by1) = ent.shape.bbox();
-            if bx1 < view_x0 || bx0 > view_x1 || by1 < view_y0 || by0 > view_y1 { continue; }
+            if bx1 < view_x0 || bx0 > view_x1 || by1 < view_y0 || by0 > view_y1 {
+                continue;
+            }
 
             let dw = bx1 - bx0;
             let dh = by1 - by0;
             let diag_screen = (dw * dw + dh * dh).sqrt() * cam_zoom;
-            if diag_screen < CULL_THRESHOLD { continue; }
+            if diag_screen < CULL_THRESHOLD {
+                continue;
+            }
 
             let base_color = Self::to_color32(&ent.color);
             let color = if diag_screen < FADE_THRESHOLD {
@@ -857,10 +975,18 @@ impl eframe::App for CadViewApp {
                     let r = (circle.radius * cam_zoom) as f32;
                     painter.circle_stroke(c, r, stroke);
                 }
-                Shape::Arc { center, radius, start_angle, end_angle, .. } => {
+                Shape::Arc {
+                    center,
+                    radius,
+                    start_angle,
+                    end_angle,
+                    ..
+                } => {
                     let r_screen = *radius * cam_zoom;
                     let mut sweep = end_angle - start_angle;
-                    if sweep < 0.0 { sweep += 2.0 * std::f64::consts::PI; }
+                    if sweep < 0.0 {
+                        sweep += 2.0 * std::f64::consts::PI;
+                    }
                     let steps = if r_screen < MAX_ERROR_PX {
                         4usize
                     } else {
@@ -870,28 +996,37 @@ impl eframe::App for CadViewApp {
 
                     let cached = session.cache.arcs.get(&ent.id);
                     let world_pts = if cached.is_none_or(|(n, _)| *n != steps) {
-                        let pts: Vec<(f64, f64)> = (0..=steps).map(|i| {
-                            let t = i as f64 / steps as f64;
-                            let angle = start_angle + t * sweep;
-                            (center.x + radius * angle.cos(),
-                             center.y + radius * angle.sin())
-                        }).collect();
+                        let pts: Vec<(f64, f64)> = (0..=steps)
+                            .map(|i| {
+                                let t = i as f64 / steps as f64;
+                                let angle = start_angle + t * sweep;
+                                (
+                                    center.x + radius * angle.cos(),
+                                    center.y + radius * angle.sin(),
+                                )
+                            })
+                            .collect();
                         session.cache.arcs.insert(ent.id, (steps, pts));
                         &session.cache.arcs.get(&ent.id).unwrap().1
                     } else {
                         &cached.unwrap().1
                     };
-                    let points: Vec<Pos2> = world_pts.iter()
+                    let points: Vec<Pos2> = world_pts
+                        .iter()
                         .map(|&(wx, wy)| to_screen(wx, wy))
                         .collect();
                     painter.add(egui::epaint::PathShape::line(points, stroke));
                 }
-                Shape::Polyline { points: pts, closed } => {
+                Shape::Polyline {
+                    points: pts,
+                    closed,
+                } => {
                     if pts.len() >= 2 {
-                        let mut screen_pts: Vec<Pos2> = pts.iter()
-                            .map(|p| to_screen(p.x, p.y))
-                            .collect();
-                        if *closed { screen_pts.push(screen_pts[0]); }
+                        let mut screen_pts: Vec<Pos2> =
+                            pts.iter().map(|p| to_screen(p.x, p.y)).collect();
+                        if *closed {
+                            screen_pts.push(screen_pts[0]);
+                        }
                         painter.add(egui::epaint::PathShape::line(screen_pts, stroke));
                     }
                 }
@@ -902,64 +1037,95 @@ impl eframe::App for CadViewApp {
                     };
                     if needs_update {
                         let contours = flatten_bezpath_adaptive(path, world_tolerance);
-                        let world_contours: Vec<Vec<(f64, f64)>> = contours.iter()
+                        let world_contours: Vec<Vec<(f64, f64)>> = contours
+                            .iter()
                             .map(|c| c.iter().map(|p| (p.x, p.y)).collect())
                             .collect();
-                        session.cache.curves.insert(ent.id, (world_tolerance, world_contours));
+                        session
+                            .cache
+                            .curves
+                            .insert(ent.id, (world_tolerance, world_contours));
                     }
                     let (_, contours) = session.cache.curves.get(&ent.id).unwrap();
                     for contour in contours {
-                        if contour.len() < 2 { continue; }
-                        let mut screen_pts: Vec<Pos2> = contour.iter()
-                            .map(|&(x, y)| to_screen(x, y))
-                            .collect();
-                        if *closed && screen_pts.len() >= 2 { screen_pts.push(screen_pts[0]); }
+                        if contour.len() < 2 {
+                            continue;
+                        }
+                        let mut screen_pts: Vec<Pos2> =
+                            contour.iter().map(|&(x, y)| to_screen(x, y)).collect();
+                        if *closed && screen_pts.len() >= 2 {
+                            screen_pts.push(screen_pts[0]);
+                        }
                         painter.add(egui::epaint::PathShape::line(screen_pts, stroke));
                     }
                 }
-                Shape::Ellipse { center, major_axis, minor_ratio, start_param, end_param } => {
+                Shape::Ellipse {
+                    center,
+                    major_axis,
+                    minor_ratio,
+                    start_param,
+                    end_param,
+                } => {
                     let needs_update = match session.cache.curves.get(&ent.id) {
                         Some((cached_tol, _)) => world_tolerance < *cached_tol * 0.5,
                         None => true,
                     };
                     if needs_update {
                         let pts = tessellate_ellipse(
-                            *center, *major_axis, *minor_ratio,
-                            *start_param, *end_param, world_tolerance,
+                            *center,
+                            *major_axis,
+                            *minor_ratio,
+                            *start_param,
+                            *end_param,
+                            world_tolerance,
                         );
-                        let world_pts: Vec<Vec<(f64, f64)>> = vec![
-                            pts.iter().map(|p| (p.x, p.y)).collect()
-                        ];
-                        session.cache.curves.insert(ent.id, (world_tolerance, world_pts));
+                        let world_pts: Vec<Vec<(f64, f64)>> =
+                            vec![pts.iter().map(|p| (p.x, p.y)).collect()];
+                        session
+                            .cache
+                            .curves
+                            .insert(ent.id, (world_tolerance, world_pts));
                     }
                     let (_, contours) = session.cache.curves.get(&ent.id).unwrap();
                     for contour in contours {
-                        if contour.len() < 2 { continue; }
-                        let screen_pts: Vec<Pos2> = contour.iter()
-                            .map(|&(x, y)| to_screen(x, y))
-                            .collect();
+                        if contour.len() < 2 {
+                            continue;
+                        }
+                        let screen_pts: Vec<Pos2> =
+                            contour.iter().map(|&(x, y)| to_screen(x, y)).collect();
                         painter.add(egui::epaint::PathShape::line(screen_pts, stroke));
                     }
                 }
-                Shape::Spline { degree, knots, control_points, closed } => {
+                Shape::Spline {
+                    degree,
+                    knots,
+                    control_points,
+                    closed,
+                } => {
                     let needs_update = match session.cache.curves.get(&ent.id) {
                         Some((cached_tol, _)) => world_tolerance < *cached_tol * 0.5,
                         None => true,
                     };
                     if needs_update {
-                        let pts = tessellate_spline(*degree, knots, control_points, world_tolerance);
-                        let world_pts: Vec<Vec<(f64, f64)>> = vec![
-                            pts.iter().map(|p| (p.x, p.y)).collect()
-                        ];
-                        session.cache.curves.insert(ent.id, (world_tolerance, world_pts));
+                        let pts =
+                            tessellate_spline(*degree, knots, control_points, world_tolerance);
+                        let world_pts: Vec<Vec<(f64, f64)>> =
+                            vec![pts.iter().map(|p| (p.x, p.y)).collect()];
+                        session
+                            .cache
+                            .curves
+                            .insert(ent.id, (world_tolerance, world_pts));
                     }
                     let (_, contours) = session.cache.curves.get(&ent.id).unwrap();
                     for contour in contours {
-                        if contour.len() < 2 { continue; }
-                        let mut screen_pts: Vec<Pos2> = contour.iter()
-                            .map(|&(x, y)| to_screen(x, y))
-                            .collect();
-                        if *closed && screen_pts.len() >= 2 { screen_pts.push(screen_pts[0]); }
+                        if contour.len() < 2 {
+                            continue;
+                        }
+                        let mut screen_pts: Vec<Pos2> =
+                            contour.iter().map(|&(x, y)| to_screen(x, y)).collect();
+                        if *closed && screen_pts.len() >= 2 {
+                            screen_pts.push(screen_pts[0]);
+                        }
                         painter.add(egui::epaint::PathShape::line(screen_pts, stroke));
                     }
                 }
@@ -970,18 +1136,23 @@ impl eframe::App for CadViewApp {
                     };
                     if needs_update {
                         let pts = tessellate_lwpolyline(vertices, *closed, world_tolerance);
-                        let world_pts: Vec<Vec<(f64, f64)>> = vec![
-                            pts.iter().map(|p| (p.x, p.y)).collect()
-                        ];
-                        session.cache.curves.insert(ent.id, (world_tolerance, world_pts));
+                        let world_pts: Vec<Vec<(f64, f64)>> =
+                            vec![pts.iter().map(|p| (p.x, p.y)).collect()];
+                        session
+                            .cache
+                            .curves
+                            .insert(ent.id, (world_tolerance, world_pts));
                     }
                     let (_, contours) = session.cache.curves.get(&ent.id).unwrap();
                     for contour in contours {
-                        if contour.len() < 2 { continue; }
-                        let mut screen_pts: Vec<Pos2> = contour.iter()
-                            .map(|&(x, y)| to_screen(x, y))
-                            .collect();
-                        if *closed && screen_pts.len() >= 2 { screen_pts.push(screen_pts[0]); }
+                        if contour.len() < 2 {
+                            continue;
+                        }
+                        let mut screen_pts: Vec<Pos2> =
+                            contour.iter().map(|&(x, y)| to_screen(x, y)).collect();
+                        if *closed && screen_pts.len() >= 2 {
+                            screen_pts.push(screen_pts[0]);
+                        }
                         painter.add(egui::epaint::PathShape::line(screen_pts, stroke));
                     }
                 }
@@ -995,7 +1166,10 @@ impl eframe::App for CadViewApp {
             egui::Align2::LEFT_TOP,
             format!(
                 "{}/{} entities | zoom {:.2}x | {}",
-                rendered, doc.entities.len(), cam_zoom, self.session_id
+                rendered,
+                doc.entities.len(),
+                cam_zoom,
+                self.session_id
             ),
             egui::FontId::proportional(14.0),
             Color32::from_rgb(180, 180, 180),
@@ -1022,7 +1196,8 @@ mod tests {
     fn create_session(reg: &mut SessionRegistry, id: &str) -> u64 {
         let client_id = reg.next_client_id;
         reg.next_client_id += 1;
-        reg.sessions.insert(id.to_string(), DocumentSession::new(client_id));
+        reg.sessions
+            .insert(id.to_string(), DocumentSession::new(client_id));
         if reg.js_target.is_none() {
             reg.js_target = Some(id.to_string());
         }
@@ -1151,8 +1326,10 @@ mod tests {
         create_session(&mut reg, "doc1");
         create_session(&mut reg, "doc2");
 
-        reg.renderers.insert("canvas-left".to_string(), "doc1".to_string());
-        reg.renderers.insert("canvas-right".to_string(), "doc2".to_string());
+        reg.renderers
+            .insert("canvas-left".to_string(), "doc1".to_string());
+        reg.renderers
+            .insert("canvas-right".to_string(), "doc2".to_string());
 
         assert_eq!(reg.renderers.len(), 2);
         assert_eq!(reg.renderers["canvas-left"], "doc1");
@@ -1171,9 +1348,10 @@ mod tests {
 
         // Mutate session "a" via sync
         let sa = reg.sessions.get_mut("a").unwrap();
-        let (_, update) = sa.sync.apply_mutation(
-            &mut sa.doc, "addLine", r#"{"start":[0,0],"end":[50,0]}"#
-        ).unwrap();
+        let (_, update) = sa
+            .sync
+            .apply_mutation(&mut sa.doc, "addLine", r#"{"start":[0,0],"end":[50,0]}"#)
+            .unwrap();
         assert!(!update.is_empty());
         assert_eq!(sa.doc.entities.len(), 1);
 
@@ -1190,13 +1368,18 @@ mod tests {
         create_session(&mut reg, "a");
         create_session(&mut reg, "b");
 
-        reg.sessions.get_mut("a").unwrap().camera = Camera::fit((0.0, 0.0, 100.0, 100.0), 800.0, 600.0);
-        reg.sessions.get_mut("b").unwrap().camera = Camera::fit((0.0, 0.0, 1000.0, 1000.0), 800.0, 600.0);
+        reg.sessions.get_mut("a").unwrap().camera =
+            Camera::fit((0.0, 0.0, 100.0, 100.0), 800.0, 600.0);
+        reg.sessions.get_mut("b").unwrap().camera =
+            Camera::fit((0.0, 0.0, 1000.0, 1000.0), 800.0, 600.0);
 
         let zoom_a = reg.sessions["a"].camera.zoom;
         let zoom_b = reg.sessions["b"].camera.zoom;
         // Zoom should differ: "a" is 10x smaller world extent -> 10x more zoom
-        assert!(zoom_a > zoom_b * 5.0, "zoom_a={zoom_a} should be much larger than zoom_b={zoom_b}");
+        assert!(
+            zoom_a > zoom_b * 5.0,
+            "zoom_a={zoom_a} should be much larger than zoom_b={zoom_b}"
+        );
     }
 
     #[test]
@@ -1205,7 +1388,11 @@ mod tests {
         create_session(&mut reg, "a");
         create_session(&mut reg, "b");
 
-        reg.sessions.get_mut("a").unwrap().hidden_layers.push("WALLS".to_string());
+        reg.sessions
+            .get_mut("a")
+            .unwrap()
+            .hidden_layers
+            .push("WALLS".to_string());
 
         assert_eq!(reg.sessions["a"].hidden_layers, vec!["WALLS"]);
         assert!(reg.sessions["b"].hidden_layers.is_empty());

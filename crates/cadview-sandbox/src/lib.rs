@@ -45,8 +45,7 @@ impl Sandbox {
         let mut config = Config::new();
         config.wasm_component_model(true);
         config.epoch_interruption(true);
-        let engine =
-            Engine::new(&config).map_err(|e| SandboxError::ComponentLoad(e.into()))?;
+        let engine = Engine::new(&config).map_err(|e| SandboxError::ComponentLoad(e.into()))?;
 
         let component = load_or_compile(&engine, component_bytes)?;
 
@@ -108,9 +107,8 @@ impl Sandbox {
         let ticks = (timeout.as_millis() / 100).max(1) as u64;
         store.set_epoch_deadline(ticks);
 
-        let bindings =
-            CadviewRuntime::instantiate(&mut store, &self.component, &self.linker)
-                .map_err(|e| SandboxError::Instantiation(e.into()))?;
+        let bindings = CadviewRuntime::instantiate(&mut store, &self.component, &self.linker)
+            .map_err(|e| SandboxError::Instantiation(e.into()))?;
 
         let result = bindings.call_run(&mut store, program);
 

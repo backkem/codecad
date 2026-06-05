@@ -35,14 +35,15 @@ pub struct Terminal {
 pub struct ElmtSymbol {
     pub block: BlockDef,
     pub terminals: Vec<Terminal>,
-    pub en_standard: String,     // e.g. "EN 60617: 11-15-03"
+    pub en_standard: String,          // e.g. "EN 60617: 11-15-03"
     pub names: Vec<(String, String)>, // (lang, name)
 }
 
 impl ElmtSymbol {
     /// English name, falling back to first available.
     pub fn name_en(&self) -> &str {
-        self.names.iter()
+        self.names
+            .iter()
             .find(|(lang, _)| lang == "en")
             .or_else(|| self.names.first())
             .map(|(_, n)| n.as_str())
@@ -86,7 +87,9 @@ pub fn parse_elmt(xml: &str) -> Result<ElmtSymbol, String> {
         match reader.read_event() {
             Ok(Event::Eof) => break,
             Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
-                let tag = reader.decoder().decode(e.name().as_ref())
+                let tag = reader
+                    .decoder()
+                    .decode(e.name().as_ref())
                     .unwrap_or_default()
                     .to_string();
 
@@ -103,7 +106,9 @@ pub fn parse_elmt(xml: &str) -> Result<ElmtSymbol, String> {
                         in_informations = true;
                         text_buf.clear();
                     }
-                    "description" => { in_description = true; }
+                    "description" => {
+                        in_description = true;
+                    }
 
                     "line" if in_description => {
                         if let Some(shape) = parse_line(e, hotspot_x, hotspot_y) {
@@ -148,7 +153,9 @@ pub fn parse_elmt(xml: &str) -> Result<ElmtSymbol, String> {
                 }
             }
             Ok(Event::End(ref e)) => {
-                let tag = reader.decoder().decode(e.name().as_ref())
+                let tag = reader
+                    .decoder()
+                    .decode(e.name().as_ref())
                     .unwrap_or_default()
                     .to_string();
                 match tag.as_str() {
@@ -161,7 +168,9 @@ pub fn parse_elmt(xml: &str) -> Result<ElmtSymbol, String> {
                         }
                         text_buf.clear();
                     }
-                    "description" => { in_description = false; }
+                    "description" => {
+                        in_description = false;
+                    }
                     "informations" => {
                         in_informations = false;
                         en_standard = text_buf.trim().to_string();
@@ -172,8 +181,7 @@ pub fn parse_elmt(xml: &str) -> Result<ElmtSymbol, String> {
             }
             Ok(Event::Text(ref t)) => {
                 if current_name_lang.is_some() || in_informations {
-                    let decoded = reader.decoder().decode(t.as_ref())
-                        .unwrap_or_default();
+                    let decoded = reader.decoder().decode(t.as_ref()).unwrap_or_default();
                     text_buf.push_str(&decoded);
                 }
             }
@@ -183,7 +191,8 @@ pub fn parse_elmt(xml: &str) -> Result<ElmtSymbol, String> {
     }
 
     // Derive block name from English name (or first name)
-    let block_name = names.iter()
+    let block_name = names
+        .iter()
         .find(|(lang, _)| lang == "en")
         .or_else(|| names.first())
         .map(|(_, n)| n.clone())
@@ -208,15 +217,13 @@ pub fn parse_elmt(xml: &str) -> Result<ElmtSymbol, String> {
 
 /// Load an .elmt file from disk.
 pub fn load_elmt(path: &str) -> Result<ElmtSymbol, String> {
-    let xml = std::fs::read_to_string(path)
-        .map_err(|e| format!("read {path}: {e}"))?;
+    let xml = std::fs::read_to_string(path).map_err(|e| format!("read {path}: {e}"))?;
     parse_elmt(&xml)
 }
 
 /// Load all .elmt files from a directory (non-recursive).
 pub fn load_elmt_dir(dir: &str) -> Result<Vec<ElmtSymbol>, String> {
-    let entries = std::fs::read_dir(dir)
-        .map_err(|e| format!("read dir {dir}: {e}"))?;
+    let entries = std::fs::read_dir(dir).map_err(|e| format!("read dir {dir}: {e}"))?;
     let mut symbols = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|e| format!("dir entry: {e}"))?;
@@ -288,7 +295,7 @@ fn parse_arc(e: &BytesStart, hx: f64, hy: f64) -> Option<Shape> {
     let w = attr_f64(e, b"width")?;
     let h = attr_f64(e, b"height")?;
     let start_deg = attr_f64(e, b"start")?; // QET: degrees, 0 = 3 o'clock, CCW
-    let span_deg = attr_f64(e, b"angle")?;  // sweep in degrees (positive = CCW)
+    let span_deg = attr_f64(e, b"angle")?; // sweep in degrees (positive = CCW)
 
     let cx = x + w / 2.0;
     let cy = y + h / 2.0;
@@ -356,9 +363,7 @@ fn parse_polygon(e: &BytesStart, hx: f64, hy: f64) -> Option<Shape> {
         return None;
     }
 
-    let closed = attr_str(e, b"closed")
-        .map(|s| s != "false")
-        .unwrap_or(true); // QET default: closed unless explicitly "false"
+    let closed = attr_str(e, b"closed").map(|s| s != "false").unwrap_or(true); // QET default: closed unless explicitly "false"
 
     Some(Shape::Polyline { points, closed })
 }
@@ -399,10 +404,16 @@ mod tests {
         let sym = parse_elmt(xml).unwrap();
         assert_eq!(sym.name_en(), "Light");
         // Should have: 1 ellipse (circle) + 2 lines
-        let circles: Vec<_> = sym.block.shapes.iter()
+        let circles: Vec<_> = sym
+            .block
+            .shapes
+            .iter()
             .filter(|(s, _, _)| matches!(s, Shape::Circle(_)))
             .collect();
-        let lines: Vec<_> = sym.block.shapes.iter()
+        let lines: Vec<_> = sym
+            .block
+            .shapes
+            .iter()
             .filter(|(s, _, _)| matches!(s, Shape::Line(_)))
             .collect();
         assert_eq!(circles.len(), 1, "expected 1 circle for lamp");
@@ -415,10 +426,16 @@ mod tests {
         let xml = include_str!("../../../vendor/qelectrotech-elements/interrupteur.elmt");
         let sym = parse_elmt(xml).unwrap();
         assert_eq!(sym.name_en(), "Switch");
-        let circles: Vec<_> = sym.block.shapes.iter()
+        let circles: Vec<_> = sym
+            .block
+            .shapes
+            .iter()
             .filter(|(s, _, _)| matches!(s, Shape::Circle(_)))
             .collect();
-        let lines: Vec<_> = sym.block.shapes.iter()
+        let lines: Vec<_> = sym
+            .block
+            .shapes
+            .iter()
             .filter(|(s, _, _)| matches!(s, Shape::Line(_)))
             .collect();
         assert_eq!(circles.len(), 1, "expected 1 circle for switch base");
@@ -427,13 +444,21 @@ mod tests {
 
     #[test]
     fn parse_socket() {
-        let xml = include_str!("../../../vendor/qelectrotech-elements/electrical_socket_11-13-01_en60617.elmt");
+        let xml = include_str!(
+            "../../../vendor/qelectrotech-elements/electrical_socket_11-13-01_en60617.elmt"
+        );
         let sym = parse_elmt(xml).unwrap();
         assert!(sym.name_en().to_lowercase().contains("socket"));
-        let arcs: Vec<_> = sym.block.shapes.iter()
+        let arcs: Vec<_> = sym
+            .block
+            .shapes
+            .iter()
             .filter(|(s, _, _)| matches!(s, Shape::Arc { .. }))
             .collect();
-        let lines: Vec<_> = sym.block.shapes.iter()
+        let lines: Vec<_> = sym
+            .block
+            .shapes
+            .iter()
             .filter(|(s, _, _)| matches!(s, Shape::Line(_)))
             .collect();
         assert_eq!(arcs.len(), 1, "expected 1 arc (semicircle) for socket");
@@ -442,13 +467,21 @@ mod tests {
 
     #[test]
     fn parse_double_socket() {
-        let xml = include_str!("../../../vendor/qelectrotech-elements/2_electrical_sockets_11-13-02_en60617.elmt");
+        let xml = include_str!(
+            "../../../vendor/qelectrotech-elements/2_electrical_sockets_11-13-02_en60617.elmt"
+        );
         let sym = parse_elmt(xml).unwrap();
         // Should have: 1 arc, 2 lines, 1 text ("2")
-        let arcs: Vec<_> = sym.block.shapes.iter()
+        let arcs: Vec<_> = sym
+            .block
+            .shapes
+            .iter()
             .filter(|(s, _, _)| matches!(s, Shape::Arc { .. }))
             .collect();
-        let texts: Vec<_> = sym.block.shapes.iter()
+        let texts: Vec<_> = sym
+            .block
+            .shapes
+            .iter()
             .filter(|(s, _, _)| matches!(s, Shape::Text { .. }))
             .collect();
         assert_eq!(arcs.len(), 1);
@@ -461,7 +494,10 @@ mod tests {
         let sym = parse_elmt(xml).unwrap();
         assert_eq!(sym.name_en(), "Push button");
         // Two concentric circles
-        let circles: Vec<_> = sym.block.shapes.iter()
+        let circles: Vec<_> = sym
+            .block
+            .shapes
+            .iter()
             .filter(|(s, _, _)| matches!(s, Shape::Circle(_)))
             .collect();
         assert_eq!(circles.len(), 2, "expected 2 circles for push button");
@@ -469,13 +505,21 @@ mod tests {
 
     #[test]
     fn parse_two_way_switch() {
-        let xml = include_str!("../../../vendor/qelectrotech-elements/interrupteur_unipolaire_va_et_vient.elmt");
+        let xml = include_str!(
+            "../../../vendor/qelectrotech-elements/interrupteur_unipolaire_va_et_vient.elmt"
+        );
         let sym = parse_elmt(xml).unwrap();
         // Circle + 2 polygon lever arms
-        let circles: Vec<_> = sym.block.shapes.iter()
+        let circles: Vec<_> = sym
+            .block
+            .shapes
+            .iter()
             .filter(|(s, _, _)| matches!(s, Shape::Circle(_)))
             .collect();
-        let polylines: Vec<_> = sym.block.shapes.iter()
+        let polylines: Vec<_> = sym
+            .block
+            .shapes
+            .iter()
             .filter(|(s, _, _)| matches!(s, Shape::Polyline { .. }))
             .collect();
         assert_eq!(circles.len(), 1);

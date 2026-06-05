@@ -1,14 +1,17 @@
+use acadrust::entities::Entity;
 ///! Compare structure of a working DWG (acadrust roundtrip) vs our from-scratch DWG.
 ///! Run: cargo test -p cadview-core --test dwg_structure_diff -- --nocapture
-
 use acadrust::TableEntry;
-use acadrust::entities::Entity;
 
 #[test]
 fn compare_structures() {
     let electrical_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..").join("..").join("..").join("..")
-        .join("design").join("electrical");
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("design")
+        .join("electrical");
 
     let roundtrip_path = electrical_dir.join("_test-4-roundtrip.dwg");
     let scratch_path = electrical_dir.join("_first-floor-electrical.dwg");
@@ -30,7 +33,11 @@ fn compare_structures() {
             let g = format!("{:?}", good.header.$field);
             let b = format!("{:?}", bad.header.$field);
             if g != b {
-                println!("  {:<40} GOOD={}", stringify!($field), &g[..g.len().min(60)]);
+                println!(
+                    "  {:<40} GOOD={}",
+                    stringify!($field),
+                    &g[..g.len().min(60)]
+                );
                 println!("  {:<40} BAD ={}", "", &b[..b.len().min(60)]);
             }
         };
@@ -63,15 +70,60 @@ fn compare_structures() {
     println!("\n=== TABLES ===");
     println!("{:<30} {:>10} {:>10}", "Table", "GOOD", "BAD");
     println!("{}", "-".repeat(52));
-    println!("{:<30} {:>10} {:>10}", "Layers", good.layers.len(), bad.layers.len());
-    println!("{:<30} {:>10} {:>10}", "LineTypes", good.line_types.len(), bad.line_types.len());
-    println!("{:<30} {:>10} {:>10}", "TextStyles", good.text_styles.len(), bad.text_styles.len());
-    println!("{:<30} {:>10} {:>10}", "DimStyles", good.dim_styles.len(), bad.dim_styles.len());
-    println!("{:<30} {:>10} {:>10}", "BlockRecords", good.block_records.len(), bad.block_records.len());
-    println!("{:<30} {:>10} {:>10}", "AppIds", good.app_ids.len(), bad.app_ids.len());
-    println!("{:<30} {:>10} {:>10}", "Views", good.views.len(), bad.views.len());
-    println!("{:<30} {:>10} {:>10}", "VPorts", good.vports.len(), bad.vports.len());
-    println!("{:<30} {:>10} {:>10}", "UCSs", good.ucss.len(), bad.ucss.len());
+    println!(
+        "{:<30} {:>10} {:>10}",
+        "Layers",
+        good.layers.len(),
+        bad.layers.len()
+    );
+    println!(
+        "{:<30} {:>10} {:>10}",
+        "LineTypes",
+        good.line_types.len(),
+        bad.line_types.len()
+    );
+    println!(
+        "{:<30} {:>10} {:>10}",
+        "TextStyles",
+        good.text_styles.len(),
+        bad.text_styles.len()
+    );
+    println!(
+        "{:<30} {:>10} {:>10}",
+        "DimStyles",
+        good.dim_styles.len(),
+        bad.dim_styles.len()
+    );
+    println!(
+        "{:<30} {:>10} {:>10}",
+        "BlockRecords",
+        good.block_records.len(),
+        bad.block_records.len()
+    );
+    println!(
+        "{:<30} {:>10} {:>10}",
+        "AppIds",
+        good.app_ids.len(),
+        bad.app_ids.len()
+    );
+    println!(
+        "{:<30} {:>10} {:>10}",
+        "Views",
+        good.views.len(),
+        bad.views.len()
+    );
+    println!(
+        "{:<30} {:>10} {:>10}",
+        "VPorts",
+        good.vports.len(),
+        bad.vports.len()
+    );
+    println!(
+        "{:<30} {:>10} {:>10}",
+        "UCSs",
+        good.ucss.len(),
+        bad.ucss.len()
+    );
 
     println!("\n=== LAYERS ===");
     for gl in good.layers.iter() {
@@ -141,20 +193,39 @@ fn compare_structures() {
     println!("  BAD:  {} classes", bad.classes.len());
 
     println!("\n=== FILE SIZE ===");
-    println!("  GOOD: {} bytes", std::fs::metadata(&roundtrip_path).unwrap().len());
-    println!("  BAD:  {} bytes", std::fs::metadata(&scratch_path).unwrap().len());
+    println!(
+        "  GOOD: {} bytes",
+        std::fs::metadata(&roundtrip_path).unwrap().len()
+    );
+    println!(
+        "  BAD:  {} bytes",
+        std::fs::metadata(&scratch_path).unwrap().len()
+    );
 }
 
 fn entity_variant(e: &acadrust::entities::EntityType) -> String {
     use acadrust::entities::EntityType::*;
     match e {
-        Line(_) => "Line", Circle(_) => "Circle", Arc(_) => "Arc",
-        Ellipse(_) => "Ellipse", Spline(_) => "Spline", Point(_) => "Point",
-        LwPolyline(_) => "LwPolyline", Polyline2D(_) => "Polyline2D",
-        Polyline3D(_) => "Polyline3D", Text(_) => "Text", MText(_) => "MText",
-        Insert(_) => "Insert", Hatch(_) => "Hatch", Dimension(_) => "Dimension",
-        Leader(_) => "Leader", Block(_) => "Block", BlockEnd(_) => "BlockEnd",
-        Solid(_) => "Solid", Face3D(_) => "Face3D",
+        Line(_) => "Line",
+        Circle(_) => "Circle",
+        Arc(_) => "Arc",
+        Ellipse(_) => "Ellipse",
+        Spline(_) => "Spline",
+        Point(_) => "Point",
+        LwPolyline(_) => "LwPolyline",
+        Polyline2D(_) => "Polyline2D",
+        Polyline3D(_) => "Polyline3D",
+        Text(_) => "Text",
+        MText(_) => "MText",
+        Insert(_) => "Insert",
+        Hatch(_) => "Hatch",
+        Dimension(_) => "Dimension",
+        Leader(_) => "Leader",
+        Block(_) => "Block",
+        BlockEnd(_) => "BlockEnd",
+        Solid(_) => "Solid",
+        Face3D(_) => "Face3D",
         _ => "Other",
-    }.to_string()
+    }
+    .to_string()
 }

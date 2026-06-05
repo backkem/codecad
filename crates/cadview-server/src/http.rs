@@ -30,7 +30,10 @@ pub fn router(state: Arc<HttpState>) -> Router {
 
 // ── API handlers ────────────────────────────────────────────────────
 
-async fn documents_handler(State(state): State<Arc<HttpState>>, req: axum::http::Request<axum::body::Body>) -> impl IntoResponse {
+async fn documents_handler(
+    State(state): State<Arc<HttpState>>,
+    req: axum::http::Request<axum::body::Body>,
+) -> impl IntoResponse {
     // Auth check
     if let Err(resp) = check_bearer(&state.token, &req) {
         return resp.into_response();
@@ -40,15 +43,27 @@ async fn documents_handler(State(state): State<Arc<HttpState>>, req: axum::http:
     Json(docs).into_response()
 }
 
-fn check_bearer(expected: &str, req: &axum::http::Request<axum::body::Body>) -> Result<(), (StatusCode, String)> {
+fn check_bearer(
+    expected: &str,
+    req: &axum::http::Request<axum::body::Body>,
+) -> Result<(), (StatusCode, String)> {
     let Some(auth) = req.headers().get(header::AUTHORIZATION) else {
-        return Err((StatusCode::UNAUTHORIZED, "Missing Authorization header".to_string()));
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "Missing Authorization header".to_string(),
+        ));
     };
     let Ok(val) = auth.to_str() else {
-        return Err((StatusCode::UNAUTHORIZED, "Invalid Authorization header".to_string()));
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "Invalid Authorization header".to_string(),
+        ));
     };
     let Some(token) = val.strip_prefix("Bearer ") else {
-        return Err((StatusCode::UNAUTHORIZED, "Expected Bearer token".to_string()));
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "Expected Bearer token".to_string(),
+        ));
     };
     if token != expected {
         return Err((StatusCode::FORBIDDEN, "Invalid token".to_string()));
@@ -62,14 +77,17 @@ async fn index_handler(State(state): State<Arc<HttpState>>) -> impl IntoResponse
     let bytes = match state.dist.get("index.html") {
         Some(b) => b,
         None => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Cannot read index.html")
-                .into_response();
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Cannot read index.html").into_response();
         }
     };
     let html = String::from_utf8_lossy(&bytes).into_owned();
 
     // Inject cert hash, WT port, and auth token
-    let hash_hex: Vec<String> = state.cert_hash.iter().map(|b| format!("0x{b:02x}")).collect();
+    let hash_hex: Vec<String> = state
+        .cert_hash
+        .iter()
+        .map(|b| format!("0x{b:02x}"))
+        .collect();
     let inject = format!(
         r#"<script>window.__CADVIEW_WT_PORT={};window.__CADVIEW_CERT_HASH=new Uint8Array([{}]);window.__CADVIEW_TOKEN="{}";</script>"#,
         state.wt_port,
@@ -147,10 +165,11 @@ async fn run_handler(
                 "stderr": output.stderr,
             }))
             .into_response(),
-            Err(e) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e })))
-                    .into_response()
-            }
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e })),
+            )
+                .into_response(),
         };
     }
 
@@ -175,9 +194,10 @@ async fn run_handler(
             "stderr": output.stderr,
         }))
         .into_response(),
-        Err(e) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e })))
-                .into_response()
-        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
     }
 }

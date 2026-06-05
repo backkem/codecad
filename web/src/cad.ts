@@ -196,9 +196,7 @@ async function detectRenderer(): Promise<"vello" | "egui"> {
 const viewport = {
   /** Attach a renderer to a canvas for the given session. Returns an opaque key for stop(). */
   start(canvas: HTMLCanvasElement, sessionId: string): string {
-    const result = JSON.parse(
-      start_renderer(canvas, sessionId, _rendererType),
-    );
+    const result = JSON.parse(start_renderer(canvas, sessionId, _rendererType));
     if (result.error) throw new Error(result.error);
     return result.key;
   },
@@ -221,7 +219,11 @@ const viewport = {
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
-function downloadBlob(content: string | ArrayBuffer | Uint8Array, filename: string, mime: string) {
+function downloadBlob(
+  content: string | ArrayBuffer | Uint8Array,
+  filename: string,
+  mime: string,
+) {
   const blob = new Blob([content as BlobPart], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -275,7 +277,11 @@ export const cad = {
       const sid = cad.currentSession();
       const result = await rpcCall("save", { path }, sid ?? undefined);
       if (sid && _onTabRenamed) {
-        const name = path.replace(/\.[^.]+$/, "").split("/").pop() || path;
+        const name =
+          path
+            .replace(/\.[^.]+$/, "")
+            .split("/")
+            .pop() || path;
         _onTabRenamed(sid, name);
       }
       return result;
@@ -292,7 +298,11 @@ export const cad = {
       const sid = cad.currentSession();
       const result = await rpcCall("saveDwg", { path }, sid ?? undefined);
       if (sid && _onTabRenamed) {
-        const name = path.replace(/\.[^.]+$/, "").split("/").pop() || path;
+        const name =
+          path
+            .replace(/\.[^.]+$/, "")
+            .split("/")
+            .pop() || path;
         _onTabRenamed(sid, name);
       }
       return result;

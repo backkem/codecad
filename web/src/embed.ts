@@ -8,11 +8,11 @@
 // directly to start_renderer (no getElementById), so Shadow DOM works.
 
 import {
+  cad_call,
   session_create,
   session_destroy,
   session_load_dwg,
   session_use,
-  cad_call,
   start_renderer,
   stop_renderer,
 } from "cadview-wasm";
@@ -148,7 +148,11 @@ class CodecadViewer extends HTMLElement {
     this.cleanup();
   }
 
-  attributeChangedCallback(name: string, oldVal: string | null, newVal: string | null) {
+  attributeChangedCallback(
+    name: string,
+    oldVal: string | null,
+    newVal: string | null,
+  ) {
     if (name === "src" && oldVal !== newVal && this.initialized) {
       this.loadSrc(newVal);
     }
@@ -209,11 +213,19 @@ class CodecadViewer extends HTMLElement {
 
   private cleanup() {
     if (this.rendererKey) {
-      try { stop_renderer(this.rendererKey); } catch { /* ok */ }
+      try {
+        stop_renderer(this.rendererKey);
+      } catch {
+        /* ok */
+      }
       this.rendererKey = "";
     }
     if (this.sessionId) {
-      try { session_destroy(this.sessionId); } catch { /* ok */ }
+      try {
+        session_destroy(this.sessionId);
+      } catch {
+        /* ok */
+      }
       this.sessionId = "";
     }
     this.initialized = false;

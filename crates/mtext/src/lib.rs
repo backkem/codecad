@@ -372,10 +372,7 @@ mod tests {
     fn font_with_italic() {
         let doc = parse("\\fTimes New Roman|b0|i1;Italic");
         assert_eq!(doc.plain_text(), "Italic");
-        assert_eq!(
-            doc.spans[0].style.font.as_deref(),
-            Some("Times New Roman")
-        );
+        assert_eq!(doc.spans[0].style.font.as_deref(), Some("Times New Roman"));
         assert!(!doc.spans[0].style.bold);
         assert!(doc.spans[0].style.italic);
     }

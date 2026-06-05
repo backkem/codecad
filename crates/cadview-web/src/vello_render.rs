@@ -4,7 +4,7 @@
 //! Requires WebGPU; the JS host detects capability and falls back to
 //! the egui renderer on browsers without WebGPU support.
 
-use crate::{SESSIONS, Camera, CameraCmd};
+use crate::{Camera, CameraCmd, SESSIONS};
 use cadview_core::{DrawEntity, EntityId, Shape};
 use kurbo::{Affine, BezPath};
 use std::cell::{Cell, RefCell};
@@ -41,7 +41,9 @@ struct VelloState {
 
 impl VelloState {
     fn resize(&mut self, width: u32, height: u32) {
-        if width == 0 || height == 0 { return; }
+        if width == 0 || height == 0 {
+            return;
+        }
         self.surface_config.width = width;
         self.surface_config.height = height;
         self.surface.configure(&self.device, &self.surface_config);
@@ -51,10 +53,18 @@ impl VelloState {
     }
 }
 
-fn create_target_texture(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Texture, wgpu::TextureView) {
+fn create_target_texture(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+) -> (wgpu::Texture, wgpu::TextureView) {
     let tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("vello_target"),
-        size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -72,14 +82,22 @@ pub fn start(canvas: HtmlCanvasElement, session_id: &str, renderer_key: &str) {
     let renderer_key = renderer_key.to_string();
 
     wasm_bindgen_futures::spawn_local(async move {
-        let (device, queue, surface, surface_config, renderer, target_texture, target_view, blitter) =
-            match init_gpu(&canvas).await {
-                Ok(s) => s,
-                Err(e) => {
-                    web_sys::console::error_1(&format!("Vello init failed: {e}").into());
-                    return;
-                }
-            };
+        let (
+            device,
+            queue,
+            surface,
+            surface_config,
+            renderer,
+            target_texture,
+            target_view,
+            blitter,
+        ) = match init_gpu(&canvas).await {
+            Ok(s) => s,
+            Err(e) => {
+                web_sys::console::error_1(&format!("Vello init failed: {e}").into());
+                return;
+            }
+        };
 
         let state = Rc::new(RefCell::new(VelloState {
             device,
@@ -112,11 +130,14 @@ pub fn start(canvas: HtmlCanvasElement, session_id: &str, renderer_key: &str) {
             let cb = Rc::clone(&cb);
             let pending = Rc::clone(&frame_pending);
             Rc::new(move || {
-                if pending.get() { return; }
+                if pending.get() {
+                    return;
+                }
                 pending.set(true);
                 let borrowed = cb.borrow();
                 if let Some(ref f) = *borrowed {
-                    let _ = web_sys::window().unwrap()
+                    let _ = web_sys::window()
+                        .unwrap()
                         .request_animation_frame(f.as_ref().unchecked_ref());
                 }
             })
@@ -132,16 +153,23 @@ pub fn start(canvas: HtmlCanvasElement, session_id: &str, renderer_key: &str) {
             let sid = state.borrow().session_id.clone();
             let mut reg = SESSIONS.lock().unwrap();
             reg.renderers.insert(rk.clone(), sid);
-            reg.repaint_fns.insert(rk, crate::RepaintFn(Box::new(move || { sched(); })));
+            reg.repaint_fns.insert(
+                rk,
+                crate::RepaintFn(Box::new(move || {
+                    sched();
+                })),
+            );
         }
 
         // Re-render on canvas resize (browser window resize, layout change)
         {
             let sched = Rc::clone(&schedule_frame);
-            let observer_cb = Closure::<dyn FnMut(js_sys::Array)>::new(move |_entries: js_sys::Array| {
-                sched();
-            });
-            let observer = web_sys::ResizeObserver::new(observer_cb.as_ref().unchecked_ref()).unwrap();
+            let observer_cb =
+                Closure::<dyn FnMut(js_sys::Array)>::new(move |_entries: js_sys::Array| {
+                    sched();
+                });
+            let observer =
+                web_sys::ResizeObserver::new(observer_cb.as_ref().unchecked_ref()).unwrap();
             observer.observe(&canvas);
             observer_cb.forget();
             // Prevent GC of the observer by leaking the reference.
@@ -161,22 +189,28 @@ pub fn start(canvas: HtmlCanvasElement, session_id: &str, renderer_key: &str) {
             let still_active = {
                 let reg = SESSIONS.lock().unwrap();
                 let s = state_clone.borrow();
-                reg.renderers.get(&s.renderer_key)
+                reg.renderers
+                    .get(&s.renderer_key)
                     .is_some_and(|sid| sid == &s.session_id)
             };
-            if !still_active { return; }
+            if !still_active {
+                return;
+            }
 
             // Process input
             let has_input = {
                 let delta = input_clone.borrow_mut().take();
-                let has = delta.pan_dx.abs() > 0.1 || delta.pan_dy.abs() > 0.1
+                let has = delta.pan_dx.abs() > 0.1
+                    || delta.pan_dy.abs() > 0.1
                     || (delta.zoom_factor - 1.0).abs() > 1e-6;
                 let mut reg = SESSIONS.lock().unwrap();
                 let s = state_clone.borrow();
                 if let Some(session) = reg.sessions.get_mut(&s.session_id) {
                     apply_input_to_camera(
-                        &mut session.camera, &delta,
-                        s.surface_config.width, s.surface_config.height,
+                        &mut session.camera,
+                        &delta,
+                        s.surface_config.width,
+                        s.surface_config.height,
                     );
                 }
                 has
@@ -234,7 +268,19 @@ pub fn start(canvas: HtmlCanvasElement, session_id: &str, renderer_key: &str) {
 
 async fn init_gpu(
     canvas: &HtmlCanvasElement,
-) -> Result<(wgpu::Device, wgpu::Queue, wgpu::Surface<'static>, wgpu::SurfaceConfiguration, vello::Renderer, wgpu::Texture, wgpu::TextureView, wgpu::util::TextureBlitter), String> {
+) -> Result<
+    (
+        wgpu::Device,
+        wgpu::Queue,
+        wgpu::Surface<'static>,
+        wgpu::SurfaceConfiguration,
+        vello::Renderer,
+        wgpu::Texture,
+        wgpu::TextureView,
+        wgpu::util::TextureBlitter,
+    ),
+    String,
+> {
     let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
     desc.backends = wgpu::Backends::BROWSER_WEBGPU;
     let instance = wgpu::Instance::new(desc);
@@ -267,8 +313,7 @@ async fn init_gpu(
     let height = ((canvas.client_height() as f64 * dpr) as u32).max(1);
 
     let caps = surface.get_capabilities(&adapter);
-    let format = caps.formats.first().copied()
-        .ok_or("no surface format")?;
+    let format = caps.formats.first().copied().ok_or("no surface format")?;
 
     let surface_config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -290,12 +335,22 @@ async fn init_gpu(
             num_init_threads: std::num::NonZeroUsize::new(1),
             pipeline_cache: None,
         },
-    ).map_err(|e| format!("vello Renderer: {e}"))?;
+    )
+    .map_err(|e| format!("vello Renderer: {e}"))?;
 
     let (target_texture, target_view) = create_target_texture(&device, width, height);
     let blitter = wgpu::util::TextureBlitterBuilder::new(&device, format).build();
 
-    Ok((device, queue, surface, surface_config, renderer, target_texture, target_view, blitter))
+    Ok((
+        device,
+        queue,
+        surface,
+        surface_config,
+        renderer,
+        target_texture,
+        target_view,
+        blitter,
+    ))
 }
 
 // ── Render ────────────────────────────────────────────────────────────
@@ -303,7 +358,9 @@ async fn init_gpu(
 fn render_frame(state: &mut VelloState) {
     let width = state.surface_config.width;
     let height = state.surface_config.height;
-    if width == 0 || height == 0 { return; }
+    if width == 0 || height == 0 {
+        return;
+    }
 
     let mut scene = Scene::new();
 
@@ -318,7 +375,9 @@ fn render_frame(state: &mut VelloState) {
 
     // Lock session
     let mut reg = SESSIONS.lock().unwrap();
-    let Some(session) = reg.sessions.get_mut(&state.session_id) else { return; };
+    let Some(session) = reg.sessions.get_mut(&state.session_id) else {
+        return;
+    };
 
     let sw = width as f64;
     let sh = height as f64;
@@ -379,29 +438,51 @@ fn render_frame(state: &mut VelloState) {
         state.expanded_count = entity_count;
         state.path_cache.clear();
     }
-    if state.expanded.is_empty() && session.doc.entities.iter().any(|e|
-        matches!(&e.shape, Shape::BlockInsert { .. } | Shape::Text { .. } | Shape::MText { .. })
-    ) {
+    if state.expanded.is_empty()
+        && session.doc.entities.iter().any(|e| {
+            matches!(
+                &e.shape,
+                Shape::BlockInsert { .. } | Shape::Text { .. } | Shape::MText { .. }
+            )
+        })
+    {
         expand_blocks_and_text(&session.doc, &mut state.expanded);
     }
 
     // All renderable entities
-    let all_entities: Vec<&DrawEntity> = session.doc.entities.iter()
-        .filter(|e| !matches!(&e.shape, Shape::BlockInsert { .. } | Shape::Text { .. } | Shape::MText { .. }))
+    let all_entities: Vec<&DrawEntity> = session
+        .doc
+        .entities
+        .iter()
+        .filter(|e| {
+            !matches!(
+                &e.shape,
+                Shape::BlockInsert { .. } | Shape::Text { .. } | Shape::MText { .. }
+            )
+        })
         .chain(state.expanded.iter())
         .collect();
 
     // Ensure path cache is populated for visible entities
     for ent in &all_entities {
-        state.path_cache.entry(ent.id).or_insert_with(|| ent.shape.to_bezpath());
+        state
+            .path_cache
+            .entry(ent.id)
+            .or_insert_with(|| ent.shape.to_bezpath());
     }
 
     // Pass 1: SolidFill
     for ent in &all_entities {
-        if !matches!(&ent.shape, Shape::SolidFill { .. }) { continue; }
-        if session.hidden_layers.iter().any(|n| n == &ent.layer) { continue; }
+        if !matches!(&ent.shape, Shape::SolidFill { .. }) {
+            continue;
+        }
+        if session.hidden_layers.iter().any(|n| n == &ent.layer) {
+            continue;
+        }
         let (bx0, by0, bx1, by1) = ent.shape.bbox();
-        if bx1 < view_x0 || bx0 > view_x1 || by1 < view_y0 || by0 > view_y1 { continue; }
+        if bx1 < view_x0 || bx0 > view_x1 || by1 < view_y0 || by0 > view_y1 {
+            continue;
+        }
 
         if let Some(Some(bezpath)) = state.path_cache.get(&ent.id) {
             let fill_color = peniko::Color::from_rgba8(ent.color.r, ent.color.g, ent.color.b, 35);
@@ -416,16 +497,24 @@ fn render_frame(state: &mut VelloState) {
     let stroke = kurbo::Stroke::new(dpr / cam_zoom);
 
     for ent in &all_entities {
-        if matches!(&ent.shape, Shape::SolidFill { .. }) { continue; }
-        if session.hidden_layers.iter().any(|n| n == &ent.layer) { continue; }
+        if matches!(&ent.shape, Shape::SolidFill { .. }) {
+            continue;
+        }
+        if session.hidden_layers.iter().any(|n| n == &ent.layer) {
+            continue;
+        }
 
         let (bx0, by0, bx1, by1) = ent.shape.bbox();
-        if bx1 < view_x0 || bx0 > view_x1 || by1 < view_y0 || by0 > view_y1 { continue; }
+        if bx1 < view_x0 || bx0 > view_x1 || by1 < view_y0 || by0 > view_y1 {
+            continue;
+        }
 
         let dw = bx1 - bx0;
         let dh = by1 - by0;
         let diag_screen = (dw * dw + dh * dh).sqrt() * cam_zoom;
-        if diag_screen < CULL_THRESHOLD { continue; }
+        if diag_screen < CULL_THRESHOLD {
+            continue;
+        }
 
         let alpha = if diag_screen < FADE_THRESHOLD {
             let t = ((diag_screen - CULL_THRESHOLD) / (FADE_THRESHOLD - CULL_THRESHOLD))
@@ -453,20 +542,36 @@ fn render_frame(state: &mut VelloState) {
         antialiasing_method: vello::AaConfig::Msaa16,
     };
 
-    state.renderer
-        .render_to_texture(&state.device, &state.queue, &scene, &state.target_view, &params)
+    state
+        .renderer
+        .render_to_texture(
+            &state.device,
+            &state.queue,
+            &scene,
+            &state.target_view,
+            &params,
+        )
         .expect("vello render failed");
 
     let surface_texture = match state.surface.get_current_texture() {
         wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
         _ => return,
     };
-    let surface_view = surface_texture.texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let surface_view = surface_texture
+        .texture
+        .create_view(&wgpu::TextureViewDescriptor::default());
 
-    let mut encoder = state.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("vello_blit"),
-    });
-    state.blitter.copy(&state.device, &mut encoder, &state.target_view, &surface_view);
+    let mut encoder = state
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("vello_blit"),
+        });
+    state.blitter.copy(
+        &state.device,
+        &mut encoder,
+        &state.target_view,
+        &surface_view,
+    );
     state.queue.submit(Some(encoder.finish()));
 
     surface_texture.present();
@@ -474,7 +579,9 @@ fn render_frame(state: &mut VelloState) {
 
 fn expand_blocks_and_text(doc: &cadview_core::Document, expanded: &mut Vec<DrawEntity>) {
     let result = cadview_core::expand_for_render(doc);
-    web_sys::console::log_1(&format!("expand_blocks_and_text: {} expanded entities", result.len()).into());
+    web_sys::console::log_1(
+        &format!("expand_blocks_and_text: {} expanded entities", result.len()).into(),
+    );
     expanded.extend(result);
 }
 
@@ -500,11 +607,13 @@ struct InputState {
 impl InputState {
     fn new() -> Self {
         Self {
-            pan_dx: 0.0, pan_dy: 0.0,
+            pan_dx: 0.0,
+            pan_dy: 0.0,
             zoom_factor: 1.0,
             zoom_center: None,
             pointer_down: false,
-            last_x: 0.0, last_y: 0.0,
+            last_x: 0.0,
+            last_y: 0.0,
         }
     }
 
@@ -531,14 +640,17 @@ fn attach_input_listeners(
     {
         let inp = Rc::clone(&input);
         let sched = Rc::clone(&schedule);
-        let cb = Closure::<dyn FnMut(web_sys::PointerEvent)>::new(move |e: web_sys::PointerEvent| {
-            let mut s = inp.borrow_mut();
-            s.pointer_down = true;
-            s.last_x = e.offset_x() as f64;
-            s.last_y = e.offset_y() as f64;
-            sched();
-        });
-        canvas.add_event_listener_with_callback("pointerdown", cb.as_ref().unchecked_ref()).unwrap();
+        let cb =
+            Closure::<dyn FnMut(web_sys::PointerEvent)>::new(move |e: web_sys::PointerEvent| {
+                let mut s = inp.borrow_mut();
+                s.pointer_down = true;
+                s.last_x = e.offset_x() as f64;
+                s.last_y = e.offset_y() as f64;
+                sched();
+            });
+        canvas
+            .add_event_listener_with_callback("pointerdown", cb.as_ref().unchecked_ref())
+            .unwrap();
         cb.forget();
     }
 
@@ -546,29 +658,35 @@ fn attach_input_listeners(
     {
         let inp = Rc::clone(&input);
         let sched = Rc::clone(&schedule);
-        let cb = Closure::<dyn FnMut(web_sys::PointerEvent)>::new(move |e: web_sys::PointerEvent| {
-            let mut s = inp.borrow_mut();
-            if s.pointer_down {
-                let x = e.offset_x() as f64;
-                let y = e.offset_y() as f64;
-                s.pan_dx += x - s.last_x;
-                s.pan_dy += y - s.last_y;
-                s.last_x = x;
-                s.last_y = y;
-                sched();
-            }
-        });
-        canvas.add_event_listener_with_callback("pointermove", cb.as_ref().unchecked_ref()).unwrap();
+        let cb =
+            Closure::<dyn FnMut(web_sys::PointerEvent)>::new(move |e: web_sys::PointerEvent| {
+                let mut s = inp.borrow_mut();
+                if s.pointer_down {
+                    let x = e.offset_x() as f64;
+                    let y = e.offset_y() as f64;
+                    s.pan_dx += x - s.last_x;
+                    s.pan_dy += y - s.last_y;
+                    s.last_x = x;
+                    s.last_y = y;
+                    sched();
+                }
+            });
+        canvas
+            .add_event_listener_with_callback("pointermove", cb.as_ref().unchecked_ref())
+            .unwrap();
         cb.forget();
     }
 
     // Pointer up
     {
         let inp = Rc::clone(&input);
-        let cb = Closure::<dyn FnMut(web_sys::PointerEvent)>::new(move |_e: web_sys::PointerEvent| {
-            inp.borrow_mut().pointer_down = false;
-        });
-        canvas.add_event_listener_with_callback("pointerup", cb.as_ref().unchecked_ref()).unwrap();
+        let cb =
+            Closure::<dyn FnMut(web_sys::PointerEvent)>::new(move |_e: web_sys::PointerEvent| {
+                inp.borrow_mut().pointer_down = false;
+            });
+        canvas
+            .add_event_listener_with_callback("pointerup", cb.as_ref().unchecked_ref())
+            .unwrap();
         cb.forget();
     }
 
@@ -587,9 +705,13 @@ fn attach_input_listeners(
         });
         let opts = web_sys::AddEventListenerOptions::new();
         opts.set_passive(false);
-        canvas.add_event_listener_with_callback_and_add_event_listener_options(
-            "wheel", cb.as_ref().unchecked_ref(), &opts,
-        ).unwrap();
+        canvas
+            .add_event_listener_with_callback_and_add_event_listener_options(
+                "wheel",
+                cb.as_ref().unchecked_ref(),
+                &opts,
+            )
+            .unwrap();
         cb.forget();
     }
 }

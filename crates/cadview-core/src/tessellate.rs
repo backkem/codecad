@@ -1,7 +1,7 @@
+use crate::geo;
+use crate::types::{FillEdge, LwVertex};
 use kurbo::{Affine, BezPath, Point};
 use std::f64::consts::PI;
-use crate::types::{FillEdge, LwVertex};
-use crate::geo;
 
 /// `tolerance` is the max deviation in world units for arc tessellation.
 pub fn flatten_fill_edges(edges: &[FillEdge], tolerance: f64) -> Vec<Point> {
@@ -11,10 +11,17 @@ pub fn flatten_fill_edges(edges: &[FillEdge], tolerance: f64) -> Vec<Point> {
             FillEdge::LineTo(p) => {
                 pts.push(*p);
             }
-            FillEdge::ArcTo { center, radius, start_angle, end_angle } => {
+            FillEdge::ArcTo {
+                center,
+                radius,
+                start_angle,
+                end_angle,
+            } => {
                 // Sagitta-based step count: max chord error < tolerance.
                 let mut sweep = end_angle - start_angle;
-                if sweep < 0.0 { sweep += 2.0 * PI; }
+                if sweep < 0.0 {
+                    sweep += 2.0 * PI;
+                }
                 let steps = if *radius < tolerance {
                     4usize
                 } else {
@@ -31,14 +38,31 @@ pub fn flatten_fill_edges(edges: &[FillEdge], tolerance: f64) -> Vec<Point> {
                     ));
                 }
             }
-            FillEdge::EllipseArcTo { center, major_axis, minor_ratio, start_param, end_param } => {
-                let epts = tessellate_ellipse(*center, *major_axis, *minor_ratio, *start_param, *end_param, tolerance);
+            FillEdge::EllipseArcTo {
+                center,
+                major_axis,
+                minor_ratio,
+                start_param,
+                end_param,
+            } => {
+                let epts = tessellate_ellipse(
+                    *center,
+                    *major_axis,
+                    *minor_ratio,
+                    *start_param,
+                    *end_param,
+                    tolerance,
+                );
                 // Skip first point (connects to previous edge)
                 if epts.len() > 1 {
                     pts.extend_from_slice(&epts[1..]);
                 }
             }
-            FillEdge::SplineTo { degree, knots, control_points } => {
+            FillEdge::SplineTo {
+                degree,
+                knots,
+                control_points,
+            } => {
                 let spts = tessellate_spline(*degree, knots, control_points, tolerance);
                 // Skip first point (connects to previous edge)
                 if spts.len() > 1 {
@@ -99,7 +123,8 @@ pub fn triangulate_fill(
     tolerance: f64,
 ) -> (Vec<[f32; 2]>, Vec<u32>) {
     let flat_boundary = flatten_fill_edges(boundary, tolerance);
-    let flat_holes: Vec<Vec<Point>> = holes.iter()
+    let flat_holes: Vec<Vec<Point>> = holes
+        .iter()
         .map(|h| flatten_fill_edges(h, tolerance))
         .collect();
     triangulate_polygon(&flat_boundary, &flat_holes)
@@ -107,19 +132,29 @@ pub fn triangulate_fill(
 
 /// Tessellate an ellipse/elliptic arc to polyline points at given tolerance.
 pub fn tessellate_ellipse(
-    center: Point, major_axis: (f64, f64), minor_ratio: f64,
-    start_param: f64, end_param: f64, tolerance: f64,
+    center: Point,
+    major_axis: (f64, f64),
+    minor_ratio: f64,
+    start_param: f64,
+    end_param: f64,
+    tolerance: f64,
 ) -> Vec<Point> {
     let ma_len = (major_axis.0 * major_axis.0 + major_axis.1 * major_axis.1).sqrt();
-    if ma_len < 1e-12 { return Vec::new(); }
+    if ma_len < 1e-12 {
+        return Vec::new();
+    }
     let angle = major_axis.1.atan2(major_axis.0);
     let a = ma_len;
     let b = ma_len * minor_ratio;
     let r_max = a.max(b);
 
     let mut sweep = end_param - start_param;
-    if sweep.abs() < 1e-10 { sweep = 2.0 * PI; }
-    if sweep < 0.0 { sweep += 2.0 * PI; }
+    if sweep.abs() < 1e-10 {
+        sweep = 2.0 * PI;
+    }
+    if sweep < 0.0 {
+        sweep += 2.0 * PI;
+    }
 
     // Sagitta-based step count using max radius
     let steps = if r_max < tolerance {
@@ -131,31 +166,38 @@ pub fn tessellate_ellipse(
 
     let cos_a = angle.cos();
     let sin_a = angle.sin();
-    (0..=steps).map(|i| {
-        let t = start_param + sweep * (i as f64 / steps as f64);
-        let ex = a * t.cos();
-        let ey = b * t.sin();
-        Point::new(
-            center.x + ex * cos_a - ey * sin_a,
-            center.y + ex * sin_a + ey * cos_a,
-        )
-    }).collect()
+    (0..=steps)
+        .map(|i| {
+            let t = start_param + sweep * (i as f64 / steps as f64);
+            let ex = a * t.cos();
+            let ey = b * t.sin();
+            Point::new(
+                center.x + ex * cos_a - ey * sin_a,
+                center.y + ex * sin_a + ey * cos_a,
+            )
+        })
+        .collect()
 }
 
 /// Tessellate a B-spline to polyline points using De Boor evaluation.
 /// Step count is adaptive based on control hull length and tolerance.
 pub fn tessellate_spline(
-    degree: i32, knots: &[f64], control_points: &[Point], tolerance: f64,
+    degree: i32,
+    knots: &[f64],
+    control_points: &[Point],
+    tolerance: f64,
 ) -> Vec<Point> {
     let d = degree as usize;
     let n = control_points.len();
-    if n < 2 || knots.len() < n + d + 1 { return control_points.to_vec(); }
+    if n < 2 || knots.len() < n + d + 1 {
+        return control_points.to_vec();
+    }
 
     // Estimate total arc length from control hull
     let mut hull_len = 0.0f64;
     for i in 1..n {
-        let dx = control_points[i].x - control_points[i-1].x;
-        let dy = control_points[i].y - control_points[i-1].y;
+        let dx = control_points[i].x - control_points[i - 1].x;
+        let dy = control_points[i].y - control_points[i - 1].y;
         hull_len += (dx * dx + dy * dy).sqrt();
     }
 
@@ -166,12 +208,16 @@ pub fn tessellate_spline(
 
     let t_start = knots[d];
     let t_end = knots[n];
-    if (t_end - t_start).abs() < 1e-12 { return control_points.to_vec(); }
+    if (t_end - t_start).abs() < 1e-12 {
+        return control_points.to_vec();
+    }
 
-    (0..=steps).map(|i| {
-        let t = t_start + (t_end - t_start) * (i as f64 / steps as f64);
-        de_boor_eval(d, knots, control_points, t)
-    }).collect()
+    (0..=steps)
+        .map(|i| {
+            let t = t_start + (t_end - t_start) * (i as f64 / steps as f64);
+            de_boor_eval(d, knots, control_points, t)
+        })
+        .collect()
 }
 
 /// De Boor's algorithm for B-spline evaluation at parameter t.
@@ -180,11 +226,18 @@ pub(crate) fn de_boor_eval(degree: usize, knots: &[f64], cps: &[Point], t: f64) 
     // Find knot span k such that knots[k] <= t < knots[k+1]
     let mut k = degree;
     for i in degree..n {
-        if i + 1 >= knots.len() { break; }
-        if t >= knots[i] && t < knots[i + 1] { k = i; break; }
+        if i + 1 >= knots.len() {
+            break;
+        }
+        if t >= knots[i] && t < knots[i + 1] {
+            k = i;
+            break;
+        }
     }
     // Handle t at/beyond the last knot
-    if t >= knots[n] { k = n - 1; }
+    if t >= knots[n] {
+        k = n - 1;
+    }
 
     // Copy the affected control points
     let mut d: Vec<[f64; 2]> = (0..=degree)
@@ -197,11 +250,23 @@ pub(crate) fn de_boor_eval(degree: usize, knots: &[f64], cps: &[Point], t: f64) 
     for r in 1..=degree {
         for j in (r..=degree).rev() {
             let i_knot = (k as isize - degree as isize + j as isize) as usize;
-            let ki = if i_knot < knots.len() { knots[i_knot] } else { *knots.last().unwrap() };
+            let ki = if i_knot < knots.len() {
+                knots[i_knot]
+            } else {
+                *knots.last().unwrap()
+            };
             let ki_end_idx = i_knot + degree + 1 - r;
-            let ki_end = if ki_end_idx < knots.len() { knots[ki_end_idx] } else { *knots.last().unwrap() };
+            let ki_end = if ki_end_idx < knots.len() {
+                knots[ki_end_idx]
+            } else {
+                *knots.last().unwrap()
+            };
             let denom = ki_end - ki;
-            let alpha = if denom.abs() < 1e-12 { 0.0 } else { (t - ki) / denom };
+            let alpha = if denom.abs() < 1e-12 {
+                0.0
+            } else {
+                (t - ki) / denom
+            };
             d[j][0] = (1.0 - alpha) * d[j - 1][0] + alpha * d[j][0];
             d[j][1] = (1.0 - alpha) * d[j - 1][1] + alpha * d[j][1];
         }
@@ -213,7 +278,9 @@ pub(crate) fn de_boor_eval(degree: usize, knots: &[f64], cps: &[Point], t: f64) 
 /// Bulge arcs use sagitta-based step count for zoom-adaptive quality.
 pub fn tessellate_lwpolyline(vertices: &[LwVertex], closed: bool, tolerance: f64) -> Vec<Point> {
     let n = vertices.len();
-    if n == 0 { return Vec::new(); }
+    if n == 0 {
+        return Vec::new();
+    }
 
     let mut pts = Vec::new();
     let segments = if closed { n } else { n.saturating_sub(1) };
@@ -232,7 +299,10 @@ pub fn tessellate_lwpolyline(vertices: &[LwVertex], closed: bool, tolerance: f64
             let dx = p1.x - p0.x;
             let dy = p1.y - p0.y;
             let chord = (dx * dx + dy * dy).sqrt();
-            if chord < 1e-12 { pts.push(p1); continue; }
+            if chord < 1e-12 {
+                pts.push(p1);
+                continue;
+            }
             let radius = chord / (2.0 * included.sin().abs());
             let sagitta = bulge * chord / 2.0;
             let mx = (p0.x + p1.x) / 2.0;
@@ -268,7 +338,9 @@ pub fn tessellate_lwpolyline(vertices: &[LwVertex], closed: bool, tolerance: f64
 pub fn catmull_rom_to_bezpath(points: &[Point], closed: bool) -> BezPath {
     let n = points.len();
     let mut path = BezPath::new();
-    if n < 2 { return path; }
+    if n < 2 {
+        return path;
+    }
 
     path.move_to(points[0]);
 
@@ -283,19 +355,21 @@ pub fn catmull_rom_to_bezpath(points: &[Point], closed: bool) -> BezPath {
     //   CP2 = P2 - (P3 - P1) / 6
     let segments = if closed { n } else { n - 1 };
     for i in 0..segments {
-        let p0 = if i == 0 && !closed { points[0] } else { points[(i + n - 1) % n] };
+        let p0 = if i == 0 && !closed {
+            points[0]
+        } else {
+            points[(i + n - 1) % n]
+        };
         let p1 = points[i % n];
         let p2 = points[(i + 1) % n];
-        let p3 = if i == segments - 1 && !closed { points[n - 1] } else { points[(i + 2) % n] };
+        let p3 = if i == segments - 1 && !closed {
+            points[n - 1]
+        } else {
+            points[(i + 2) % n]
+        };
 
-        let cp1 = Point::new(
-            p1.x + (p2.x - p0.x) / 6.0,
-            p1.y + (p2.y - p0.y) / 6.0,
-        );
-        let cp2 = Point::new(
-            p2.x - (p3.x - p1.x) / 6.0,
-            p2.y - (p3.y - p1.y) / 6.0,
-        );
+        let cp1 = Point::new(p1.x + (p2.x - p0.x) / 6.0, p1.y + (p2.y - p0.y) / 6.0);
+        let cp2 = Point::new(p2.x - (p3.x - p1.x) / 6.0, p2.y - (p3.y - p1.y) / 6.0);
         path.curve_to(cp1, cp2, p2);
     }
 
@@ -332,7 +406,9 @@ pub fn triangulate_polygon(boundary: &[Point], holes: &[Vec<Point>]) -> (Vec<[f3
     let mut clean_holes: Vec<Vec<Point>> = Vec::new();
     for hole in holes {
         let mut ch = simplify_polygon(hole, tol);
-        if ch.len() < 3 { continue; }
+        if ch.len() < 3 {
+            continue;
+        }
         // Ensure holes are CW (opposite winding from outer)
         if signed_polygon_area(&ch) > 0.0 {
             ch.reverse();
@@ -356,10 +432,10 @@ pub fn triangulate_polygon(boundary: &[Point], holes: &[Vec<Point>]) -> (Vec<[f3
         }
     }
 
-    let indices = earcutr::earcut(&coords, &hole_indices, 2)
-        .unwrap_or_default();
+    let indices = earcutr::earcut(&coords, &hole_indices, 2).unwrap_or_default();
 
-    let triangles: Vec<[f32; 2]> = coords.chunks_exact(2)
+    let triangles: Vec<[f32; 2]> = coords
+        .chunks_exact(2)
         .map(|c| [c[0] as f32, c[1] as f32])
         .collect();
     let tri_indices: Vec<u32> = indices.iter().map(|&i| i as u32).collect();
@@ -393,7 +469,9 @@ pub(crate) fn mirror_affine(p1: Point, p2: Point) -> Affine {
 /// `tolerance` is the minimum distance between consecutive points and the
 /// maximum perpendicular deviation for collinear removal.
 pub(crate) fn simplify_polygon(pts: &[Point], tolerance: f64) -> Vec<Point> {
-    if pts.len() < 3 { return pts.to_vec(); }
+    if pts.len() < 3 {
+        return pts.to_vec();
+    }
 
     // Step 1: remove near-duplicate consecutive points
     let mut deduped = Vec::with_capacity(pts.len());
@@ -418,13 +496,19 @@ pub(crate) fn simplify_polygon(pts: &[Point], tolerance: f64) -> Vec<Point> {
     while changed {
         changed = false;
         let n = deduped.len();
-        if n < 4 { break; }
+        if n < 4 {
+            break;
+        }
         let mut keep = vec![true; n];
         for i in 0..n {
-            if !keep[i] { continue; }
+            if !keep[i] {
+                continue;
+            }
             let prev = (0..n).rev().cycle().skip(n - i).find(|&j| keep[j]).unwrap();
             let next = (0..n).cycle().skip(i + 1).find(|&j| keep[j]).unwrap();
-            if prev == next { continue; }
+            if prev == next {
+                continue;
+            }
             let a = deduped[prev];
             let b = deduped[i];
             let c = deduped[next];
@@ -432,14 +516,18 @@ pub(crate) fn simplify_polygon(pts: &[Point], tolerance: f64) -> Vec<Point> {
             let dx = c.x - a.x;
             let dy = c.y - a.y;
             let len = (dx * dx + dy * dy).sqrt();
-            if len < 1e-10 { continue; }
+            if len < 1e-10 {
+                continue;
+            }
             let dist = ((b.x - a.x) * dy - (b.y - a.y) * dx).abs() / len;
             if dist < tolerance {
                 keep[i] = false;
                 changed = true;
             }
         }
-        deduped = deduped.into_iter().enumerate()
+        deduped = deduped
+            .into_iter()
+            .enumerate()
             .filter(|(i, _)| keep[*i])
             .map(|(_, p)| p)
             .collect();

@@ -83,7 +83,9 @@ export function buildCadApi({
       call("entities", opts || {}) as EntityJson[],
     entity: (id: string) => call("entity", { id }) as EntityJson,
     children: (id: string | EntityJson) =>
-      call("children", { id: typeof id === "string" ? id : id.id }) as EntityJson[],
+      call("children", {
+        id: typeof id === "string" ? id : id.id,
+      }) as EntityJson[],
 
     // Spatial queries
     near: (pt: Point2, r: number) =>

@@ -7,7 +7,9 @@ fn main() {
     let mut reader = acadrust::DwgReader::from_file(&path).expect("failed to open");
     let cad = reader.read().expect("failed to parse");
 
-    let model_space_handle = cad.block_records.iter()
+    let model_space_handle = cad
+        .block_records
+        .iter()
         .find(|br| br.name == "*Model_Space")
         .map(|br| br.handle);
 
@@ -29,7 +31,8 @@ fn main() {
         *total_counts.entry(type_name.clone()).or_default() += 1;
 
         let in_model = model_space_handle.is_some_and(|ms| owner == ms);
-        let in_named_block = handle_to_block.get(&owner.value())
+        let in_named_block = handle_to_block
+            .get(&owner.value())
             .is_some_and(|name| !name.starts_with('*'));
 
         if in_model {
@@ -55,24 +58,32 @@ fn main() {
 
     // What cadview currently handles
     let handled = [
-        "LINE", "ARC", "CIRCLE", "INSERT",
-        "LWPOLYLINE", "ELLIPSE", "SPLINE",
-        "HATCH", "MTEXT", "TEXT", "DIMENSION_LINEAR",
+        "LINE",
+        "ARC",
+        "CIRCLE",
+        "INSERT",
+        "LWPOLYLINE",
+        "ELLIPSE",
+        "SPLINE",
+        "HATCH",
+        "MTEXT",
+        "TEXT",
+        "DIMENSION_LINEAR",
     ];
-    let handled_count: usize = handled.iter()
-        .filter_map(|t| model_counts.get(*t))
-        .sum();
-    let handled_block: usize = handled.iter()
-        .filter_map(|t| block_counts.get(*t))
-        .sum();
+    let handled_count: usize = handled.iter().filter_map(|t| model_counts.get(*t)).sum();
+    let handled_block: usize = handled.iter().filter_map(|t| block_counts.get(*t)).sum();
     println!("\n=== Coverage ===");
     if model_total > 0 {
-        println!("Model space: {handled_count}/{model_total} = {:.1}%",
-            handled_count as f64 / model_total as f64 * 100.0);
+        println!(
+            "Model space: {handled_count}/{model_total} = {:.1}%",
+            handled_count as f64 / model_total as f64 * 100.0
+        );
     }
     if block_total > 0 {
-        println!("Block defs:  {handled_block}/{block_total} = {:.1}%",
-            handled_block as f64 / block_total as f64 * 100.0);
+        println!(
+            "Block defs:  {handled_block}/{block_total} = {:.1}%",
+            handled_block as f64 / block_total as f64 * 100.0
+        );
     }
 }
 
@@ -80,6 +91,9 @@ fn print_sorted(counts: &HashMap<String, usize>, total: usize) {
     let mut sorted: Vec<_> = counts.iter().collect();
     sorted.sort_by(|a, b| b.1.cmp(a.1));
     for (name, count) in sorted {
-        println!("  {name:20} {count:6}  ({:.1}%)", *count as f64 / total as f64 * 100.0);
+        println!(
+            "  {name:20} {count:6}  ({:.1}%)",
+            *count as f64 / total as f64 * 100.0
+        );
     }
 }

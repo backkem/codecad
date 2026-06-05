@@ -15,7 +15,10 @@ pub trait DocumentStore: Send + Sync {
     /// Check if a key exists.
     fn exists(&self, key: &str) -> bool;
     /// Resolve a key to an absolute filesystem path (for overlay DWG saves).
-    fn resolve_path(&self, key: &str) -> Option<String> { let _ = key; None }
+    fn resolve_path(&self, key: &str) -> Option<String> {
+        let _ = key;
+        None
+    }
 }
 
 // ── SingleFileStore ─────────────────────────────────────────────────
@@ -28,7 +31,8 @@ pub struct SingleFileStore {
 
 impl SingleFileStore {
     pub fn new(path: PathBuf) -> Self {
-        let key = path.file_name()
+        let key = path
+            .file_name()
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
@@ -49,8 +53,7 @@ impl DocumentStore for SingleFileStore {
         if key != self.key {
             anyhow::bail!("key '{}' not found (only '{}' available)", key, self.key);
         }
-        std::fs::read(&self.path)
-            .with_context(|| format!("reading {}", self.path.display()))
+        std::fs::read(&self.path).with_context(|| format!("reading {}", self.path.display()))
     }
 
     fn exists(&self, key: &str) -> bool {
@@ -59,8 +62,13 @@ impl DocumentStore for SingleFileStore {
 
     fn resolve_path(&self, key: &str) -> Option<String> {
         if key == self.key {
-            self.path.canonicalize().ok().map(|p| p.to_string_lossy().to_string())
-        } else { None }
+            self.path
+                .canonicalize()
+                .ok()
+                .map(|p| p.to_string_lossy().to_string())
+        } else {
+            None
+        }
     }
 }
 
@@ -87,34 +95,44 @@ impl DocumentStore for FolderStore {
     }
 
     fn load(&self, key: &str) -> Result<Vec<u8>> {
-        let file_path = self.root.join(key.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let file_path = self
+            .root
+            .join(key.replace('/', std::path::MAIN_SEPARATOR_STR));
         if !file_path.starts_with(&self.root) {
             anyhow::bail!("path traversal rejected: '{}'", key);
         }
-        std::fs::read(&file_path)
-            .with_context(|| format!("reading {}", file_path.display()))
+        std::fs::read(&file_path).with_context(|| format!("reading {}", file_path.display()))
     }
 
     fn exists(&self, key: &str) -> bool {
-        let file_path = self.root.join(key.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let file_path = self
+            .root
+            .join(key.replace('/', std::path::MAIN_SEPARATOR_STR));
         if !file_path.starts_with(&self.root) || !file_path.is_file() {
             return false;
         }
-        file_path.extension()
+        file_path
+            .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("dwg"))
     }
 
     fn resolve_path(&self, key: &str) -> Option<String> {
-        let file_path = self.root.join(key.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let file_path = self
+            .root
+            .join(key.replace('/', std::path::MAIN_SEPARATOR_STR));
         if file_path.starts_with(&self.root) && file_path.is_file() {
-            file_path.canonicalize().ok().map(|p| p.to_string_lossy().to_string())
-        } else { None }
+            file_path
+                .canonicalize()
+                .ok()
+                .map(|p| p.to_string_lossy().to_string())
+        } else {
+            None
+        }
     }
 }
 
 fn collect_dwg_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
-    let entries = std::fs::read_dir(dir)
-        .with_context(|| format!("listing {}", dir.display()))?;
+    let entries = std::fs::read_dir(dir).with_context(|| format!("listing {}", dir.display()))?;
     for entry in entries {
         let entry = entry?;
         let ft = entry.file_type()?;
@@ -124,7 +142,8 @@ fn collect_dwg_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<(
         } else if ft.is_file() {
             if let Some(ext) = path.extension() {
                 if ext.eq_ignore_ascii_case("dwg") {
-                    let rel = path.strip_prefix(root)
+                    let rel = path
+                        .strip_prefix(root)
                         .unwrap_or(&path)
                         .to_string_lossy()
                         .replace('\\', "/");

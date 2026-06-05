@@ -13,11 +13,7 @@ export function ExamplesBrowser({ onSelect }: Props) {
           className="example-card"
           onClick={() => onSelect(ex.id)}
         >
-          <img
-            src={examplePngUrl(ex.id)}
-            alt={ex.title}
-            loading="lazy"
-          />
+          <img src={examplePngUrl(ex.id)} alt={ex.title} loading="lazy" />
           <div className="example-card-title">{ex.title}</div>
           <div className="example-card-desc">{ex.desc}</div>
         </button>

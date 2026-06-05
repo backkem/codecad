@@ -22,7 +22,9 @@ pub fn lerp(a: Point, b: Point, t: f64) -> Point {
 /// Point at a given distance along the segment from a to b.
 pub fn along(a: Point, b: Point, dist: f64) -> Point {
     let len = distance(a, b);
-    if len < 1e-12 { return a; }
+    if len < 1e-12 {
+        return a;
+    }
     lerp(a, b, dist / len)
 }
 
@@ -38,7 +40,9 @@ pub fn normal(a: Point, b: Point) -> (f64, f64) {
     let dx = b.x - a.x;
     let dy = b.y - a.y;
     let len = (dx * dx + dy * dy).sqrt();
-    if len < 1e-12 { return (0.0, 0.0); }
+    if len < 1e-12 {
+        return (0.0, 0.0);
+    }
     (-dy / len, dx / len)
 }
 
@@ -47,7 +51,9 @@ pub fn project_onto(p: Point, a: Point, b: Point) -> Point {
     let dx = b.x - a.x;
     let dy = b.y - a.y;
     let len2 = dx * dx + dy * dy;
-    if len2 < 1e-24 { return a; }
+    if len2 < 1e-24 {
+        return a;
+    }
     let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
     Point::new(a.x + t * dx, a.y + t * dy)
 }
@@ -57,7 +63,9 @@ pub fn distance_to_segment(p: Point, a: Point, b: Point) -> f64 {
     let dx = b.x - a.x;
     let dy = b.y - a.y;
     let len2 = dx * dx + dy * dy;
-    if len2 < 1e-24 { return distance(p, a); }
+    if len2 < 1e-24 {
+        return distance(p, a);
+    }
     let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
     let t = t.clamp(0.0, 1.0);
     let proj = Point::new(a.x + t * dx, a.y + t * dy);
@@ -71,16 +79,16 @@ pub fn intersection(a0: Point, a1: Point, b0: Point, b1: Point) -> Option<Point>
     let d2x = b1.x - b0.x;
     let d2y = b1.y - b0.y;
     let denom = d1x * d2y - d1y * d2x;
-    if denom.abs() < 1e-12 { return None; }
+    if denom.abs() < 1e-12 {
+        return None;
+    }
     let t = ((b0.x - a0.x) * d2y - (b0.y - a0.y) * d2x) / denom;
     Some(Point::new(a0.x + t * d1x, a0.y + t * d1y))
 }
 
 /// Intersection of an infinite line (through a, b) with a circle (center, radius).
 /// Returns 0, 1, or 2 intersection points.
-pub fn line_circle_intersection(
-    a: Point, b: Point, center: Point, radius: f64,
-) -> Vec<Point> {
+pub fn line_circle_intersection(a: Point, b: Point, center: Point, radius: f64) -> Vec<Point> {
     let dx = b.x - a.x;
     let dy = b.y - a.y;
     let fx = a.x - center.x;
@@ -91,7 +99,9 @@ pub fn line_circle_intersection(
     let c_coeff = fx * fx + fy * fy - radius * radius;
 
     let disc = b_coeff * b_coeff - 4.0 * a_coeff * c_coeff;
-    if disc < -1e-12 { return Vec::new(); }
+    if disc < -1e-12 {
+        return Vec::new();
+    }
     let disc = disc.max(0.0);
 
     if disc.abs() < 1e-12 {
@@ -109,13 +119,17 @@ pub fn line_circle_intersection(
 }
 
 /// Intersection of two circles. Returns 0, 1, or 2 intersection points.
-pub fn circle_circle_intersection(
-    c1: Point, r1: f64, c2: Point, r2: f64,
-) -> Vec<Point> {
+pub fn circle_circle_intersection(c1: Point, r1: f64, c2: Point, r2: f64) -> Vec<Point> {
     let d = distance(c1, c2);
-    if d > r1 + r2 + 1e-12 { return Vec::new(); }       // too far apart
-    if d < (r1 - r2).abs() - 1e-12 { return Vec::new(); } // one inside the other
-    if d < 1e-12 { return Vec::new(); }                    // concentric
+    if d > r1 + r2 + 1e-12 {
+        return Vec::new();
+    } // too far apart
+    if d < (r1 - r2).abs() - 1e-12 {
+        return Vec::new();
+    } // one inside the other
+    if d < 1e-12 {
+        return Vec::new();
+    } // concentric
 
     let a = (r1 * r1 - r2 * r2 + d * d) / (2.0 * d);
     let h2 = r1 * r1 - a * a;
@@ -132,10 +146,7 @@ pub fn circle_circle_intersection(
         // Two intersection points, offset perpendicular to the center-center line
         let ox = h * (c2.y - c1.y) / d;
         let oy = h * (c2.x - c1.x) / d;
-        vec![
-            Point::new(px + ox, py - oy),
-            Point::new(px - ox, py + oy),
-        ]
+        vec![Point::new(px + ox, py - oy), Point::new(px - ox, py + oy)]
     }
 }
 
@@ -145,11 +156,10 @@ pub fn project_onto_circle(p: Point, center: Point, radius: f64) -> Point {
     let dx = p.x - center.x;
     let dy = p.y - center.y;
     let len = (dx * dx + dy * dy).sqrt();
-    if len < 1e-12 { return Point::new(center.x + radius, center.y); }
-    Point::new(
-        center.x + radius * dx / len,
-        center.y + radius * dy / len,
-    )
+    if len < 1e-12 {
+        return Point::new(center.x + radius, center.y);
+    }
+    Point::new(center.x + radius * dx / len, center.y + radius * dy / len)
 }
 
 /// Compute the angle (in degrees) of a point relative to a circle center.
@@ -162,7 +172,9 @@ pub fn angle_of(p: Point, center: Point) -> f64 {
 /// Uses the ray casting algorithm.
 pub fn point_in_polygon(p: Point, polygon: &[Point]) -> bool {
     let n = polygon.len();
-    if n < 3 { return false; }
+    if n < 3 {
+        return false;
+    }
     let mut inside = false;
     let mut j = n - 1;
     for i in 0..n {
@@ -180,7 +192,9 @@ pub fn point_in_polygon(p: Point, polygon: &[Point]) -> bool {
 
 /// Centroid (arithmetic mean) of polygon vertices.
 pub fn centroid(polygon: &[Point]) -> Point {
-    if polygon.is_empty() { return Point::ZERO; }
+    if polygon.is_empty() {
+        return Point::ZERO;
+    }
     let n = polygon.len() as f64;
     let sx: f64 = polygon.iter().map(|p| p.x).sum();
     let sy: f64 = polygon.iter().map(|p| p.y).sum();
@@ -216,7 +230,9 @@ pub fn rotate_point(p: Point, degrees: f64, center: Point) -> Point {
 /// Signed area of a polygon (positive if CCW, negative if CW).
 pub fn signed_area(polygon: &[Point]) -> f64 {
     let n = polygon.len();
-    if n < 3 { return 0.0; }
+    if n < 3 {
+        return 0.0;
+    }
     let mut sum = 0.0;
     for i in 0..n {
         let j = (i + 1) % n;
@@ -235,7 +251,9 @@ pub fn area(polygon: &[Point]) -> f64 {
 mod tests {
     use super::*;
 
-    fn pt(x: f64, y: f64) -> Point { Point::new(x, y) }
+    fn pt(x: f64, y: f64) -> Point {
+        Point::new(x, y)
+    }
 
     #[test]
     fn test_distance() {

@@ -1,7 +1,6 @@
 ///! Visual test: call the ACTUAL generate_dwg_hatch_fill and dump as SVG.
 ///! Run: cargo test -p cadview-core --test herringbone_visual -- --nocapture
 ///! Then open tests/herringbone_output.svg in a browser.
-
 use cadview_core::*;
 use kurbo::Point;
 
@@ -20,13 +19,13 @@ fn herringbone_svg() {
         description: String::new(),
         lines: vec![
             acadrust::entities::HatchPatternLine {
-                angle: 0.7854,  // 45°
+                angle: 0.7854, // 45°
                 base_point: acadrust::types::Vector2::new(0.0, 0.0),
                 offset: acadrust::types::Vector2::new(0.0, 265.2),
                 dash_lengths: vec![937.5, -562.5],
             },
             acadrust::entities::HatchPatternLine {
-                angle: 2.3562,  // 135°
+                angle: 2.3562, // 135°
                 base_point: acadrust::types::Vector2::new(0.0, 0.0),
                 offset: acadrust::types::Vector2::new(0.0, 265.2),
                 dash_lengths: vec![750.0, -562.5, 187.5, 0.0],
@@ -61,8 +60,15 @@ fn herringbone_svg() {
             };
 
             // Check out of bounds
-            if l.p0.x < -1.0 || l.p0.x > 3001.0 || l.p0.y < -1.0 || l.p0.y > 3001.0 ||
-               l.p1.x < -1.0 || l.p1.x > 3001.0 || l.p1.y < -1.0 || l.p1.y > 3001.0 {
+            if l.p0.x < -1.0
+                || l.p0.x > 3001.0
+                || l.p0.y < -1.0
+                || l.p0.y > 3001.0
+                || l.p1.x < -1.0
+                || l.p1.x > 3001.0
+                || l.p1.y < -1.0
+                || l.p1.y > 3001.0
+            {
                 oob += 1;
             }
 
@@ -76,7 +82,12 @@ fn herringbone_svg() {
     svg.push_str("</svg>");
     std::fs::write("tests/herringbone_output.svg", &svg).unwrap();
 
-    println!("Generated {} shapes ({} red/45°, {} blue/135°)", shapes.len(), count_45, count_135);
+    println!(
+        "Generated {} shapes ({} red/45°, {} blue/135°)",
+        shapes.len(),
+        count_45,
+        count_135
+    );
     println!("Out of bounds: {oob}");
     println!("Wrote tests/herringbone_output.svg");
 

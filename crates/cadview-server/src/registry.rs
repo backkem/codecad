@@ -4,9 +4,9 @@
 //! channel. Lazy-loads from the DocumentStore on first access.
 
 use crate::store::DocumentStore;
+use anyhow::{Context, Result};
 use cadview_core::sync::SyncDoc;
 use cadview_core::Document;
-use anyhow::{Context, Result};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::time::Instant;
@@ -53,7 +53,9 @@ impl DocumentRegistry {
     pub fn get_or_load(&mut self, key: &str) -> Result<&mut DocumentSlot> {
         if !self.slots.contains_key(key) {
             let doc = if self.store.exists(key) {
-                let bytes = self.store.load(key)
+                let bytes = self
+                    .store
+                    .load(key)
                     .with_context(|| format!("loading document '{}'", key))?;
                 let doc = cadview_core::load_dwg_bytes(&bytes)
                     .with_context(|| format!("parsing DWG '{}'", key))?;
@@ -77,14 +79,17 @@ impl DocumentRegistry {
                 None
             };
 
-            self.slots.insert(key.to_string(), DocumentSlot {
-                document: doc,
-                sync_doc,
-                update_tx,
-                client_count: 0,
-                last_accessed: Instant::now(),
-                source_dwg_path,
-            });
+            self.slots.insert(
+                key.to_string(),
+                DocumentSlot {
+                    document: doc,
+                    sync_doc,
+                    update_tx,
+                    client_count: 0,
+                    last_accessed: Instant::now(),
+                    source_dwg_path,
+                },
+            );
         }
 
         let slot = self.slots.get_mut(key).unwrap();
@@ -103,44 +108,54 @@ impl DocumentRegistry {
     }
 
     /// Insert a pre-loaded document (e.g. from CLI arg).
-    pub fn insert(&mut self, key: String, doc: Document, source_dwg_path: Option<String>) -> &mut DocumentSlot {
+    pub fn insert(
+        &mut self,
+        key: String,
+        doc: Document,
+        source_dwg_path: Option<String>,
+    ) -> &mut DocumentSlot {
         let client_id = self.next_server_client_id;
         self.next_server_client_id += 1;
         let sync_doc = SyncDoc::new(client_id);
         sync_doc.populate_from_document(&doc);
         let (update_tx, _) = broadcast::channel(64);
 
-        self.slots.insert(key.clone(), DocumentSlot {
-            document: doc,
-            sync_doc,
-            update_tx,
-            client_count: 0,
-            last_accessed: Instant::now(),
-            source_dwg_path,
-        });
+        self.slots.insert(
+            key.clone(),
+            DocumentSlot {
+                document: doc,
+                sync_doc,
+                update_tx,
+                client_count: 0,
+                last_accessed: Instant::now(),
+                source_dwg_path,
+            },
+        );
         self.slots.get_mut(&key).unwrap()
     }
 
     /// List all documents from the store, enriched with loaded status.
     pub fn list_available(&self) -> Vec<DocumentInfo> {
         let keys = self.store.list().unwrap_or_default();
-        keys.iter().map(|key| {
-            let filename = key.rsplit('/').next().unwrap_or(key).to_string();
-            let prefix = if let Some(pos) = key.rfind('/') {
-                key[..=pos].to_string()
-            } else {
-                String::new()
-            };
-            let slot = self.slots.get(key);
-            DocumentInfo {
-                id: key.clone(),
-                filename,
-                prefix,
-                loaded: slot.is_some(),
-                entity_count: slot.map(|s| s.document.entities.len()),
-                layer_count: slot.map(|s| s.document.layers.len()),
-            }
-        }).collect()
+        keys.iter()
+            .map(|key| {
+                let filename = key.rsplit('/').next().unwrap_or(key).to_string();
+                let prefix = if let Some(pos) = key.rfind('/') {
+                    key[..=pos].to_string()
+                } else {
+                    String::new()
+                };
+                let slot = self.slots.get(key);
+                DocumentInfo {
+                    id: key.clone(),
+                    filename,
+                    prefix,
+                    loaded: slot.is_some(),
+                    entity_count: slot.map(|s| s.document.entities.len()),
+                    layer_count: slot.map(|s| s.document.layers.len()),
+                }
+            })
+            .collect()
     }
 
     /// Decrement client count for a document.

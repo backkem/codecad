@@ -1,13 +1,15 @@
+use crate::document::*;
+use crate::hatch::generate_dwg_hatch_fill;
+use crate::pdf;
+use crate::tessellate::catmull_rom_to_bezpath;
+use crate::types::*;
+use crate::{
+    fill_edges_bbox, flatten_bezpath_adaptive, flatten_fill_edges, geo, signed_polygon_area,
+};
 use anyhow::{Context, Result};
 use kurbo::{Affine, Circle, Line, Point};
 use std::collections::HashMap;
 use std::f64::consts::PI;
-use crate::types::*;
-use crate::document::*;
-use crate::tessellate::catmull_rom_to_bezpath;
-use crate::hatch::generate_dwg_hatch_fill;
-use crate::pdf;
-use crate::{flatten_bezpath_adaptive, flatten_fill_edges, signed_polygon_area, fill_edges_bbox, geo};
 
 // ── DWG loading ────────────────────────────────────────────────────────
 
@@ -27,7 +29,7 @@ pub(crate) fn aci_to_rgb(index: u8) -> Color {
         30..=39 => Color::rgb(255, 255, (index - 30) * 25),
         40..=49 => Color::rgb(255 - (index - 40) * 12, 255, 0),
         50 | 51 | 53..=59 => Color::rgb(0, 255, (index - 50) * 25),
-        52 => Color::rgb(191, 127, 0),    // brown-ish override for S-COLS
+        52 => Color::rgb(191, 127, 0), // brown-ish override for S-COLS
         60..=69 => Color::rgb(0, 255 - (index - 60) * 12, 255),
         70..=79 => Color::rgb((index - 70) * 25, 0, 255),
         80..=89 => Color::rgb(255, 0, 255 - (index - 80) * 12),
@@ -38,10 +40,9 @@ pub(crate) fn aci_to_rgb(index: u8) -> Color {
 }
 
 pub fn load_dwg(path: &str) -> Result<Document> {
-    let mut reader = acadrust::DwgReader::from_file(path)
-        .with_context(|| format!("opening {path}"))?;
-    let cad = reader.read()
-        .with_context(|| format!("parsing {path}"))?;
+    let mut reader =
+        acadrust::DwgReader::from_file(path).with_context(|| format!("opening {path}"))?;
+    let cad = reader.read().with_context(|| format!("parsing {path}"))?;
     build_document(cad)
 }
 
@@ -63,14 +64,14 @@ pub fn export_pdf_bytes(doc: &Document, opts: &pdf::PdfOptions) -> Vec<u8> {
 /// Export a Document as DWG bytes (no filesystem access needed).
 pub fn export_dwg_bytes(doc: &Document) -> Result<Vec<u8>> {
     let cad = build_cad_document(doc)?;
-    acadrust::DwgWriter::write_to_vec(&cad)
-        .with_context(|| "writing DWG to bytes")
+    acadrust::DwgWriter::write_to_vec(&cad).with_context(|| "writing DWG to bytes")
 }
 
 pub fn save_dwg(doc: &Document, path: &str) -> Result<()> {
     let cad = build_cad_document(doc)?;
     if path.ends_with(".dxf") {
-        acadrust::DxfWriter::new(&cad).write_to_file(path)
+        acadrust::DxfWriter::new(&cad)
+            .write_to_file(path)
             .with_context(|| format!("writing DXF to {path}"))
     } else {
         acadrust::DwgWriter::write_to_file(path, &cad)
@@ -83,9 +84,8 @@ fn build_cad_document(doc: &Document) -> Result<acadrust::document::CadDocument>
     use acadrust::tables::TableEntry;
     use acadrust::types::vector::Vector3;
 
-    let mut cad = acadrust::document::CadDocument::with_version(
-        acadrust::types::DxfVersion::AC1015,
-    );
+    let mut cad =
+        acadrust::document::CadDocument::with_version(acadrust::types::DxfVersion::AC1015);
 
     // ── 0. Header fixes for AutoCAD compatibility ───────────────────
     // Set current layer to "0" (AutoCAD rejects null current_layer_handle)
@@ -94,12 +94,14 @@ fn build_cad_document(doc: &Document) -> Result<acadrust::document::CadDocument>
     }
     // Units: millimeters / metric
     cad.header.insertion_units = 4; // 4 = mm
-    cad.header.measurement = 1;    // 1 = metric
-    // Model space limits (reasonable default for architectural drawings in mm)
+    cad.header.measurement = 1; // 1 = metric
+                                // Model space limits (reasonable default for architectural drawings in mm)
     cad.header.model_space_limits_min = acadrust::types::vector::Vector2::new(0.0, 0.0);
     cad.header.model_space_limits_max = acadrust::types::vector::Vector2::new(30000.0, 15000.0);
     for layer in &doc.layers {
-        if layer.name == "0" { continue; } // already exists
+        if layer.name == "0" {
+            continue;
+        } // already exists
         let mut al = acadrust::tables::Layer::new(&layer.name);
         al.color = to_acadrust_color(&layer.color);
         al.set_handle(cad.allocate_handle());
@@ -128,8 +130,14 @@ fn build_cad_document(doc: &Document) -> Result<acadrust::document::CadDocument>
             } else {
                 shape.clone()
             };
-            let layer = if shape_layer.is_empty() { &def.default_layer } else { shape_layer };
-            if let Some(mut et) = shape_to_entity_type(&translated, layer, to_acadrust_color(shape_color)) {
+            let layer = if shape_layer.is_empty() {
+                &def.default_layer
+            } else {
+                shape_layer
+            };
+            if let Some(mut et) =
+                shape_to_entity_type(&translated, layer, to_acadrust_color(shape_color))
+            {
                 et.common_mut().owner_handle = br_handle;
                 let _ = cad.add_entity(et);
             }
@@ -139,7 +147,13 @@ fn build_cad_document(doc: &Document) -> Result<acadrust::document::CadDocument>
     // ── 3. Write model-space entities ───────────────────────────────
     for ent in &doc.entities {
         match &ent.shape {
-            Shape::BlockInsert { block_name, position, rotation, x_scale, y_scale } => {
+            Shape::BlockInsert {
+                block_name,
+                position,
+                rotation,
+                x_scale,
+                y_scale,
+            } => {
                 let mut ins = ae::Insert::new(
                     block_name.as_str(),
                     Vector3::new(position.x, position.y, 0.0),
@@ -152,7 +166,9 @@ fn build_cad_document(doc: &Document) -> Result<acadrust::document::CadDocument>
                 cad.add_entity(ae::EntityType::Insert(ins))?;
             }
             shape => {
-                if let Some(et) = shape_to_entity_type(shape, &ent.layer, to_acadrust_color(&ent.color)) {
+                if let Some(et) =
+                    shape_to_entity_type(shape, &ent.layer, to_acadrust_color(&ent.color))
+                {
                     cad.add_entity(et)?;
                 }
             }
@@ -163,30 +179,102 @@ fn build_cad_document(doc: &Document) -> Result<acadrust::document::CadDocument>
     let (mut xmin, mut ymin) = (f64::MAX, f64::MAX);
     let (mut xmax, mut ymax) = (f64::MIN, f64::MIN);
     let mut extend = |x: f64, y: f64| {
-        if x < xmin { xmin = x; }
-        if y < ymin { ymin = y; }
-        if x > xmax { xmax = x; }
-        if y > ymax { ymax = y; }
+        if x < xmin {
+            xmin = x;
+        }
+        if y < ymin {
+            ymin = y;
+        }
+        if x > xmax {
+            xmax = x;
+        }
+        if y > ymax {
+            ymax = y;
+        }
     };
     for ent in &doc.entities {
         match &ent.shape {
-            Shape::Line(l) => { extend(l.p0.x, l.p0.y); extend(l.p1.x, l.p1.y); }
-            Shape::Circle(c) => { extend(c.center.x - c.radius, c.center.y - c.radius); extend(c.center.x + c.radius, c.center.y + c.radius); }
-            Shape::Arc { center, radius, .. } => { extend(center.x - radius, center.y - radius); extend(center.x + radius, center.y + radius); }
-            Shape::Polyline { points, .. } => { for p in points { extend(p.x, p.y); } }
-            Shape::LwPolyline { vertices, .. } => { for v in vertices { extend(v.point.x, v.point.y); } }
-            Shape::Ellipse { center, major_axis, .. } => { let r = (major_axis.0.powi(2) + major_axis.1.powi(2)).sqrt(); extend(center.x - r, center.y - r); extend(center.x + r, center.y + r); }
-            Shape::Spline { control_points, .. } => { for p in control_points { extend(p.x, p.y); } }
-            Shape::Text { position, .. } | Shape::MText { position, .. } => { extend(position.x, position.y); }
-            Shape::SolidFill { boundary, .. } => { for edge in boundary { match edge { FillEdge::LineTo(p) => extend(p.x, p.y), FillEdge::ArcTo { center, radius, .. } => { extend(center.x - radius, center.y - radius); extend(center.x + radius, center.y + radius); } _ => {} } } }
-            Shape::BlockInsert { block_name, position, x_scale, y_scale, .. } => {
+            Shape::Line(l) => {
+                extend(l.p0.x, l.p0.y);
+                extend(l.p1.x, l.p1.y);
+            }
+            Shape::Circle(c) => {
+                extend(c.center.x - c.radius, c.center.y - c.radius);
+                extend(c.center.x + c.radius, c.center.y + c.radius);
+            }
+            Shape::Arc { center, radius, .. } => {
+                extend(center.x - radius, center.y - radius);
+                extend(center.x + radius, center.y + radius);
+            }
+            Shape::Polyline { points, .. } => {
+                for p in points {
+                    extend(p.x, p.y);
+                }
+            }
+            Shape::LwPolyline { vertices, .. } => {
+                for v in vertices {
+                    extend(v.point.x, v.point.y);
+                }
+            }
+            Shape::Ellipse {
+                center, major_axis, ..
+            } => {
+                let r = (major_axis.0.powi(2) + major_axis.1.powi(2)).sqrt();
+                extend(center.x - r, center.y - r);
+                extend(center.x + r, center.y + r);
+            }
+            Shape::Spline { control_points, .. } => {
+                for p in control_points {
+                    extend(p.x, p.y);
+                }
+            }
+            Shape::Text { position, .. } | Shape::MText { position, .. } => {
+                extend(position.x, position.y);
+            }
+            Shape::SolidFill { boundary, .. } => {
+                for edge in boundary {
+                    match edge {
+                        FillEdge::LineTo(p) => extend(p.x, p.y),
+                        FillEdge::ArcTo { center, radius, .. } => {
+                            extend(center.x - radius, center.y - radius);
+                            extend(center.x + radius, center.y + radius);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Shape::BlockInsert {
+                block_name,
+                position,
+                x_scale,
+                y_scale,
+                ..
+            } => {
                 // Include the insert point, and expand by block bounds if known
                 extend(position.x, position.y);
                 if let Some(def) = doc.blocks.get(block_name) {
                     for (shape, _, _) in &def.shapes {
                         match shape {
-                            Shape::Line(l) => { extend(position.x + l.p0.x * x_scale, position.y + l.p0.y * y_scale); extend(position.x + l.p1.x * x_scale, position.y + l.p1.y * y_scale); }
-                            Shape::Circle(c) => { extend(position.x + (c.center.x - c.radius) * x_scale, position.y + (c.center.y - c.radius) * y_scale); extend(position.x + (c.center.x + c.radius) * x_scale, position.y + (c.center.y + c.radius) * y_scale); }
+                            Shape::Line(l) => {
+                                extend(
+                                    position.x + l.p0.x * x_scale,
+                                    position.y + l.p0.y * y_scale,
+                                );
+                                extend(
+                                    position.x + l.p1.x * x_scale,
+                                    position.y + l.p1.y * y_scale,
+                                );
+                            }
+                            Shape::Circle(c) => {
+                                extend(
+                                    position.x + (c.center.x - c.radius) * x_scale,
+                                    position.y + (c.center.y - c.radius) * y_scale,
+                                );
+                                extend(
+                                    position.x + (c.center.x + c.radius) * x_scale,
+                                    position.y + (c.center.y + c.radius) * y_scale,
+                                );
+                            }
                             _ => {} // approximate: insert point is sufficient for most cases
                         }
                     }
@@ -226,13 +314,19 @@ pub fn save_dwg_overlay(
 
     // Determine which of our entities are overlay entities (by layer prefix)
     let is_overlay = |layer: &str| -> bool {
-        overlay_layer_prefixes.iter().any(|pfx| layer.starts_with(pfx))
+        overlay_layer_prefixes
+            .iter()
+            .any(|pfx| layer.starts_with(pfx))
     };
 
     // Add overlay layers that don't exist yet
     for layer in &doc.layers {
-        if !is_overlay(&layer.name) { continue; }
-        if cad.layers.get(&layer.name).is_some() { continue; }
+        if !is_overlay(&layer.name) {
+            continue;
+        }
+        if cad.layers.get(&layer.name).is_some() {
+            continue;
+        }
         let mut al = acadrust::tables::Layer::new(&layer.name);
         al.color = to_acadrust_color(&layer.color);
         al.set_handle(cad.allocate_handle());
@@ -243,11 +337,17 @@ pub fn save_dwg_overlay(
     for (name, def) in &doc.blocks {
         // Only include blocks used by overlay entities
         let block_used = doc.entities.iter().any(|e| {
-            if !is_overlay(&e.layer) { return false; }
+            if !is_overlay(&e.layer) {
+                return false;
+            }
             matches!(&e.shape, Shape::BlockInsert { block_name, .. } if block_name == name)
         });
-        if !block_used { continue; }
-        if cad.block_records.get(name).is_some() { continue; }
+        if !block_used {
+            continue;
+        }
+        if cad.block_records.get(name).is_some() {
+            continue;
+        }
 
         let mut br = acadrust::tables::BlockRecord::new(name);
         let br_handle = cad.allocate_handle();
@@ -257,8 +357,13 @@ pub fn save_dwg_overlay(
         let _ = cad.block_records.add(br);
 
         for (shape, shape_layer, shape_color) in &def.shapes {
-            let layer = if shape_layer.is_empty() { &def.default_layer } else { shape_layer };
-            if let Some(mut et) = shape_to_entity_type(shape, layer, to_acadrust_color(shape_color)) {
+            let layer = if shape_layer.is_empty() {
+                &def.default_layer
+            } else {
+                shape_layer
+            };
+            if let Some(mut et) = shape_to_entity_type(shape, layer, to_acadrust_color(shape_color))
+            {
                 et.common_mut().owner_handle = br_handle;
                 let _ = cad.add_entity(et);
             }
@@ -267,9 +372,17 @@ pub fn save_dwg_overlay(
 
     // Add overlay entities
     for ent in &doc.entities {
-        if !is_overlay(&ent.layer) { continue; }
+        if !is_overlay(&ent.layer) {
+            continue;
+        }
         match &ent.shape {
-            Shape::BlockInsert { block_name, position, rotation, x_scale, y_scale } => {
+            Shape::BlockInsert {
+                block_name,
+                position,
+                rotation,
+                x_scale,
+                y_scale,
+            } => {
                 let mut ins = ae::Insert::new(
                     block_name.as_str(),
                     Vector3::new(position.x, position.y, 0.0),
@@ -282,7 +395,9 @@ pub fn save_dwg_overlay(
                 cad.add_entity(ae::EntityType::Insert(ins))?;
             }
             shape => {
-                if let Some(et) = shape_to_entity_type(shape, &ent.layer, to_acadrust_color(&ent.color)) {
+                if let Some(et) =
+                    shape_to_entity_type(shape, &ent.layer, to_acadrust_color(&ent.color))
+                {
                     cad.add_entity(et)?;
                 }
             }
@@ -311,13 +426,26 @@ pub(crate) fn shape_to_entity_type(
             ae::EntityType::Line(e)
         }
         Shape::Circle(circle) => {
-            let mut e = ae::Circle::from_center_radius(Vector3::new(circle.center.x, circle.center.y, 0.0), circle.radius);
+            let mut e = ae::Circle::from_center_radius(
+                Vector3::new(circle.center.x, circle.center.y, 0.0),
+                circle.radius,
+            );
             e.set_layer(layer.to_string());
             e.set_color(color);
             ae::EntityType::Circle(e)
         }
-        Shape::Arc { center, radius, start_angle, end_angle } => {
-            let mut e = ae::Arc::from_center_radius_angles(Vector3::new(center.x, center.y, 0.0), *radius, *start_angle, *end_angle);
+        Shape::Arc {
+            center,
+            radius,
+            start_angle,
+            end_angle,
+        } => {
+            let mut e = ae::Arc::from_center_radius_angles(
+                Vector3::new(center.x, center.y, 0.0),
+                *radius,
+                *start_angle,
+                *end_angle,
+            );
             e.set_layer(layer.to_string());
             e.set_color(color);
             ae::EntityType::Arc(e)
@@ -325,29 +453,53 @@ pub(crate) fn shape_to_entity_type(
         Shape::Polyline { points, closed } => {
             let pts: Vec<Vector2> = points.iter().map(|p| Vector2::new(p.x, p.y)).collect();
             let mut e = ae::LwPolyline::from_points(pts);
-            if *closed { e.close(); }
+            if *closed {
+                e.close();
+            }
             e.set_layer(layer.to_string());
             e.set_color(color);
             ae::EntityType::LwPolyline(e)
         }
         Shape::LwPolyline { vertices, closed } => {
             let mut e = ae::LwPolyline::new();
-            for v in vertices { e.add_point_with_bulge(Vector2::new(v.point.x, v.point.y), v.bulge); }
-            if *closed { e.close(); }
+            for v in vertices {
+                e.add_point_with_bulge(Vector2::new(v.point.x, v.point.y), v.bulge);
+            }
+            if *closed {
+                e.close();
+            }
             e.set_layer(layer.to_string());
             e.set_color(color);
             ae::EntityType::LwPolyline(e)
         }
-        Shape::Ellipse { center, major_axis, minor_ratio, start_param, end_param } => {
-            let mut e = ae::Ellipse::from_center_axes(Vector3::new(center.x, center.y, 0.0), Vector3::new(major_axis.0, major_axis.1, 0.0), *minor_ratio);
+        Shape::Ellipse {
+            center,
+            major_axis,
+            minor_ratio,
+            start_param,
+            end_param,
+        } => {
+            let mut e = ae::Ellipse::from_center_axes(
+                Vector3::new(center.x, center.y, 0.0),
+                Vector3::new(major_axis.0, major_axis.1, 0.0),
+                *minor_ratio,
+            );
             e.start_parameter = *start_param;
             e.end_parameter = *end_param;
             e.set_layer(layer.to_string());
             e.set_color(color);
             ae::EntityType::Ellipse(e)
         }
-        Shape::Spline { degree, knots, control_points, closed } => {
-            let cps: Vec<Vector3> = control_points.iter().map(|p| Vector3::new(p.x, p.y, 0.0)).collect();
+        Shape::Spline {
+            degree,
+            knots,
+            control_points,
+            closed,
+        } => {
+            let cps: Vec<Vector3> = control_points
+                .iter()
+                .map(|p| Vector3::new(p.x, p.y, 0.0))
+                .collect();
             let mut e = ae::Spline::from_control_points(*degree, cps);
             e.knots = knots.clone();
             e.flags.closed = *closed;
@@ -375,16 +527,28 @@ pub(crate) fn shape_to_entity_type(
             // Write only the first contour as the entity type
             if let Some(contour) = contours.first() {
                 if contour.len() >= 2 {
-                    let pts: Vec<Vector2> = contour.iter().map(|p| Vector2::new(p.x, p.y)).collect();
+                    let pts: Vec<Vector2> =
+                        contour.iter().map(|p| Vector2::new(p.x, p.y)).collect();
                     let mut e = ae::LwPolyline::from_points(pts);
-                    if *closed { e.close(); }
+                    if *closed {
+                        e.close();
+                    }
                     e.set_layer(layer.to_string());
                     e.set_color(color);
                     ae::EntityType::LwPolyline(e)
-                } else { return None; }
-            } else { return None; }
+                } else {
+                    return None;
+                }
+            } else {
+                return None;
+            }
         }
-        Shape::Text { text, position, height, rotation } => {
+        Shape::Text {
+            text,
+            position,
+            height,
+            rotation,
+        } => {
             let mut e = ae::Text::default();
             e.value = text.clone();
             e.insertion_point = Vector3::new(position.x, position.y, 0.0);
@@ -394,7 +558,13 @@ pub(crate) fn shape_to_entity_type(
             e.set_color(color);
             ae::EntityType::Text(e)
         }
-        Shape::MText { text, position, height, rotation, .. } => {
+        Shape::MText {
+            text,
+            position,
+            height,
+            rotation,
+            ..
+        } => {
             let mut e = ae::MText::default();
             e.value = text.clone();
             e.insertion_point = Vector3::new(position.x, position.y, 0.0);
@@ -409,7 +579,6 @@ pub(crate) fn shape_to_entity_type(
     Some(et)
 }
 
-
 // Old write_shape_to_cad removed — replaced by shape_to_entity_type above.
 
 /// Convert FillEdge sequence to acadrust BoundaryPath edges.
@@ -423,9 +592,15 @@ pub(crate) fn fill_edges_to_boundary_path(
     // Derive the start point from the last edge (closed boundary wraps around)
     let mut prev = match edges.last() {
         Some(FillEdge::LineTo(p)) => *p,
-        Some(FillEdge::ArcTo { center, radius, end_angle, .. }) => {
-            Point::new(center.x + radius * end_angle.cos(), center.y + radius * end_angle.sin())
-        }
+        Some(FillEdge::ArcTo {
+            center,
+            radius,
+            end_angle,
+            ..
+        }) => Point::new(
+            center.x + radius * end_angle.cos(),
+            center.y + radius * end_angle.sin(),
+        ),
         _ => Point::ZERO,
     };
     for edge in edges {
@@ -437,9 +612,16 @@ pub(crate) fn fill_edges_to_boundary_path(
                 }));
                 prev = *p;
             }
-            FillEdge::ArcTo { center, radius, start_angle, end_angle } => {
+            FillEdge::ArcTo {
+                center,
+                radius,
+                start_angle,
+                end_angle,
+            } => {
                 let mut sweep = end_angle - start_angle;
-                if sweep < 0.0 { sweep += 2.0 * PI; }
+                if sweep < 0.0 {
+                    sweep += 2.0 * PI;
+                }
                 path.add_edge(ae::BoundaryEdge::CircularArc(ae::CircularArcEdge {
                     center: Vector2::new(center.x, center.y),
                     radius: *radius,
@@ -452,7 +634,13 @@ pub(crate) fn fill_edges_to_boundary_path(
                     center.y + radius * end_angle.sin(),
                 );
             }
-            FillEdge::EllipseArcTo { center, major_axis, minor_ratio, start_param, end_param } => {
+            FillEdge::EllipseArcTo {
+                center,
+                major_axis,
+                minor_ratio,
+                start_param,
+                end_param,
+            } => {
                 path.add_edge(ae::BoundaryEdge::EllipticArc(ae::EllipticArcEdge {
                     center: Vector2::new(center.x, center.y),
                     major_axis_endpoint: Vector2::new(major_axis.0, major_axis.1),
@@ -471,13 +659,18 @@ pub(crate) fn fill_edges_to_boundary_path(
                     center.y + ex * angle.sin() + ey * angle.cos(),
                 );
             }
-            FillEdge::SplineTo { degree, knots, control_points } => {
+            FillEdge::SplineTo {
+                degree,
+                knots,
+                control_points,
+            } => {
                 path.add_edge(ae::BoundaryEdge::Spline(ae::SplineEdge {
                     degree: *degree,
                     rational: false,
                     periodic: false,
                     knots: knots.clone(),
-                    control_points: control_points.iter()
+                    control_points: control_points
+                        .iter()
                         .map(|p| Vector3::new(p.x, p.y, 1.0))
                         .collect(),
                     fit_points: Vec::new(),
@@ -505,20 +698,26 @@ pub(crate) fn to_acadrust_color(c: &Color) -> acadrust::types::Color {
     if c.r == 255 && c.g == 255 && c.b == 255 {
         acadrust::types::Color::ByLayer
     } else {
-        acadrust::types::Color::Rgb { r: c.r, g: c.g, b: c.b }
+        acadrust::types::Color::Rgb {
+            r: c.r,
+            g: c.g,
+            b: c.b,
+        }
     }
 }
 
 // ── DWG read: entity conversion helpers ───────────────────────────────
 
-
-
-
 /// Convert an LwPolyline to abstract FillEdge sequence, preserving
 /// bulge arcs as FillEdge::ArcTo instead of pre-tessellating them.
-pub(crate) fn lwpolyline_to_edges(vertices: &[acadrust::entities::LwVertex], closed: bool) -> Vec<FillEdge> {
+pub(crate) fn lwpolyline_to_edges(
+    vertices: &[acadrust::entities::LwVertex],
+    closed: bool,
+) -> Vec<FillEdge> {
     let n = vertices.len();
-    if n == 0 { return Vec::new(); }
+    if n == 0 {
+        return Vec::new();
+    }
 
     let mut edges = Vec::new();
     let segments = if closed { n } else { n - 1 };
@@ -543,7 +742,10 @@ pub(crate) fn lwpolyline_to_edges(vertices: &[acadrust::entities::LwVertex], clo
             let dx = p1.x - p0.x;
             let dy = p1.y - p0.y;
             let chord = (dx * dx + dy * dy).sqrt();
-            if chord < 1e-12 { edges.push(FillEdge::LineTo(p1)); continue; }
+            if chord < 1e-12 {
+                edges.push(FillEdge::LineTo(p1));
+                continue;
+            }
             let radius = chord / (2.0 * included.sin().abs());
             let sagitta = bulge * chord / 2.0;
             let mx = (p0.x + p1.x) / 2.0;
@@ -571,13 +773,18 @@ pub(crate) fn lwpolyline_to_edges(vertices: &[acadrust::entities::LwVertex], clo
 
 /// Tessellate an ellipse (or elliptic arc) into polyline points.
 pub(crate) fn ellipse_to_points(
-    cx: f64, cy: f64,
-    major_x: f64, major_y: f64,
+    cx: f64,
+    cy: f64,
+    major_x: f64,
+    major_y: f64,
     minor_ratio: f64,
-    start_param: f64, end_param: f64,
+    start_param: f64,
+    end_param: f64,
 ) -> Vec<Point> {
     let major_len = (major_x * major_x + major_y * major_y).sqrt();
-    if major_len < 1e-12 { return Vec::new(); }
+    if major_len < 1e-12 {
+        return Vec::new();
+    }
 
     let rot = major_y.atan2(major_x);
     let cos_r = rot.cos();
@@ -586,7 +793,9 @@ pub(crate) fn ellipse_to_points(
     let b = major_len * minor_ratio;
 
     let mut sweep = end_param - start_param;
-    if sweep <= 0.0 { sweep += 2.0 * PI; }
+    if sweep <= 0.0 {
+        sweep += 2.0 * PI;
+    }
 
     let circumference_approx = PI * (3.0 * (a + b) - ((3.0 * a + b) * (a + 3.0 * b)).sqrt());
     let steps = ((circumference_approx * sweep / (2.0 * PI) / 2.0).ceil() as usize).clamp(16, 128);
@@ -620,7 +829,9 @@ pub(crate) fn spline_to_points(
         let _k = d + 1; // order
         let t_min = knots[d];
         let t_max = knots[n];
-        if (t_max - t_min).abs() < 1e-12 { return Vec::new(); }
+        if (t_max - t_min).abs() < 1e-12 {
+            return Vec::new();
+        }
 
         let steps = (n * 8).clamp(32, 256);
         let mut pts = Vec::with_capacity(steps + 1);
@@ -639,11 +850,19 @@ pub(crate) fn spline_to_points(
     }
 
     // Last resort: connect control points directly
-    control_points.iter().map(|p| Point::new(p.x, p.y)).collect()
+    control_points
+        .iter()
+        .map(|p| Point::new(p.x, p.y))
+        .collect()
 }
 
 /// De Boor's algorithm for B-spline evaluation at parameter t.
-pub(crate) fn de_boor(degree: usize, knots: &[f64], cps: &[acadrust::types::Vector3], t: f64) -> Point {
+pub(crate) fn de_boor(
+    degree: usize,
+    knots: &[f64],
+    cps: &[acadrust::types::Vector3],
+    t: f64,
+) -> Point {
     // Find knot span
     let n = cps.len();
     let mut k = degree;
@@ -668,7 +887,9 @@ pub(crate) fn de_boor(degree: usize, knots: &[f64], cps: &[acadrust::types::Vect
             let left = knots[idx as usize];
             let right = knots[idx as usize + degree + 1 - r];
             let denom = right - left;
-            if denom.abs() < 1e-12 { continue; }
+            if denom.abs() < 1e-12 {
+                continue;
+            }
             let alpha = (t - left) / denom;
             d[j][0] = (1.0 - alpha) * d[j - 1][0] + alpha * d[j][0];
             d[j][1] = (1.0 - alpha) * d[j - 1][1] + alpha * d[j][1];
@@ -692,7 +913,9 @@ pub(crate) fn boundary_path_to_edges(path: &acadrust::entities::BoundaryPath) ->
                 edges.push(FillEdge::LineTo(Point::new(le.end.x, le.end.y)));
             }
             acadrust::entities::BoundaryEdge::Polyline(pe) => {
-                let verts: Vec<acadrust::entities::LwVertex> = pe.vertices.iter()
+                let verts: Vec<acadrust::entities::LwVertex> = pe
+                    .vertices
+                    .iter()
                     .map(|v| acadrust::entities::LwVertex {
                         location: acadrust::types::Vector2::new(v.x, v.y),
                         bulge: v.z,
@@ -726,7 +949,9 @@ pub(crate) fn boundary_path_to_edges(path: &acadrust::entities::BoundaryPath) ->
                 });
             }
             acadrust::entities::BoundaryEdge::Spline(se) => {
-                let cps: Vec<Point> = se.control_points.iter()
+                let cps: Vec<Point> = se
+                    .control_points
+                    .iter()
                     .map(|p| Point::new(p.x, p.y))
                     .collect();
                 if !cps.is_empty() && se.knots.len() > cps.len() {
@@ -737,9 +962,8 @@ pub(crate) fn boundary_path_to_edges(path: &acadrust::entities::BoundaryPath) ->
                     });
                 } else {
                     // Fallback: fit points as polyline
-                    let pts: Vec<Point> = se.fit_points.iter()
-                        .map(|p| Point::new(p.x, p.y))
-                        .collect();
+                    let pts: Vec<Point> =
+                        se.fit_points.iter().map(|p| Point::new(p.x, p.y)).collect();
                     if !pts.is_empty() {
                         edges.push(FillEdge::PolylineTo(pts));
                     }
@@ -777,7 +1001,9 @@ pub(crate) fn hatch_boundary_to_shapes(path: &acadrust::entities::BoundaryPath) 
             }
             acadrust::entities::BoundaryEdge::Polyline(pe) => {
                 // Convert to abstract shapes, preserving bulge arcs
-                let verts: Vec<acadrust::entities::LwVertex> = pe.vertices.iter()
+                let verts: Vec<acadrust::entities::LwVertex> = pe
+                    .vertices
+                    .iter()
                     .map(|v| acadrust::entities::LwVertex {
                         location: acadrust::types::Vector2::new(v.x, v.y),
                         bulge: v.z,
@@ -799,7 +1025,9 @@ pub(crate) fn hatch_boundary_to_shapes(path: &acadrust::entities::BoundaryPath) 
                         let dx = p1.x - p0.x;
                         let dy = p1.y - p0.y;
                         let chord = (dx * dx + dy * dy).sqrt();
-                        if chord < 1e-12 { continue; }
+                        if chord < 1e-12 {
+                            continue;
+                        }
                         let radius = chord / (2.0 * included.sin().abs());
                         let sagitta = bulge * chord / 2.0;
                         let mx = (p0.x + p1.x) / 2.0;
@@ -821,33 +1049,45 @@ pub(crate) fn hatch_boundary_to_shapes(path: &acadrust::entities::BoundaryPath) 
             }
             acadrust::entities::BoundaryEdge::EllipticArc(ea) => {
                 let pts = ellipse_to_points(
-                    ea.center.x, ea.center.y,
-                    ea.major_axis_endpoint.x, ea.major_axis_endpoint.y,
+                    ea.center.x,
+                    ea.center.y,
+                    ea.major_axis_endpoint.x,
+                    ea.major_axis_endpoint.y,
                     ea.minor_axis_ratio,
-                    ea.start_angle, ea.end_angle,
+                    ea.start_angle,
+                    ea.end_angle,
                 );
                 if pts.len() >= 2 {
-                    shapes.push(Shape::Polyline { points: pts, closed: false });
+                    shapes.push(Shape::Polyline {
+                        points: pts,
+                        closed: false,
+                    });
                 }
             }
             acadrust::entities::BoundaryEdge::Spline(se) => {
                 // Convert spline edge control points to Vector3 for reuse
-                let cps: Vec<acadrust::types::Vector3> = se.control_points.iter()
+                let cps: Vec<acadrust::types::Vector3> = se
+                    .control_points
+                    .iter()
                     .map(|p| acadrust::types::Vector3::new(p.x, p.y, p.z))
                     .collect();
-                let fit: Vec<acadrust::types::Vector3> = se.fit_points.iter()
+                let fit: Vec<acadrust::types::Vector3> = se
+                    .fit_points
+                    .iter()
                     .map(|p| acadrust::types::Vector3::new(p.x, p.y, 0.0))
                     .collect();
                 let pts = spline_to_points(se.degree, &se.knots, &cps, &fit, false);
                 if pts.len() >= 2 {
-                    shapes.push(Shape::Polyline { points: pts, closed: false });
+                    shapes.push(Shape::Polyline {
+                        points: pts,
+                        closed: false,
+                    });
                 }
             }
         }
     }
     shapes
 }
-
 
 pub(crate) struct RawEntity {
     owner: acadrust::Handle,
@@ -871,7 +1111,9 @@ pub(crate) struct InsertRef {
 pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
     use acadrust::entities::EntityType;
 
-    let model_space_handle = cad.block_records.iter()
+    let model_space_handle = cad
+        .block_records
+        .iter()
         .find(|br| br.name == "*Model_Space")
         .map(|br| br.handle);
 
@@ -936,17 +1178,26 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
                 let has_bulge = lwp.vertices.iter().any(|v| v.bulge.abs() > 1e-10);
                 let shape = if has_bulge {
                     Shape::LwPolyline {
-                        vertices: lwp.vertices.iter().map(|v| LwVertex {
-                            point: Point::new(v.location.x, v.location.y),
-                            bulge: v.bulge,
-                        }).collect(),
+                        vertices: lwp
+                            .vertices
+                            .iter()
+                            .map(|v| LwVertex {
+                                point: Point::new(v.location.x, v.location.y),
+                                bulge: v.bulge,
+                            })
+                            .collect(),
                         closed: lwp.is_closed,
                     }
                 } else {
-                    let pts: Vec<Point> = lwp.vertices.iter()
+                    let pts: Vec<Point> = lwp
+                        .vertices
+                        .iter()
                         .map(|v| Point::new(v.location.x, v.location.y))
                         .collect();
-                    Shape::Polyline { points: pts, closed: lwp.is_closed }
+                    Shape::Polyline {
+                        points: pts,
+                        closed: lwp.is_closed,
+                    }
                 };
                 raw_entities.push(RawEntity {
                     owner: lwp.common.owner_handle,
@@ -970,7 +1221,9 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
                 });
             }
             EntityType::Spline(spl) => {
-                let cps: Vec<Point> = spl.control_points.iter()
+                let cps: Vec<Point> = spl
+                    .control_points
+                    .iter()
                     .map(|p| Point::new(p.x, p.y))
                     .collect();
                 let shape = if !cps.is_empty() && spl.knots.len() > cps.len() {
@@ -982,7 +1235,9 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
                     }
                 } else {
                     // Fit points only: convert to smooth CurvePath via Catmull-Rom
-                    let fit_pts: Vec<Point> = spl.fit_points.iter()
+                    let fit_pts: Vec<Point> = spl
+                        .fit_points
+                        .iter()
                         .map(|p| Point::new(p.x, p.y))
                         .collect();
                     if fit_pts.len() >= 2 {
@@ -991,7 +1246,10 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
                             closed: spl.flags.closed,
                         }
                     } else {
-                        Shape::Polyline { points: fit_pts, closed: spl.flags.closed }
+                        Shape::Polyline {
+                            points: fit_pts,
+                            closed: spl.flags.closed,
+                        }
                     }
                 };
                 raw_entities.push(RawEntity {
@@ -1010,7 +1268,10 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
                         hatch.pattern.name, hatch.pattern_scale, hatch.pattern_angle,
                         hatch.paths.len(), hatch.pattern.lines.len(),
                     );
-                    if !hatch.pattern.lines.is_empty() && (hatch.common.layer.contains("FLOOR") || hatch.common.layer.contains("WALL")) {
+                    if !hatch.pattern.lines.is_empty()
+                        && (hatch.common.layer.contains("FLOOR")
+                            || hatch.common.layer.contains("WALL"))
+                    {
                         for (i, line) in hatch.pattern.lines.iter().enumerate() {
                             eprintln!(
                                 "  line[{i}] angle={:.4} base=({:.1},{:.1}) offset=({:.1},{:.1}) dashes={:?}",
@@ -1052,15 +1313,16 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
                 //
                 // For solid fills: fill each independent region, cutting holes.
                 // For pattern fills: clip pattern to each region independently.
-                let mut areas: Vec<(usize, f64)> = path_polygons.iter().enumerate()
+                let mut areas: Vec<(usize, f64)> = path_polygons
+                    .iter()
+                    .enumerate()
                     .map(|(i, p)| (i, signed_polygon_area(p).abs()))
                     .collect();
                 areas.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
                 // Skip truly degenerate paths (< 1 mm² area)
-                let valid_paths: Vec<(usize, f64)> = areas.into_iter()
-                    .filter(|(_, a)| *a > 1.0)
-                    .collect();
+                let valid_paths: Vec<(usize, f64)> =
+                    areas.into_iter().filter(|(_, a)| *a > 1.0).collect();
 
                 // For each valid path, check if its centroid is inside any
                 // larger valid path. If so, it's a hole in that path.
@@ -1080,7 +1342,8 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
                 }
 
                 // Group: outer paths (no parent) get their holes
-                let outer_paths: Vec<usize> = valid_paths.iter()
+                let outer_paths: Vec<usize> = valid_paths
+                    .iter()
                     .map(|(i, _)| *i)
                     .filter(|i| parent[*i].is_none())
                     .collect();
@@ -1088,14 +1351,17 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
                 // For each outer path, collect its direct holes (abstract edges)
                 let mut regions: Vec<(Vec<FillEdge>, Vec<Vec<FillEdge>>)> = Vec::new();
                 for &oi in &outer_paths {
-                    let holes: Vec<Vec<FillEdge>> = valid_paths.iter()
+                    let holes: Vec<Vec<FillEdge>> = valid_paths
+                        .iter()
                         .filter(|(i, _)| parent[*i] == Some(oi))
                         .map(|(i, _)| path_edge_lists[*i].clone())
                         .collect();
                     regions.push((path_edge_lists[oi].clone(), holes));
                 }
                 for (i, _) in &valid_paths {
-                    if parent[*i].is_some() && parent[*i].map(|p| parent[p].is_some()).unwrap_or(false) {
+                    if parent[*i].is_some()
+                        && parent[*i].map(|p| parent[p].is_some()).unwrap_or(false)
+                    {
                         regions.push((path_edge_lists[*i].clone(), Vec::new()));
                     }
                 }
@@ -1108,7 +1374,11 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
                     Vec::new()
                 };
                 let _hole_polygons: Vec<Vec<Point>> = if !regions.is_empty() {
-                    regions[0].1.iter().map(|h| flatten_fill_edges(h, 1.0)).collect()
+                    regions[0]
+                        .1
+                        .iter()
+                        .map(|h| flatten_fill_edges(h, 1.0))
+                        .collect()
                 } else {
                     Vec::new()
                 };
@@ -1119,12 +1389,16 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
                 // polygons (before containment classification).
                 if !hatch.is_solid && !hatch.pattern.lines.is_empty() {
                     for poly in &path_polygons {
-                        if poly.len() < 3 { continue; }
+                        if poly.len() < 3 {
+                            continue;
+                        }
                         let (px0, py0, px1, py1) = geo::bounds_of(poly);
                         let pw = px1 - px0;
                         let ph = py1 - py0;
                         // Skip degenerate: must have meaningful area in BOTH dimensions
-                        if pw < 10.0 || ph < 10.0 { continue; }
+                        if pw < 10.0 || ph < 10.0 {
+                            continue;
+                        }
                         let fill_shapes = generate_dwg_hatch_fill(
                             poly,
                             &hatch.pattern,
@@ -1148,11 +1422,15 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
                 let is_dim_bg = hatch.common.layer.contains("DIMENSION");
                 if hatch.is_solid && !is_dim_bg {
                     for (region_boundary, region_holes) in &regions {
-                        if region_boundary.is_empty() { continue; }
+                        if region_boundary.is_empty() {
+                            continue;
+                        }
                         let (bx0, by0, bx1, by1) = fill_edges_bbox(region_boundary, region_holes);
                         let bw = bx1 - bx0;
                         let bh = by1 - by0;
-                        if bw < 10.0 && bh < 10.0 { continue; }
+                        if bw < 10.0 && bh < 10.0 {
+                            continue;
+                        }
                         if region_boundary.len() >= 2 {
                             raw_entities.push(RawEntity {
                                 owner: hatch.common.owner_handle,
@@ -1239,7 +1517,8 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
         if let Some(block_name) = handle_to_block.get(&raw.owner.value()) {
             // Allow named blocks and anonymous dimension blocks (*D*)
             if !block_name.starts_with('*') || block_name.starts_with("*D") {
-                block_entities.entry(block_name.clone())
+                block_entities
+                    .entry(block_name.clone())
                     .or_default()
                     .push(i);
             }
@@ -1266,17 +1545,23 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
 
     // Build block definitions from raw entities
     for (block_name, indices) in &block_entities {
-        let shapes: Vec<(Shape, String, Color)> = indices.iter().map(|&idx| {
-            let raw = &raw_entities[idx];
-            let color = resolve_entity_color(&raw.color, &raw.layer, &layer_colors);
-            (raw.shape.clone(), raw.layer.clone(), color)
-        }).collect();
-        doc.blocks.insert(block_name.clone(), BlockDef {
-            name: block_name.clone(),
-            shapes,
-            insert_point: Point::ZERO,
-            default_layer: "0".to_string(),
-        });
+        let shapes: Vec<(Shape, String, Color)> = indices
+            .iter()
+            .map(|&idx| {
+                let raw = &raw_entities[idx];
+                let color = resolve_entity_color(&raw.color, &raw.layer, &layer_colors);
+                (raw.shape.clone(), raw.layer.clone(), color)
+            })
+            .collect();
+        doc.blocks.insert(
+            block_name.clone(),
+            BlockDef {
+                name: block_name.clone(),
+                shapes,
+                insert_point: Point::ZERO,
+                default_layer: "0".to_string(),
+            },
+        );
     }
 
     // Store block inserts as references (not flattened)
@@ -1312,9 +1597,10 @@ pub(crate) fn resolve_entity_color(
     layer_colors: &HashMap<String, Color>,
 ) -> Color {
     match entity_color {
-        acadrust::Color::ByLayer => {
-            layer_colors.get(layer_name).copied().unwrap_or(Color::WHITE)
-        }
+        acadrust::Color::ByLayer => layer_colors
+            .get(layer_name)
+            .copied()
+            .unwrap_or(Color::WHITE),
         acadrust::Color::ByBlock => Color::WHITE,
         acadrust::Color::Index(i) => aci_to_rgb(*i),
         acadrust::Color::Rgb { r, g, b } => Color::rgb(*r, *g, *b),

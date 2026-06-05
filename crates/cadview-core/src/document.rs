@@ -1,10 +1,10 @@
+use crate::geo;
+use crate::tessellate::mirror_affine;
+use crate::types::*;
 use kurbo::{Affine, Circle, Line, Point};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::f64::consts::PI;
-use crate::types::*;
-use crate::tessellate::mirror_affine;
-use crate::geo;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DrawEntity {
@@ -27,7 +27,7 @@ pub struct Layer {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockDef {
     pub name: String,
-    pub shapes: Vec<(Shape, String, Color)>,  // (shape, layer, color)
+    pub shapes: Vec<(Shape, String, Color)>, // (shape, layer, color)
     pub insert_point: Point,
     pub default_layer: String,
 }
@@ -149,7 +149,11 @@ impl Document {
             max_y = max_y.max(bb.3);
         }
 
-        if min_x <= max_x { Some((min_x, min_y, max_x, max_y)) } else { None }
+        if min_x <= max_x {
+            Some((min_x, min_y, max_x, max_y))
+        } else {
+            None
+        }
     }
 
     pub fn entity(&self, id: EntityId) -> Option<&DrawEntity> {
@@ -162,13 +166,7 @@ impl Document {
 
     // ── Mutations ──────────────────────────────────────────────────
 
-    pub fn add_line(
-        &mut self,
-        p0: Point,
-        p1: Point,
-        layer: &str,
-        color: Color,
-    ) -> EntityId {
+    pub fn add_line(&mut self, p0: Point, p1: Point, layer: &str, color: Color) -> EntityId {
         let id = self.alloc_id();
         self.entities.push(DrawEntity {
             id,
@@ -210,7 +208,12 @@ impl Document {
             id,
             layer: layer.to_string(),
             color,
-            shape: Shape::Arc { center, radius, start_angle, end_angle },
+            shape: Shape::Arc {
+                center,
+                radius,
+                start_angle,
+                end_angle,
+            },
         });
         id
     }
@@ -241,7 +244,9 @@ impl Document {
     }
 
     pub fn move_entity(&mut self, id: EntityId, dx: f64, dy: f64) -> bool {
-        let Some(ent) = self.entity_mut(id) else { return false };
+        let Some(ent) = self.entity_mut(id) else {
+            return false;
+        };
         let xform = Affine::translate((dx, dy));
         ent.shape = ent.shape.transformed(xform);
         true
@@ -263,7 +268,9 @@ impl Document {
 
     /// Rotate an entity around `center` by `angle_deg` degrees (CCW).
     pub fn rotate_entity(&mut self, id: EntityId, center: Point, angle_deg: f64) -> bool {
-        let Some(ent) = self.entity_mut(id) else { return false };
+        let Some(ent) = self.entity_mut(id) else {
+            return false;
+        };
         let angle_rad = angle_deg * PI / 180.0;
         let xform = Affine::translate((center.x, center.y))
             * Affine::rotate(angle_rad)
@@ -274,7 +281,9 @@ impl Document {
 
     /// Mirror an entity across the line from `p1` to `p2`. Mutates in place.
     pub fn mirror_entity(&mut self, id: EntityId, p1: Point, p2: Point) -> bool {
-        let Some(ent) = self.entity_mut(id) else { return false };
+        let Some(ent) = self.entity_mut(id) else {
+            return false;
+        };
         let xform = mirror_affine(p1, p2);
         ent.shape = ent.shape.transformed(xform);
         true
@@ -291,12 +300,7 @@ impl Document {
     ///
     /// Removes the original entity and creates a new shortened one.
     /// Returns the new entity ID, or None if the entity can't be trimmed.
-    pub fn trim_entity(
-        &mut self,
-        id: EntityId,
-        cut_point: Point,
-        keep: &str,
-    ) -> Option<EntityId> {
+    pub fn trim_entity(&mut self, id: EntityId, cut_point: Point, keep: &str) -> Option<EntityId> {
         let ent = self.entity(id)?;
         let layer = ent.layer.clone();
         let color = ent.color;
@@ -307,18 +311,20 @@ impl Document {
                 let p0 = line.p0;
                 let p1 = line.p1;
                 let cut = geo::project_onto(cut_point, p0, p1);
-                let (new_start, new_end) = if keep_start {
-                    (p0, cut)
-                } else {
-                    (cut, p1)
-                };
+                let (new_start, new_end) = if keep_start { (p0, cut) } else { (cut, p1) };
                 if geo::distance(new_start, new_end) < 1e-6 {
                     return None;
                 }
                 self.remove_entity(id);
                 Some(self.add_line(new_start, new_end, &layer, color))
             }
-            Shape::Arc { center, radius, start_angle, end_angle, .. } => {
+            Shape::Arc {
+                center,
+                radius,
+                start_angle,
+                end_angle,
+                ..
+            } => {
                 let center = *center;
                 let radius = *radius;
                 let start_angle = *start_angle;
@@ -328,11 +334,17 @@ impl Document {
 
                 // Normalize cut angle into the arc's sweep
                 let mut cut_rel = cut_ang - start_angle;
-                while cut_rel < 0.0 { cut_rel += 2.0 * PI; }
-                while cut_rel >= 2.0 * PI { cut_rel -= 2.0 * PI; }
+                while cut_rel < 0.0 {
+                    cut_rel += 2.0 * PI;
+                }
+                while cut_rel >= 2.0 * PI {
+                    cut_rel -= 2.0 * PI;
+                }
 
                 let mut sweep = end_angle - start_angle;
-                while sweep <= 0.0 { sweep += 2.0 * PI; }
+                while sweep <= 0.0 {
+                    sweep += 2.0 * PI;
+                }
 
                 let cut_rel = cut_rel.min(sweep);
 
@@ -375,7 +387,10 @@ impl Document {
 
     /// Get a layer's color. Returns white if layer doesn't exist.
     pub fn layer_color(&self, name: &str) -> Color {
-        self.layers.iter().find(|l| l.name == name).map_or(Color::WHITE, |l| l.color)
+        self.layers
+            .iter()
+            .find(|l| l.name == name)
+            .map_or(Color::WHITE, |l| l.color)
     }
 
     // ── Blocks ─────────────────────────────────────────────────────
@@ -411,9 +426,7 @@ impl Document {
             None => return Vec::new(),
         };
 
-        let place_layer = layer_override
-            .unwrap_or(&def.default_layer)
-            .to_string();
+        let place_layer = layer_override.unwrap_or(&def.default_layer).to_string();
 
         self.ensure_layer(&place_layer);
         let color = self.layer_color(&place_layer);
@@ -500,11 +513,24 @@ impl DrawEntity {
             entity_type: String::new(),
             layer: self.layer.clone(),
             color: [self.color.r, self.color.g, self.color.b],
-            bounds: BoundsJson { min: [bb.0, bb.1], max: [bb.2, bb.3] },
-            start: None, end: None, center: None, radius: None,
-            points: None, closed: None, from: None, to: None,
-            block_name: None, rotation: None, children: None,
-            text: None, height: None, edges: None,
+            bounds: BoundsJson {
+                min: [bb.0, bb.1],
+                max: [bb.2, bb.3],
+            },
+            start: None,
+            end: None,
+            center: None,
+            radius: None,
+            points: None,
+            closed: None,
+            from: None,
+            to: None,
+            block_name: None,
+            rotation: None,
+            children: None,
+            text: None,
+            height: None,
+            edges: None,
         };
         match &self.shape {
             Shape::Line(l) => {
@@ -517,7 +543,12 @@ impl DrawEntity {
                 ej.center = Some([c.center.x, c.center.y]);
                 ej.radius = Some(c.radius);
             }
-            Shape::Arc { center, radius, start_angle, end_angle } => {
+            Shape::Arc {
+                center,
+                radius,
+                start_angle,
+                end_angle,
+            } => {
                 ej.entity_type = "arc".into();
                 ej.center = Some([center.x, center.y]);
                 ej.radius = Some(*radius);
@@ -540,19 +571,27 @@ impl DrawEntity {
             Shape::LwPolyline { vertices, closed } => {
                 ej.entity_type = "lwpolyline".into();
                 ej.closed = Some(*closed);
-                ej.edges = Some(serde_json::json!(
-                    vertices.iter().map(|v| {
+                ej.edges = Some(serde_json::json!(vertices
+                    .iter()
+                    .map(|v| {
                         serde_json::json!({"x": v.point.x, "y": v.point.y, "bulge": v.bulge})
-                    }).collect::<Vec<_>>()
-                ));
+                    })
+                    .collect::<Vec<_>>()));
             }
             Shape::SolidFill { boundary, holes } => {
                 ej.entity_type = "solid_fill".into();
                 ej.closed = Some(true);
                 let edge_to_json = |e: &FillEdge| -> serde_json::Value {
                     match e {
-                        FillEdge::LineTo(p) => serde_json::json!({"type": "line", "to": [p.x, p.y]}),
-                        FillEdge::ArcTo { center, radius, start_angle, end_angle } => {
+                        FillEdge::LineTo(p) => {
+                            serde_json::json!({"type": "line", "to": [p.x, p.y]})
+                        }
+                        FillEdge::ArcTo {
+                            center,
+                            radius,
+                            start_angle,
+                            end_angle,
+                        } => {
                             serde_json::json!({
                                 "type": "arc",
                                 "center": [center.x, center.y],
@@ -561,10 +600,20 @@ impl DrawEntity {
                                 "to": end_angle.to_degrees(),
                             })
                         }
-                        FillEdge::EllipseArcTo { center, major_axis, minor_ratio, start_param, end_param } => {
+                        FillEdge::EllipseArcTo {
+                            center,
+                            major_axis,
+                            minor_ratio,
+                            start_param,
+                            end_param,
+                        } => {
                             serde_json::json!({"type": "ellipse_arc", "center": [center.x, center.y], "major_axis": [major_axis.0, major_axis.1], "minor_ratio": minor_ratio, "start": start_param, "end": end_param})
                         }
-                        FillEdge::SplineTo { degree, knots, control_points } => {
+                        FillEdge::SplineTo {
+                            degree,
+                            knots,
+                            control_points,
+                        } => {
                             serde_json::json!({"type": "spline", "degree": degree, "knots": knots, "points": control_points.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>()})
                         }
                         FillEdge::PolylineTo(pts) => {
@@ -573,7 +622,8 @@ impl DrawEntity {
                     }
                 };
                 let boundary_json: Vec<_> = boundary.iter().map(&edge_to_json).collect();
-                let holes_json: Vec<Vec<_>> = holes.iter()
+                let holes_json: Vec<Vec<_>> = holes
+                    .iter()
                     .map(|h| h.iter().map(&edge_to_json).collect())
                     .collect();
                 ej.edges = Some(serde_json::json!({
@@ -594,7 +644,13 @@ impl DrawEntity {
                 }).collect();
                 ej.edges = Some(serde_json::json!(cmds));
             }
-            Shape::Ellipse { center, major_axis, minor_ratio, start_param, end_param } => {
+            Shape::Ellipse {
+                center,
+                major_axis,
+                minor_ratio,
+                start_param,
+                end_param,
+            } => {
                 ej.entity_type = "ellipse".into();
                 ej.center = Some([center.x, center.y]);
                 ej.edges = Some(serde_json::json!({
@@ -604,7 +660,12 @@ impl DrawEntity {
                     "end": end_param,
                 }));
             }
-            Shape::Spline { degree, knots, control_points, closed } => {
+            Shape::Spline {
+                degree,
+                knots,
+                control_points,
+                closed,
+            } => {
                 ej.entity_type = "spline".into();
                 ej.closed = Some(*closed);
                 ej.points = Some(control_points.iter().map(|p| [p.x, p.y]).collect());
@@ -613,13 +674,23 @@ impl DrawEntity {
                     "knots": knots,
                 }));
             }
-            Shape::BlockInsert { block_name, position, rotation, .. } => {
+            Shape::BlockInsert {
+                block_name,
+                position,
+                rotation,
+                ..
+            } => {
                 ej.entity_type = "block_insert".into();
                 ej.block_name = Some(block_name.clone());
                 ej.center = Some([position.x, position.y]);
                 ej.rotation = Some(*rotation);
             }
-            Shape::Text { text, position, height, rotation } => {
+            Shape::Text {
+                text,
+                position,
+                height,
+                rotation,
+            } => {
                 ej.entity_type = "text".into();
                 ej.start = Some([position.x, position.y]);
                 ej.text = Some(text.clone());
@@ -629,7 +700,13 @@ impl DrawEntity {
                     "text": text, "height": height, "rotation": rotation.to_degrees(),
                 }));
             }
-            Shape::MText { plain_text, position, height, rotation, .. } => {
+            Shape::MText {
+                plain_text,
+                position,
+                height,
+                rotation,
+                ..
+            } => {
                 ej.entity_type = "mtext".into();
                 ej.start = Some([position.x, position.y]);
                 ej.text = Some(plain_text.clone());
@@ -667,17 +744,24 @@ fn text_to_curve_entities(
     };
     let mut out = Vec::new();
     for path in &paths {
-        if path.elements().is_empty() { continue; }
+        if path.elements().is_empty() {
+            continue;
+        }
         // Split multi-contour glyph paths into individual subpaths
         for subpath in crate::dispatch::split_subpaths(path) {
-            if subpath.elements().is_empty() { continue; }
+            if subpath.elements().is_empty() {
+                continue;
+            }
             let closed = matches!(subpath.elements().last(), Some(kurbo::PathEl::ClosePath));
             *next_id += 1;
             out.push(DrawEntity {
                 id: EntityId(*next_id),
                 layer: layer.to_string(),
                 color,
-                shape: Shape::CurvePath { path: subpath, closed },
+                shape: Shape::CurvePath {
+                    path: subpath,
+                    closed,
+                },
             });
         }
     }
@@ -701,14 +785,24 @@ pub fn expand_for_render(doc: &Document) -> Vec<DrawEntity> {
 
     for ent in &doc.entities {
         match &ent.shape {
-            Shape::BlockInsert { block_name, position, rotation, x_scale, y_scale } => {
+            Shape::BlockInsert {
+                block_name,
+                position,
+                rotation,
+                x_scale,
+                y_scale,
+            } => {
                 if let Some(def) = doc.blocks.get(block_name) {
                     let xform = Affine::translate((position.x, position.y))
                         * Affine::rotate(*rotation)
                         * Affine::scale_non_uniform(*x_scale, *y_scale)
                         * Affine::translate((-def.insert_point.x, -def.insert_point.y));
                     for (shape, shape_layer, shape_color) in &def.shapes {
-                        let layer = if shape_layer.is_empty() { &ent.layer } else { shape_layer };
+                        let layer = if shape_layer.is_empty() {
+                            &ent.layer
+                        } else {
+                            shape_layer
+                        };
                         let color = if *shape_color == Color::WHITE && ent.color != Color::WHITE {
                             ent.color
                         } else {
@@ -724,14 +818,37 @@ pub fn expand_for_render(doc: &Document) -> Vec<DrawEntity> {
                     }
                 }
             }
-            Shape::Text { text, position, height, rotation } => {
+            Shape::Text {
+                text,
+                position,
+                height,
+                rotation,
+            } => {
                 expanded.extend(text_to_curve_entities(
-                    &ent.layer, ent.color, text, *position, *height, *rotation, &mut next_id,
+                    &ent.layer,
+                    ent.color,
+                    text,
+                    *position,
+                    *height,
+                    *rotation,
+                    &mut next_id,
                 ));
             }
-            Shape::MText { plain_text, position, height, rotation, .. } => {
+            Shape::MText {
+                plain_text,
+                position,
+                height,
+                rotation,
+                ..
+            } => {
                 expanded.extend(text_to_curve_entities(
-                    &ent.layer, ent.color, plain_text, *position, *height, *rotation, &mut next_id,
+                    &ent.layer,
+                    ent.color,
+                    plain_text,
+                    *position,
+                    *height,
+                    *rotation,
+                    &mut next_id,
                 ));
             }
             _ => {}
@@ -742,14 +859,37 @@ pub fn expand_for_render(doc: &Document) -> Vec<DrawEntity> {
     let mut text_curves = Vec::new();
     for ent in expanded.iter() {
         match &ent.shape {
-            Shape::Text { text, position, height, rotation } => {
+            Shape::Text {
+                text,
+                position,
+                height,
+                rotation,
+            } => {
                 text_curves.extend(text_to_curve_entities(
-                    &ent.layer, ent.color, text, *position, *height, *rotation, &mut next_id,
+                    &ent.layer,
+                    ent.color,
+                    text,
+                    *position,
+                    *height,
+                    *rotation,
+                    &mut next_id,
                 ));
             }
-            Shape::MText { plain_text, position, height, rotation, .. } => {
+            Shape::MText {
+                plain_text,
+                position,
+                height,
+                rotation,
+                ..
+            } => {
                 text_curves.extend(text_to_curve_entities(
-                    &ent.layer, ent.color, plain_text, *position, *height, *rotation, &mut next_id,
+                    &ent.layer,
+                    ent.color,
+                    plain_text,
+                    *position,
+                    *height,
+                    *rotation,
+                    &mut next_id,
                 ));
             }
             _ => {}

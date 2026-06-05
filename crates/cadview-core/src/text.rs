@@ -35,15 +35,30 @@ impl skrifa::outline::OutlinePen for KurboPen {
     }
     fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
         self.path.quad_to(
-            Point::new(self.offset_x + cx as f64 * self.scale, self.offset_y + cy as f64 * self.scale),
-            Point::new(self.offset_x + x as f64 * self.scale, self.offset_y + y as f64 * self.scale),
+            Point::new(
+                self.offset_x + cx as f64 * self.scale,
+                self.offset_y + cy as f64 * self.scale,
+            ),
+            Point::new(
+                self.offset_x + x as f64 * self.scale,
+                self.offset_y + y as f64 * self.scale,
+            ),
         );
     }
     fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
         self.path.curve_to(
-            Point::new(self.offset_x + cx0 as f64 * self.scale, self.offset_y + cy0 as f64 * self.scale),
-            Point::new(self.offset_x + cx1 as f64 * self.scale, self.offset_y + cy1 as f64 * self.scale),
-            Point::new(self.offset_x + x as f64 * self.scale, self.offset_y + y as f64 * self.scale),
+            Point::new(
+                self.offset_x + cx0 as f64 * self.scale,
+                self.offset_y + cy0 as f64 * self.scale,
+            ),
+            Point::new(
+                self.offset_x + cx1 as f64 * self.scale,
+                self.offset_y + cy1 as f64 * self.scale,
+            ),
+            Point::new(
+                self.offset_x + x as f64 * self.scale,
+                self.offset_y + y as f64 * self.scale,
+            ),
         );
     }
     fn close(&mut self) {
@@ -62,7 +77,13 @@ pub fn text_to_paths(text: &str, x: f64, y: f64, height: f64) -> Vec<BezPath> {
 }
 
 /// Like `text_to_paths` but with rotation (radians) around the anchor point.
-pub fn text_to_paths_rotated(text: &str, x: f64, y: f64, height: f64, rotation: f64) -> Vec<BezPath> {
+pub fn text_to_paths_rotated(
+    text: &str,
+    x: f64,
+    y: f64,
+    height: f64,
+    rotation: f64,
+) -> Vec<BezPath> {
     let font = FontRef::new(FONT_BYTES).expect("embedded font is valid");
     let outlines = font.outline_glyphs();
 
@@ -147,13 +168,20 @@ mod tests {
         let paths = text_to_paths("Hello", 0.0, 0.0, 10.0);
         assert!(!paths.is_empty(), "should produce glyph paths");
         // H, e, l, l, o = 5 glyphs with outlines
-        assert!(paths.len() >= 4, "expected at least 4 glyph paths, got {}", paths.len());
+        assert!(
+            paths.len() >= 4,
+            "expected at least 4 glyph paths, got {}",
+            paths.len()
+        );
     }
 
     #[test]
     fn width_scales_with_height() {
         let w1 = text_width("ABC", 10.0);
         let w2 = text_width("ABC", 20.0);
-        assert!((w2 / w1 - 2.0).abs() < 0.01, "width should scale linearly with height");
+        assert!(
+            (w2 / w1 - 2.0).abs() < 0.01,
+            "width should scale linearly with height"
+        );
     }
 }

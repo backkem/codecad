@@ -68,7 +68,10 @@ export function DocumentPicker({
 
         <button
           className="doc-picker-item doc-picker-new"
-          onClick={() => { onNewDrawing(); onClose(); }}
+          onClick={() => {
+            onNewDrawing();
+            onClose();
+          }}
         >
           <span className="doc-picker-name">+ New Drawing</span>
           <span className="doc-picker-meta">empty, in-memory</span>
@@ -90,38 +93,53 @@ export function DocumentPicker({
         />
 
         {/* Server documents (when connected) */}
-        {server && loading && <div className="doc-picker-loading">Loading...</div>}
+        {server && loading && (
+          <div className="doc-picker-loading">Loading...</div>
+        )}
         {server && error && <div className="doc-picker-error">{error}</div>}
         {server && !loading && docs.length === 0 && !error && (
           <div className="doc-picker-empty">No .dwg files on server</div>
         )}
-        {server && [...grouped.entries()].map(([prefix, items]) => (
-          <div key={prefix} className="doc-picker-group">
-            {prefix !== "(root)" && (
-              <div className="doc-picker-folder">{prefix}</div>
-            )}
-            {items.map((doc) => {
-              const alreadyOpen = openTabIds.includes(doc.id);
-              return (
-                <button
-                  key={doc.id}
-                  className={`doc-picker-item${alreadyOpen ? " open" : ""}`}
-                  onClick={() => { onSelect(doc.id); onClose(); }}
-                >
-                  <span className="doc-picker-name">{doc.filename}</span>
-                  {doc.entity_count != null && (
-                    <span className="doc-picker-meta">{doc.entity_count} entities</span>
-                  )}
-                  {alreadyOpen && <span className="doc-picker-badge">open</span>}
-                </button>
-              );
-            })}
-          </div>
-        ))}
+        {server &&
+          [...grouped.entries()].map(([prefix, items]) => (
+            <div key={prefix} className="doc-picker-group">
+              {prefix !== "(root)" && (
+                <div className="doc-picker-folder">{prefix}</div>
+              )}
+              {items.map((doc) => {
+                const alreadyOpen = openTabIds.includes(doc.id);
+                return (
+                  <button
+                    key={doc.id}
+                    className={`doc-picker-item${alreadyOpen ? " open" : ""}`}
+                    onClick={() => {
+                      onSelect(doc.id);
+                      onClose();
+                    }}
+                  >
+                    <span className="doc-picker-name">{doc.filename}</span>
+                    {doc.entity_count != null && (
+                      <span className="doc-picker-meta">
+                        {doc.entity_count} entities
+                      </span>
+                    )}
+                    {alreadyOpen && (
+                      <span className="doc-picker-badge">open</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
 
         {/* Examples (always shown) */}
         <div className="doc-picker-section-label">Examples</div>
-        <ExamplesBrowser onSelect={(id) => { onLoadExample(id); onClose(); }} />
+        <ExamplesBrowser
+          onSelect={(id) => {
+            onLoadExample(id);
+            onClose();
+          }}
+        />
       </div>
     </div>
   );

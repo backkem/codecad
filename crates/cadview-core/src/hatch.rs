@@ -1,19 +1,22 @@
+use crate::geo;
+use crate::types::*;
 use kurbo::{Line, Point};
 use std::f64::consts::PI;
-use crate::types::*;
-use crate::geo;
 
 /// Clip a line (p0..p1) to a convex or concave polygon.
 /// Returns segments of the line that are inside the polygon.
 /// Generate parallel hatch fill lines clipped to a boundary polygon.
 /// Returns Line shapes. `angle` in radians, `spacing` in drawing units.
 pub(crate) fn generate_hatch_lines(boundary: &[Point], angle: f64, spacing: f64) -> Vec<Shape> {
-    if boundary.len() < 3 || spacing <= 0.0 { return Vec::new(); }
+    if boundary.len() < 3 || spacing <= 0.0 {
+        return Vec::new();
+    }
 
     let cos_a = angle.cos();
     let sin_a = angle.sin();
 
-    let perp_dists: Vec<f64> = boundary.iter()
+    let perp_dists: Vec<f64> = boundary
+        .iter()
         .map(|p| -p.x * sin_a + p.y * cos_a)
         .collect();
     let min_d = perp_dists.iter().cloned().fold(f64::MAX, f64::min);
@@ -60,8 +63,14 @@ pub fn generate_dwg_hatch_fill(
     pattern_scale: f64,
     is_double: bool,
 ) -> Vec<Shape> {
-    if boundary.len() < 3 { return Vec::new(); }
-    let scale = if pattern_scale > 0.0 { pattern_scale } else { 1.0 };
+    if boundary.len() < 3 {
+        return Vec::new();
+    }
+    let scale = if pattern_scale > 0.0 {
+        pattern_scale
+    } else {
+        1.0
+    };
     let (bx0, by0, bx1, by1) = geo::bounds_of(boundary);
     let diag = ((bx1 - bx0).powi(2) + (by1 - by0).powi(2)).sqrt();
 
@@ -75,24 +84,26 @@ pub fn generate_dwg_hatch_fill(
         let off_x = pat_line.offset.x * scale;
         let off_y = pat_line.offset.y * scale;
         let off_len = (off_x * off_x + off_y * off_y).sqrt();
-        if off_len < 1e-6 { continue; }
+        if off_len < 1e-6 {
+            continue;
+        }
         // Signed perpendicular step per row: project offset onto line normal.
         // Sign matters for mapping row indices to perpendicular distances.
         let cos_a = angle.cos();
         let sin_a = angle.sin();
         let signed_spacing = -off_x * sin_a + off_y * cos_a;
-        if signed_spacing.abs() < 1e-6 { continue; }
-        let base = Point::new(
-            pat_line.base_point.x * scale,
-            pat_line.base_point.y * scale,
-        );
+        if signed_spacing.abs() < 1e-6 {
+            continue;
+        }
+        let base = Point::new(pat_line.base_point.x * scale, pat_line.base_point.y * scale);
 
         // Direction along the line and perpendicular
         let dir = Point::new(cos_a, sin_a);
         let perp = Point::new(-sin_a, cos_a);
 
         // Project boundary onto perpendicular to find range of parallel lines
-        let perp_dists: Vec<f64> = boundary.iter()
+        let perp_dists: Vec<f64> = boundary
+            .iter()
             .map(|p| (p.x - base.x) * perp.x + (p.y - base.y) * perp.y)
             .collect();
         let min_d = perp_dists.iter().cloned().fold(f64::MAX, f64::min);
@@ -111,10 +122,7 @@ pub fn generate_dwg_hatch_fill(
         for row in row_start..=row_end {
             // Step by the FULL offset vector for each row.
             // This naturally handles both spacing and stagger.
-            let row_base = Point::new(
-                base.x + row as f64 * off_x,
-                base.y + row as f64 * off_y,
-            );
+            let row_base = Point::new(base.x + row as f64 * off_x, base.y + row as f64 * off_y);
 
             // Extend line far enough to cross the entire boundary
             let p0 = Point::new(row_base.x - diag * dir.x, row_base.y - diag * dir.y);
@@ -134,7 +142,9 @@ pub fn generate_dwg_hatch_fill(
                     let seg_dx = cb.x - ca.x;
                     let seg_dy = cb.y - ca.y;
                     let seg_len = (seg_dx * seg_dx + seg_dy * seg_dy).sqrt();
-                    if seg_len < 1e-6 { continue; }
+                    if seg_len < 1e-6 {
+                        continue;
+                    }
                     let ux = seg_dx / seg_len;
                     let uy = seg_dy / seg_len;
 
@@ -144,10 +154,11 @@ pub fn generate_dwg_hatch_fill(
                     let t_start = (ca.x - row_base.x) * dir.x + (ca.y - row_base.y) * dir.y;
 
                     // Total dash pattern length
-                    let pattern_len: f64 = pat_line.dash_lengths.iter()
-                        .map(|d| d.abs() * scale)
-                        .sum();
-                    if pattern_len < 1e-6 { continue; }
+                    let pattern_len: f64 =
+                        pat_line.dash_lengths.iter().map(|d| d.abs() * scale).sum();
+                    if pattern_len < 1e-6 {
+                        continue;
+                    }
 
                     // Phase: where in the pattern does this segment start?
                     let phase = ((t_start % pattern_len) + pattern_len) % pattern_len;
@@ -190,7 +201,8 @@ pub fn generate_dwg_hatch_fill(
                             let ex = ca.x + (pos + draw_len) * ux;
                             let ey = ca.y + (pos + draw_len) * uy;
                             shapes.push(Shape::Line(Line::new(
-                                Point::new(sx, sy), Point::new(ex, ey),
+                                Point::new(sx, sy),
+                                Point::new(ex, ey),
                             )));
                         }
                         // else: pen up (gap), skip
@@ -220,7 +232,9 @@ pub fn generate_dwg_hatch_fill(
 
 pub(crate) fn clip_line_to_polygon(p0: Point, p1: Point, polygon: &[Point]) -> Vec<(Point, Point)> {
     let n = polygon.len();
-    if n < 3 { return Vec::new(); }
+    if n < 3 {
+        return Vec::new();
+    }
 
     let dx = p1.x - p0.x;
     let dy = p1.y - p0.y;
@@ -232,7 +246,9 @@ pub(crate) fn clip_line_to_polygon(p0: Point, p1: Point, polygon: &[Point]) -> V
         let ex = polygon[j].x - polygon[i].x;
         let ey = polygon[j].y - polygon[i].y;
         let denom = dx * ey - dy * ex;
-        if denom.abs() < 1e-12 { continue; }
+        if denom.abs() < 1e-12 {
+            continue;
+        }
         let t = ((polygon[i].x - p0.x) * ey - (polygon[i].y - p0.y) * ex) / denom;
         let s = ((polygon[i].x - p0.x) * dy - (polygon[i].y - p0.y) * dx) / denom;
         if (0.0..=1.0).contains(&s) {
@@ -246,7 +262,9 @@ pub(crate) fn clip_line_to_polygon(p0: Point, p1: Point, polygon: &[Point]) -> V
     // Between consecutive pairs of intersections, check if midpoint is inside
     let mut segments = Vec::new();
     for i in (0..ts.len()).step_by(2) {
-        if i + 1 >= ts.len() { break; }
+        if i + 1 >= ts.len() {
+            break;
+        }
         let ta = ts[i];
         let tb = ts[i + 1];
         let mid_t = (ta + tb) / 2.0;
@@ -264,7 +282,12 @@ pub(crate) fn clip_line_to_polygon(p0: Point, p1: Point, polygon: &[Point]) -> V
 pub(crate) fn entity_endpoints(shape: &Shape) -> Vec<Point> {
     match shape {
         Shape::Line(l) => vec![l.p0, l.p1],
-        Shape::Arc { center, radius, start_angle, end_angle } => {
+        Shape::Arc {
+            center,
+            radius,
+            start_angle,
+            end_angle,
+        } => {
             let p0 = Point::new(
                 center.x + radius * start_angle.cos(),
                 center.y + radius * start_angle.sin(),
@@ -281,7 +304,9 @@ pub(crate) fn entity_endpoints(shape: &Shape) -> Vec<Point> {
         }
         Shape::Polyline { points, .. } => {
             let mut result = Vec::new();
-            if let Some(first) = points.first() { result.push(*first); }
+            if let Some(first) = points.first() {
+                result.push(*first);
+            }
             if let Some(last) = points.last() {
                 if result.is_empty() || geo::distance(result[0], *last) > 1e-6 {
                     result.push(*last);

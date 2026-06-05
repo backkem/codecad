@@ -41,7 +41,14 @@ impl SyncDoc {
         let layers = doc.get_or_insert_map("layers");
         let blocks = doc.get_or_insert_map("blocks");
         let meta = doc.get_or_insert_map("meta");
-        Self { doc, entities, layers, blocks, meta, batch_state: std::cell::RefCell::new(None) }
+        Self {
+            doc,
+            entities,
+            layers,
+            blocks,
+            meta,
+            batch_state: std::cell::RefCell::new(None),
+        }
     }
 
     // ── Bulk operations ────────────────────────────────────────────────
@@ -146,8 +153,19 @@ impl SyncDoc {
         let layer_after = layer_names(local_doc);
         let block_after = block_names(local_doc);
 
-        let update = if ent_before != ent_after || layer_before != layer_after || block_before != block_after {
-            self.diff_into_yrs(local_doc, &ent_before, &ent_after, &layer_before, &layer_after, &block_before, &block_after)
+        let update = if ent_before != ent_after
+            || layer_before != layer_after
+            || block_before != block_after
+        {
+            self.diff_into_yrs(
+                local_doc,
+                &ent_before,
+                &ent_after,
+                &layer_before,
+                &layer_after,
+                &block_before,
+                &block_after,
+            )
         } else {
             Vec::new()
         };
@@ -175,8 +193,19 @@ impl SyncDoc {
         let layer_after = layer_names(local_doc);
         let block_after = block_names(local_doc);
 
-        if bs.ent_before != ent_after || bs.layer_before != layer_after || bs.block_before != block_after {
-            self.diff_into_yrs(local_doc, &bs.ent_before, &ent_after, &bs.layer_before, &layer_after, &bs.block_before, &block_after)
+        if bs.ent_before != ent_after
+            || bs.layer_before != layer_after
+            || bs.block_before != block_after
+        {
+            self.diff_into_yrs(
+                local_doc,
+                &bs.ent_before,
+                &ent_after,
+                &bs.layer_before,
+                &layer_after,
+                &bs.block_before,
+                &block_after,
+            )
         } else {
             Vec::new()
         }
@@ -299,12 +328,15 @@ impl SyncDoc {
 
 fn entity_hashes(doc: &Document) -> HashMap<u64, u64> {
     use std::hash::{Hash, Hasher};
-    doc.entities.iter().map(|e| {
-        let bytes = crate::entity_to_bytes(e);
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        bytes.hash(&mut hasher);
-        (e.id.0, hasher.finish())
-    }).collect()
+    doc.entities
+        .iter()
+        .map(|e| {
+            let bytes = crate::entity_to_bytes(e);
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            bytes.hash(&mut hasher);
+            (e.id.0, hasher.finish())
+        })
+        .collect()
 }
 
 fn layer_names(doc: &Document) -> std::collections::HashSet<String> {
@@ -325,11 +357,22 @@ mod tests {
     fn populate_and_rebuild_roundtrip() {
         let mut doc = Document::new();
         doc.add_layer("WALLS", Color::rgb(255, 0, 0));
-        doc.add_line(Point::new(0.0, 0.0), Point::new(100.0, 0.0), "WALLS", Color::rgb(255, 0, 0));
+        doc.add_line(
+            Point::new(0.0, 0.0),
+            Point::new(100.0, 0.0),
+            "WALLS",
+            Color::rgb(255, 0, 0),
+        );
         doc.add_circle(Point::new(50.0, 50.0), 25.0, "ELEC", Color::rgb(0, 255, 0));
         doc.add_polyline(
-            vec![Point::new(0.0, 0.0), Point::new(10.0, 0.0), Point::new(10.0, 10.0)],
-            true, "WALLS", Color::rgb(255, 0, 0),
+            vec![
+                Point::new(0.0, 0.0),
+                Point::new(10.0, 0.0),
+                Point::new(10.0, 10.0),
+            ],
+            true,
+            "WALLS",
+            Color::rgb(255, 0, 0),
         );
 
         let sync = SyncDoc::new(1);
@@ -340,13 +383,16 @@ mod tests {
         assert!(rebuilt.layers.len() >= 1);
 
         for orig in &doc.entities {
-            let rebuilt = rebuilt.entities.iter()
+            let rebuilt = rebuilt
+                .entities
+                .iter()
                 .find(|e| e.id == orig.id)
                 .expect(&format!("entity {} missing after roundtrip", orig.id.0));
             assert_eq!(
                 crate::entity_to_bytes(orig),
                 crate::entity_to_bytes(rebuilt),
-                "entity {} bytes differ after roundtrip", orig.id.0
+                "entity {} bytes differ after roundtrip",
+                orig.id.0
             );
         }
     }
@@ -356,9 +402,9 @@ mod tests {
         let sync = SyncDoc::new(1);
         let mut doc = Document::new();
 
-        let (result, update) = sync.apply_mutation(
-            &mut doc, "addLine", r#"{"start":[0,0],"end":[50,0]}"#
-        ).unwrap();
+        let (result, update) = sync
+            .apply_mutation(&mut doc, "addLine", r#"{"start":[0,0],"end":[50,0]}"#)
+            .unwrap();
 
         assert!(result.contains("e_1"));
         assert!(!update.is_empty());
@@ -373,9 +419,12 @@ mod tests {
         let sync = SyncDoc::new(1);
         let mut doc = Document::new();
 
-        sync.apply_mutation(&mut doc, "addLine", r#"{"start":[0,0],"end":[50,0]}"#).unwrap();
-        sync.apply_mutation(&mut doc, "addLine", r#"{"start":[0,0],"end":[0,50]}"#).unwrap();
-        sync.apply_mutation(&mut doc, "remove", r#"{"target":"e_1"}"#).unwrap();
+        sync.apply_mutation(&mut doc, "addLine", r#"{"start":[0,0],"end":[50,0]}"#)
+            .unwrap();
+        sync.apply_mutation(&mut doc, "addLine", r#"{"start":[0,0],"end":[0,50]}"#)
+            .unwrap();
+        sync.apply_mutation(&mut doc, "remove", r#"{"target":"e_1"}"#)
+            .unwrap();
 
         assert_eq!(doc.entities.len(), 1);
         let txn = sync.doc.transact();
@@ -388,9 +437,13 @@ mod tests {
     fn two_peers_sync() {
         let server = SyncDoc::new(1);
         let mut server_doc = Document::new();
-        server.apply_mutation(
-            &mut server_doc, "addLine", r#"{"start":[0,0],"end":[100,0]}"#
-        ).unwrap();
+        server
+            .apply_mutation(
+                &mut server_doc,
+                "addLine",
+                r#"{"start":[0,0],"end":[100,0]}"#,
+            )
+            .unwrap();
 
         // Client starts empty, syncs from server
         let client = SyncDoc::new(2);
@@ -403,10 +456,13 @@ mod tests {
 
         // Client adds an entity, syncs back to server
         let mut client_doc2 = client.to_document();
-        let (_, update2) = client.apply_mutation(
-            &mut client_doc2, "addCircle",
-            r#"{"center":[50,50],"radius":10}"#
-        ).unwrap();
+        let (_, update2) = client
+            .apply_mutation(
+                &mut client_doc2,
+                "addCircle",
+                r#"{"center":[50,50],"radius":10}"#,
+            )
+            .unwrap();
         assert!(!update2.is_empty());
 
         server.apply_update(&update2).unwrap();
@@ -430,8 +486,16 @@ mod tests {
         // Server's encode_diff against client's raw [0] byte
         let raw_client_sv = vec![0u8];
         let diff_against_raw = server.encode_diff(&raw_client_sv).unwrap();
-        println!("Diff against raw [0]: {} bytes = {:?}", diff_against_raw.len(), &diff_against_raw);
-        assert!(diff_against_raw.len() <= 2, "diff against [0] should be trivial, got {} bytes", diff_against_raw.len());
+        println!(
+            "Diff against raw [0]: {} bytes = {:?}",
+            diff_against_raw.len(),
+            &diff_against_raw
+        );
+        assert!(
+            diff_against_raw.len() <= 2,
+            "diff against [0] should be trivial, got {} bytes",
+            diff_against_raw.len()
+        );
 
         println!("Server diff: {} bytes = {:?}", update.len(), &update);
         client.apply_update(&update).unwrap();
@@ -453,12 +517,30 @@ mod tests {
     #[test]
     fn bincode_roundtrip_all_shapes() {
         let mut doc = Document::new();
-        doc.add_line(Point::new(1.0, 2.0), Point::new(3.0, 4.0), "L", Color::rgb(100, 200, 50));
+        doc.add_line(
+            Point::new(1.0, 2.0),
+            Point::new(3.0, 4.0),
+            "L",
+            Color::rgb(100, 200, 50),
+        );
         doc.add_circle(Point::new(5.0, 6.0), 7.0, "C", Color::rgb(10, 20, 30));
-        doc.add_arc(Point::new(0.0, 0.0), 50.0, 0.0, 1.5, "A", Color::rgb(255, 0, 0));
+        doc.add_arc(
+            Point::new(0.0, 0.0),
+            50.0,
+            0.0,
+            1.5,
+            "A",
+            Color::rgb(255, 0, 0),
+        );
         doc.add_polyline(
-            vec![Point::new(0.0, 0.0), Point::new(1.0, 0.0), Point::new(1.0, 1.0)],
-            true, "P", Color::rgb(0, 255, 0),
+            vec![
+                Point::new(0.0, 0.0),
+                Point::new(1.0, 0.0),
+                Point::new(1.0, 1.0),
+            ],
+            true,
+            "P",
+            Color::rgb(0, 255, 0),
         );
 
         for ent in &doc.entities {
@@ -478,21 +560,27 @@ mod tests {
         let mut doc = Document::new();
 
         // Without batch: each mutation produces an update
-        let (_, u1) = sync.apply_mutation(&mut doc, "addLine",
-            r#"{"start":[0,0],"end":[10,0]}"#).unwrap();
+        let (_, u1) = sync
+            .apply_mutation(&mut doc, "addLine", r#"{"start":[0,0],"end":[10,0]}"#)
+            .unwrap();
         assert!(!u1.is_empty(), "non-batch mutation should produce update");
 
         // With batch: mutations produce no updates until end_batch
         sync.begin_batch(&doc);
-        let (_, u2) = sync.apply_mutation(&mut doc, "addLine",
-            r#"{"start":[0,10],"end":[10,10]}"#).unwrap();
+        let (_, u2) = sync
+            .apply_mutation(&mut doc, "addLine", r#"{"start":[0,10],"end":[10,10]}"#)
+            .unwrap();
         assert!(u2.is_empty(), "batched mutation should defer update");
-        let (_, u3) = sync.apply_mutation(&mut doc, "addCircle",
-            r#"{"center":[5,5],"radius":2}"#).unwrap();
+        let (_, u3) = sync
+            .apply_mutation(&mut doc, "addCircle", r#"{"center":[5,5],"radius":2}"#)
+            .unwrap();
         assert!(u3.is_empty(), "batched mutation should defer update");
 
         let batch_update = sync.end_batch(&doc);
-        assert!(!batch_update.is_empty(), "end_batch should produce combined update");
+        assert!(
+            !batch_update.is_empty(),
+            "end_batch should produce combined update"
+        );
 
         // Apply the batch update to a second peer and verify
         let peer = SyncDoc::new(2);
@@ -511,10 +599,18 @@ mod tests {
         let mut doc = Document::new();
 
         // Add entities on two layers
-        sync.apply_mutation(&mut doc, "addLine",
-            r#"{"start":[0,0],"end":[10,0],"layer":"WALLS"}"#).unwrap();
-        sync.apply_mutation(&mut doc, "addCircle",
-            r#"{"center":[5,5],"radius":2,"layer":"ELEC"}"#).unwrap();
+        sync.apply_mutation(
+            &mut doc,
+            "addLine",
+            r#"{"start":[0,0],"end":[10,0],"layer":"WALLS"}"#,
+        )
+        .unwrap();
+        sync.apply_mutation(
+            &mut doc,
+            "addCircle",
+            r#"{"center":[5,5],"radius":2,"layer":"ELEC"}"#,
+        )
+        .unwrap();
 
         {
             let txn = sync.doc.transact();
@@ -529,6 +625,10 @@ mod tests {
 
         let txn = sync.doc.transact();
         assert_eq!(sync.entities.len(&txn), 0);
-        assert_eq!(sync.layers.len(&txn), 0, "stale layers leaked in Yrs after clear");
+        assert_eq!(
+            sync.layers.len(&txn),
+            0,
+            "stale layers leaked in Yrs after clear"
+        );
     }
 }

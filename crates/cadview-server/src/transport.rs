@@ -73,23 +73,27 @@ pub async fn handle_session_v2(
 
             // Not an RPC. Check if it's a sync header (JSON with "type":"document")
             // or a raw SV (old protocol backward compat).
-            let (doc_key, client_sv) = if let Ok(header) = serde_json::from_slice::<serde_json::Value>(&first_msg) {
-                if header.get("type").and_then(|t| t.as_str()) == Some("document") {
-                    let id = header["id"].as_str().unwrap_or(&default_key).to_string();
-                    // Read the actual SV as the next message
-                    let sv = match read_message(&mut recv).await {
-                        Ok(sv) => sv,
-                        Err(e) => { tracing::warn!("Failed to read SV: {e}"); return; }
-                    };
-                    (id, sv)
+            let (doc_key, client_sv) =
+                if let Ok(header) = serde_json::from_slice::<serde_json::Value>(&first_msg) {
+                    if header.get("type").and_then(|t| t.as_str()) == Some("document") {
+                        let id = header["id"].as_str().unwrap_or(&default_key).to_string();
+                        // Read the actual SV as the next message
+                        let sv = match read_message(&mut recv).await {
+                            Ok(sv) => sv,
+                            Err(e) => {
+                                tracing::warn!("Failed to read SV: {e}");
+                                return;
+                            }
+                        };
+                        (id, sv)
+                    } else {
+                        // Unknown JSON, treat first_msg as raw SV
+                        (default_key.clone(), first_msg)
+                    }
                 } else {
-                    // Unknown JSON, treat first_msg as raw SV
+                    // Binary data = raw SV (old protocol)
                     (default_key.clone(), first_msg)
-                }
-            } else {
-                // Binary data = raw SV (old protocol)
-                (default_key.clone(), first_msg)
-            };
+                };
 
             // Ensure document slot exists (creates empty slot for new docs)
             {
@@ -101,7 +105,8 @@ pub async fn handle_session_v2(
             }
 
             tracing::info!("Yrs sync stream for '{}'", doc_key);
-            if let Err(e) = run_yrs_sync_with_first_msg(send, recv, client_sv, reg, &doc_key).await {
+            if let Err(e) = run_yrs_sync_with_first_msg(send, recv, client_sv, reg, &doc_key).await
+            {
                 tracing::warn!("Yrs sync ended for '{}': {e}", doc_key);
             }
         });
@@ -119,12 +124,18 @@ async fn run_yrs_sync_with_first_msg(
     doc_key: &str,
 ) -> anyhow::Result<()> {
     let mut recv = recv;
-    tracing::debug!("Received client state vector ({} bytes) for '{}'", client_sv.len(), doc_key);
+    tracing::debug!(
+        "Received client state vector ({} bytes) for '{}'",
+        client_sv.len(),
+        doc_key
+    );
 
     // Step 2: Send missing updates to client
     let (update, update_tx) = {
         let reg = registry.lock().await;
-        let slot = reg.get(doc_key).ok_or_else(|| anyhow::anyhow!("doc '{}' not loaded", doc_key))?;
+        let slot = reg
+            .get(doc_key)
+            .ok_or_else(|| anyhow::anyhow!("doc '{}' not loaded", doc_key))?;
         let update = slot.sync_doc.encode_diff(&client_sv)?;
         let tx = slot.update_tx.clone();
         (update, tx)
@@ -147,7 +158,11 @@ async fn run_yrs_sync_with_first_msg(
         slot.sync_doc.apply_update(&client_update)?;
         let rebuilt = slot.sync_doc.to_document();
         slot.document = rebuilt;
-        tracing::debug!("Applied client->server update ({} bytes) for '{}'", client_update.len(), doc_key);
+        tracing::debug!(
+            "Applied client->server update ({} bytes) for '{}'",
+            client_update.len(),
+            doc_key
+        );
     }
 
     tracing::info!("Yrs initial sync complete for '{}'", doc_key);
@@ -228,26 +243,33 @@ async fn handle_rpc_call(
     };
 
     let method = req["method"].as_str().unwrap_or("");
-    let args = req.get("args").map(|a| a.to_string()).unwrap_or_else(|| "{}".to_string());
+    let args = req
+        .get("args")
+        .map(|a| a.to_string())
+        .unwrap_or_else(|| "{}".to_string());
 
     // Use doc_id from request if provided, otherwise fall back to default
     let doc_key = req["doc_id"].as_str().unwrap_or(default_doc_key);
 
     match method {
         "save" => {
-            let path = req["args"]["path"].as_str().unwrap_or("cadview-output.json");
+            let path = req["args"]["path"]
+                .as_str()
+                .unwrap_or("cadview-output.json");
             let reg = registry.lock().await;
             let Some(slot) = reg.get(doc_key) else {
                 return format!(r#"{{"error":"document '{}' not loaded"}}"#, doc_key);
             };
-            let entities: Vec<cadview_core::EntityJson> = slot.document.entities.iter()
-                .map(|e| e.to_json())
-                .collect();
+            let entities: Vec<cadview_core::EntityJson> =
+                slot.document.entities.iter().map(|e| e.to_json()).collect();
             match serde_json::to_string_pretty(&entities) {
                 Ok(json) => match std::fs::write(path, &json) {
                     Ok(()) => {
                         tracing::info!("Saved {} entities to {path}", entities.len());
-                        format!(r#"{{"ok":true,"path":"{path}","entities":{}}}"#, entities.len())
+                        format!(
+                            r#"{{"ok":true,"path":"{path}","entities":{}}}"#,
+                            entities.len()
+                        )
                     }
                     Err(e) => format!(r#"{{"error":"write failed: {e}"}}"#),
                 },
@@ -271,8 +293,14 @@ async fn handle_rpc_call(
             };
             match result {
                 Ok(()) => {
-                    tracing::info!("Saved DWG to {path} ({} entities)", slot.document.entities.len());
-                    format!(r#"{{"ok":true,"path":"{path}","entities":{}}}"#, slot.document.entities.len())
+                    tracing::info!(
+                        "Saved DWG to {path} ({} entities)",
+                        slot.document.entities.len()
+                    );
+                    format!(
+                        r#"{{"ok":true,"path":"{path}","entities":{}}}"#,
+                        slot.document.entities.len()
+                    )
                 }
                 Err(e) => format!(r#"{{"error":"dwg write failed: {e}"}}"#),
             }
@@ -341,10 +369,8 @@ async fn handle_rpc_call(
         "runScript" => {
             let program = req["args"]["program"].as_str().unwrap_or("");
             let base_dir = std::env::current_dir().unwrap_or_default();
-            match crate::script::run_script(
-                sandbox, &registry, doc_key, program, &base_dir, None,
-            )
-            .await
+            match crate::script::run_script(sandbox, &registry, doc_key, program, &base_dir, None)
+                .await
             {
                 Ok(output) => serde_json::json!({
                     "ok": true,
@@ -375,10 +401,14 @@ async fn handle_rpc_call(
             let Some(slot) = reg.get_mut(doc_key) else {
                 return format!(r#"{{"error":"document '{}' not loaded"}}"#, doc_key);
             };
-            let (result, update) = match slot.sync_doc.apply_mutation(&mut slot.document, method, &args) {
-                Ok(r) => r,
-                Err(e) => return format!(r#"{{"error":{}}}"#, serde_json::json!(e)),
-            };
+            let (result, update) =
+                match slot
+                    .sync_doc
+                    .apply_mutation(&mut slot.document, method, &args)
+                {
+                    Ok(r) => r,
+                    Err(e) => return format!(r#"{{"error":{}}}"#, serde_json::json!(e)),
+                };
 
             if !update.is_empty() {
                 let _ = slot.update_tx.send(update);
@@ -391,27 +421,28 @@ async fn handle_rpc_call(
 
 // ── Framing helpers ───────────────────────────────────────────────────
 
-async fn write_message(
-    send: &mut wtransport::SendStream,
-    data: &[u8],
-) -> anyhow::Result<()> {
+async fn write_message(send: &mut wtransport::SendStream, data: &[u8]) -> anyhow::Result<()> {
     let mut frame = Vec::with_capacity(4 + data.len());
     frame.extend_from_slice(&(data.len() as u32).to_be_bytes());
     frame.extend_from_slice(data);
-    send.write_all(&frame).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+    send.write_all(&frame)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     Ok(())
 }
 
-async fn read_message(
-    recv: &mut wtransport::RecvStream,
-) -> anyhow::Result<Vec<u8>> {
+async fn read_message(recv: &mut wtransport::RecvStream) -> anyhow::Result<Vec<u8>> {
     let mut len_buf = [0u8; 4];
-    recv.read_exact(&mut len_buf).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+    recv.read_exact(&mut len_buf)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     let len = u32::from_be_bytes(len_buf) as usize;
     if len > 64 * 1024 * 1024 {
         anyhow::bail!("message too large: {len} bytes");
     }
     let mut buf = vec![0u8; len];
-    recv.read_exact(&mut buf).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+    recv.read_exact(&mut buf)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     Ok(buf)
 }

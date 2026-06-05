@@ -62,8 +62,7 @@ pub async fn run_script(
     let read_base = base_dir
         .canonicalize()
         .unwrap_or_else(|_| base_dir.to_path_buf());
-    let write_base = std::env::current_dir()
-        .unwrap_or_else(|_| base_dir.to_path_buf());
+    let write_base = std::env::current_dir().unwrap_or_else(|_| base_dir.to_path_buf());
     let rpc_sandbox = sandbox.clone();
     let rpc_handler = Box::new(move |method: &str, args: &str| -> Result<String, String> {
         // Helper: resolve a read path relative to base_dir (script directory).
@@ -94,9 +93,10 @@ pub async fn run_script(
         // Everything else goes straight to cadview_core::cad_call.
         let path_methods = ["loadElmt", "loadElmtDir", "loadDwgAsBlock"];
         if path_methods.contains(&method) {
-            let mut a: serde_json::Value =
-                serde_json::from_str(args).map_err(|e| e.to_string())?;
-            let path_str = a["path"].as_str().ok_or(format!("{method}: path required"))?;
+            let mut a: serde_json::Value = serde_json::from_str(args).map_err(|e| e.to_string())?;
+            let path_str = a["path"]
+                .as_str()
+                .ok_or(format!("{method}: path required"))?;
             let resolved = resolve(path_str)?;
             a["path"] = serde_json::Value::String(resolved.to_string_lossy().to_string());
             let mut doc = doc_r.lock().unwrap();
@@ -105,8 +105,7 @@ pub async fn run_script(
 
         match method {
             "save" => {
-                let a: serde_json::Value =
-                    serde_json::from_str(args).map_err(|e| e.to_string())?;
+                let a: serde_json::Value = serde_json::from_str(args).map_err(|e| e.to_string())?;
                 let path = a["path"].as_str().unwrap_or("cadview-output.json");
                 let resolved = resolve_write(path);
                 let doc = doc_r.lock().unwrap();
@@ -118,24 +117,25 @@ pub async fn run_script(
                     "ok": true,
                     "path": resolved.to_string_lossy(),
                     "entities": entities.len(),
-                }).to_string())
+                })
+                .to_string())
             }
             "saveDwg" => {
-                let a: serde_json::Value =
-                    serde_json::from_str(args).map_err(|e| e.to_string())?;
+                let a: serde_json::Value = serde_json::from_str(args).map_err(|e| e.to_string())?;
                 let path = a["path"].as_str().unwrap_or("output.dwg");
                 let resolved = resolve_write(path);
                 let doc = doc_r.lock().unwrap();
-                cadview_core::save_dwg(&doc, &resolved.to_string_lossy()).map_err(|e| format!("dwg: {e}"))?;
+                cadview_core::save_dwg(&doc, &resolved.to_string_lossy())
+                    .map_err(|e| format!("dwg: {e}"))?;
                 Ok(serde_json::json!({
                     "ok": true,
                     "path": resolved.to_string_lossy(),
                     "entities": doc.entities.len(),
-                }).to_string())
+                })
+                .to_string())
             }
             "savePdf" => {
-                let a: serde_json::Value =
-                    serde_json::from_str(args).map_err(|e| e.to_string())?;
+                let a: serde_json::Value = serde_json::from_str(args).map_err(|e| e.to_string())?;
                 let path = a["path"].as_str().unwrap_or("output.pdf");
                 let resolved = resolve_write(path);
                 let doc = doc_r.lock().unwrap();
@@ -146,11 +146,11 @@ pub async fn run_script(
                     "ok": true,
                     "path": resolved.to_string_lossy(),
                     "bytes": bytes.len(),
-                }).to_string())
+                })
+                .to_string())
             }
             "loadDwg" => {
-                let a: serde_json::Value =
-                    serde_json::from_str(args).map_err(|e| e.to_string())?;
+                let a: serde_json::Value = serde_json::from_str(args).map_err(|e| e.to_string())?;
                 let path_str = a["path"].as_str().ok_or("loadDwg: path required")?;
                 let resolved = resolve(path_str)?;
                 let new_doc = cadview_core::load_dwg(&resolved.to_string_lossy())
@@ -161,13 +161,13 @@ pub async fn run_script(
                 Ok(format!(r#"{{"ok":true,"entities":{count}}}"#))
             }
             "exec" => {
-                let a: serde_json::Value =
-                    serde_json::from_str(args).map_err(|e| e.to_string())?;
+                let a: serde_json::Value = serde_json::from_str(args).map_err(|e| e.to_string())?;
                 let path_str = a["path"].as_str().ok_or("exec: path required")?;
                 let resolved = resolve(path_str)?;
                 let program = std::fs::read_to_string(&resolved)
                     .map_err(|e| format!("exec read '{}': {e}", resolved.display()))?;
-                let exec_base = resolved.parent()
+                let exec_base = resolved
+                    .parent()
                     .unwrap_or_else(|| Path::new("."))
                     .to_path_buf();
                 let full_program = format!("{CAD_API_SETUP}\n{program}");
@@ -191,7 +191,9 @@ pub async fn run_script(
                     .canonicalize()
                     .unwrap_or_else(|_| exec_base.clone());
                 let nested_read = Box::new(move |p: &str| -> Result<String, String> {
-                    let r = nested_root.join(p).canonicalize()
+                    let r = nested_root
+                        .join(p)
+                        .canonicalize()
                         .map_err(|e| format!("resolve '{p}': {e}"))?;
                     if !r.starts_with(&nested_root) {
                         return Err(format!("path escapes project root: {p}"));
@@ -199,20 +201,23 @@ pub async fn run_script(
                     std::fs::read_to_string(&r).map_err(|e| format!("read '{p}': {e}"))
                 });
 
-                let output = rpc_sandbox.run(
-                    &full_program,
-                    DEFAULT_TIMEOUT,
-                    nested_cad,
-                    nested_rpc,
-                    nested_read,
-                ).map_err(|e| format!("exec: {e}"))?;
+                let output = rpc_sandbox
+                    .run(
+                        &full_program,
+                        DEFAULT_TIMEOUT,
+                        nested_cad,
+                        nested_rpc,
+                        nested_read,
+                    )
+                    .map_err(|e| format!("exec: {e}"))?;
 
                 Ok(serde_json::json!({
                     "ok": true,
                     "value": output.value,
                     "stdout": output.stdout,
                     "stderr": output.stderr,
-                }).to_string())
+                })
+                .to_string())
             }
             _ => {
                 // Everything else delegates to cadview_core::cad_call
@@ -246,7 +251,13 @@ pub async fn run_script(
     let result = {
         let sb = sandbox.clone();
         tokio::task::spawn_blocking(move || {
-            sb.run(&full_program, timeout, cad_handler, rpc_handler, read_file_handler)
+            sb.run(
+                &full_program,
+                timeout,
+                cad_handler,
+                rpc_handler,
+                read_file_handler,
+            )
         })
         .await
         .map_err(|e| format!("spawn_blocking: {e}"))?
@@ -284,8 +295,8 @@ pub async fn exec_file(
             .join(&path)
     };
 
-    let program =
-        std::fs::read_to_string(&abs_path).map_err(|e| format!("read '{}': {e}", abs_path.display()))?;
+    let program = std::fs::read_to_string(&abs_path)
+        .map_err(|e| format!("read '{}': {e}", abs_path.display()))?;
 
     let base_dir = abs_path.parent().unwrap_or(Path::new("."));
 

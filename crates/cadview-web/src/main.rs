@@ -961,7 +961,7 @@ impl eframe::App for CadViewApp {
             } else {
                 base_color
             };
-            let stroke = Stroke::new(1.0, color);
+            let stroke = Stroke::new(1.0_f32, color);
             rendered += 1;
 
             match &ent.shape {

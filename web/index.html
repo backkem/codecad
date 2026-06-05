@@ -8,7 +8,17 @@
   </head>
   <body>
     <canvas id="cadview_canvas" style="display:none"></canvas>
-    <div id="root"></div>
+    <div id="root">
+      <!-- Loader: visible while WASM downloads, replaced when React mounts -->
+      <div class="cad-loader">
+        <svg viewBox="0 0 80 80" class="cad-loader-crosshair">
+          <line x1="40" y1="0" x2="40" y2="80" class="cad-loader-v" />
+          <line x1="0" y1="40" x2="80" y2="40" class="cad-loader-h" />
+          <circle cx="40" cy="40" r="10" class="cad-loader-circle" />
+        </svg>
+        <div class="cad-loader-text">loading</div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

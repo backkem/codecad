@@ -75,10 +75,52 @@ canvas {
   position: absolute;
   inset: 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  font: 12px/1 "JetBrains Mono", monospace;
+  gap: 12px;
+}
+.loading svg {
+  width: 48px;
+  height: 48px;
+}
+.loading line, .loading circle {
+  fill: none;
+  stroke: #ffb000;
+  stroke-width: 1.2;
+}
+.loading .lv {
+  stroke-dasharray: 80;
+  stroke-dashoffset: 80;
+  animation: ld 1.2s ease-out forwards, lp 2.4s ease-in-out 1.2s infinite;
+}
+.loading .lh {
+  stroke-dasharray: 80;
+  stroke-dashoffset: 80;
+  animation: ld 1.2s ease-out 0.15s forwards, lp 2.4s ease-in-out 1.35s infinite;
+}
+.loading .lc {
+  stroke-dasharray: 63;
+  stroke-dashoffset: 63;
+  animation: ld 0.8s ease-out 0.6s forwards, lp 2.4s ease-in-out 1.4s infinite;
+}
+@keyframes ld { to { stroke-dashoffset: 0; } }
+@keyframes lp { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+.loading span {
+  font: 10px/1 "JetBrains Mono", monospace;
   color: #6b7280;
+  letter-spacing: 0.1em;
+}
+.error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 11px/1 "JetBrains Mono", monospace;
+  color: #6b7280;
+  padding: 16px;
+  text-align: center;
 }
 `;
 
@@ -117,7 +159,12 @@ class CodecadViewer extends HTMLElement {
 
     this.loadingEl = document.createElement("div");
     this.loadingEl.className = "loading";
-    this.loadingEl.textContent = "Loading\u2026";
+    this.loadingEl.innerHTML =
+      '<svg viewBox="0 0 80 80">' +
+      '<line x1="40" y1="0" x2="40" y2="80" class="lv"/>' +
+      '<line x1="0" y1="40" x2="80" y2="40" class="lh"/>' +
+      '<circle cx="40" cy="40" r="10" class="lc"/>' +
+      "</svg><span>loading</span>";
 
     this.shadow.append(style, this.canvas, badge, this.hint, this.loadingEl);
   }
@@ -207,6 +254,7 @@ class CodecadViewer extends HTMLElement {
       cad_call("fitView", "{}");
       this.loadingEl.style.display = "none";
     } catch (e) {
+      this.loadingEl.className = "error";
       this.loadingEl.textContent = `Failed to load: ${e}`;
     }
   }

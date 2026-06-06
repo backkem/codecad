@@ -972,6 +972,7 @@ mod tests {
                 height: 5.0,
                 rotation: 0.0,
             },
+            dash: None,
         });
         let result = cad_call(&mut doc, "entities", "{}").unwrap();
         let ents: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
@@ -996,6 +997,7 @@ mod tests {
                 height: 7.5,
                 rotation: 0.5,
             },
+            dash: None,
         });
         let result = cad_call(&mut doc, "entities", "{}").unwrap();
         let ents: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
@@ -1035,6 +1037,7 @@ mod tests {
                 height: 10.0,
                 rotation: 0.0,
             },
+            dash: None,
         });
         let expanded = expand_for_render(&doc);
         // Text should become CurvePath entities (glyph outlines)

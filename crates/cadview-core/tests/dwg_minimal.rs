@@ -85,6 +85,7 @@ fn generate_minimal_dwgs() {
                 x_scale: 1.0,
                 y_scale: 1.0,
             },
+            dash: None,
         });
         doc.add_line(
             Point::new(0.0, 0.0),

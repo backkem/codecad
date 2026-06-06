@@ -248,6 +248,36 @@ cd web && pnpm dev
 
 Opens http://localhost:5173. WASM must be built first (step 1 above).
 
+### Exporting example screenshots and DWGs
+
+All example PNGs are 2400x1600. To re-export after changing an example:
+
+```bash
+# 1. Build everything and start server with examples
+just build
+RUST_LOG=info cargo run -p cadview-server --release -- ./examples/
+
+# 2. Run the script on a clean document
+curl -s -X POST http://localhost:8765/api/run \
+  -H "Authorization: Bearer cadview-local-dev" \
+  -H "Content-Type: application/json" \
+  -d '{"program": "cad.clear()"}'
+curl -s -X POST http://localhost:8765/api/run \
+  -H "Authorization: Bearer cadview-local-dev" \
+  -H "Content-Type: application/json" \
+  -d '{"exec": "examples/01-flange-plate.js"}'
+
+# 3. Save DWG
+curl -s -X POST http://localhost:8765/api/run \
+  -H "Authorization: Bearer cadview-local-dev" \
+  -H "Content-Type: application/json" \
+  -d '{"program": "return cad.saveDwg(\"examples/01-flange-plate.dwg\")"}'
+
+# 4. Screenshot via Chrome DevTools MCP (resize to 2400x1600 first)
+#    then downscale with Pillow to counter DPR scaling:
+#    python3 -c "from PIL import Image; im=Image.open('examples/01-flange-plate.png'); im.resize((2400,1600),Image.LANCZOS).save('examples/01-flange-plate.png')"
+```
+
 ## The ABI: `cad_call`
 
 Single function bridging JS and the Rust Document:

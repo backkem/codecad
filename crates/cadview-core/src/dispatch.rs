@@ -103,6 +103,7 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                                     layer: layer.to_string(),
                                     color,
                                     shape: shape.transformed(xform),
+                                    dash: None,
                                 };
                                 result.push(expanded.to_json());
                             }
@@ -173,6 +174,7 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                         layer: child_layer.to_string(),
                         color,
                         shape: shape.transformed(xform),
+                        dash: None,
                     };
                     result.push(expanded.to_json());
                 }
@@ -204,6 +206,8 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 layer: String,
                 #[serde(default)]
                 color: Option<[u8; 3]>,
+                #[serde(default)]
+                dash: Option<Vec<f64>>,
             }
             let a: Args = parse_args(args)?;
             doc.ensure_layer(&a.layer);
@@ -217,6 +221,11 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 &a.layer,
                 color,
             );
+            if let Some(dash) = a.dash {
+                if let Some(ent) = doc.entity_mut(id) {
+                    ent.dash = Some(dash);
+                }
+            }
             let ent = doc.entity(id).expect("entity was just added");
             serde_json::to_string(&ent.to_json()).map_err(|e| e.to_string())
         }
@@ -230,6 +239,8 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 layer: String,
                 #[serde(default)]
                 color: Option<[u8; 3]>,
+                #[serde(default)]
+                dash: Option<Vec<f64>>,
             }
             let a: Args = parse_args(args)?;
             doc.ensure_layer(&a.layer);
@@ -243,6 +254,11 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 &a.layer,
                 color,
             );
+            if let Some(dash) = a.dash {
+                if let Some(ent) = doc.entity_mut(id) {
+                    ent.dash = Some(dash);
+                }
+            }
             let ent = doc.entity(id).expect("entity was just added");
             serde_json::to_string(&ent.to_json()).map_err(|e| e.to_string())
         }
@@ -267,6 +283,8 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 layer: String,
                 #[serde(default)]
                 color: Option<[u8; 3]>,
+                #[serde(default)]
+                dash: Option<Vec<f64>>,
             }
             let a: Args = parse_args(args)?;
             doc.ensure_layer(&a.layer);
@@ -308,6 +326,11 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
             }
 
             let id = doc.add_arc(center, a.radius, from_rad, to_rad, &a.layer, color);
+            if let Some(dash) = a.dash {
+                if let Some(ent) = doc.entity_mut(id) {
+                    ent.dash = Some(dash);
+                }
+            }
             let ent = doc.entity(id).expect("entity was just added");
             serde_json::to_string(&ent.to_json()).map_err(|e| e.to_string())
         }
@@ -322,6 +345,8 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 layer: String,
                 #[serde(default)]
                 color: Option<[u8; 3]>,
+                #[serde(default)]
+                dash: Option<Vec<f64>>,
             }
             let a: Args = parse_args(args)?;
             doc.ensure_layer(&a.layer);
@@ -331,6 +356,11 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
             );
             let pts: Vec<Point> = a.points.iter().map(|p| Point::new(p[0], p[1])).collect();
             let id = doc.add_polyline(pts, a.closed, &a.layer, color);
+            if let Some(dash) = a.dash {
+                if let Some(ent) = doc.entity_mut(id) {
+                    ent.dash = Some(dash);
+                }
+            }
             let ent = doc.entity(id).expect("entity was just added");
             serde_json::to_string(&ent.to_json()).map_err(|e| e.to_string())
         }
@@ -522,6 +552,7 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                     height: a.height,
                     rotation: 0.0,
                 },
+                dash: None,
             });
 
             let width = text::text_width(&a.text, a.height);
@@ -1229,6 +1260,42 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
             Ok(serde_json::json!([p.x, p.y]).to_string())
         }
 
+        "methods" => {
+            let methods = serde_json::json!([
+                {"name": "describe", "args": "{}", "desc": "Scene summary: bounds, entity counts, layers"},
+                {"name": "entities", "args": "{expand?, layer?}", "desc": "List all entities. expand=true flattens block inserts"},
+                {"name": "entity", "args": "{id}", "desc": "Get one entity by ID"},
+                {"name": "children", "args": "{id}", "desc": "Expanded child shapes of a block insert"},
+                {"name": "addLine", "args": "{start, end, layer?, color?, dash?}", "desc": "Add line. dash=[on,off,...] in drawing units"},
+                {"name": "addCircle", "args": "{center, radius, layer?, color?, dash?}", "desc": "Add circle"},
+                {"name": "addArc", "args": "{center, radius, from?, to?, p1?, p2?, shortest?, layer?, color?, dash?}", "desc": "Add arc (degrees or point-based)"},
+                {"name": "addPolyline", "args": "{points, closed?, layer?, color?, dash?}", "desc": "Add polyline"},
+                {"name": "addText", "args": "{text, at, height?, layer?, color?}", "desc": "Add single-line text"},
+                {"name": "addLayer", "args": "{name, color?}", "desc": "Create/update layer"},
+                {"name": "measure", "args": "{from, to, offset?, layer?}", "desc": "Add dimension line between two points"},
+                {"name": "addHatch", "args": "{boundary, angle?, spacing?, layer?}", "desc": "Add line-pattern hatch fill"},
+                {"name": "defineBlock", "args": "{name, shapes, insert_point?}", "desc": "Define reusable block from shape list"},
+                {"name": "place", "args": "{block, at?, rotation?, xScale?, yScale?, layer?}", "desc": "Place block instance"},
+                {"name": "clone", "args": "{source, name, replaceText?}", "desc": "Clone block def with text substitution"},
+                {"name": "remove", "args": "{target}", "desc": "Delete entities by ID(s)"},
+                {"name": "move", "args": "{target, dx, dy}", "desc": "Translate entities"},
+                {"name": "copy", "args": "{target, dx, dy}", "desc": "Duplicate entities with offset"},
+                {"name": "rotate", "args": "{target, center, angle}", "desc": "Rotate entities (degrees)"},
+                {"name": "mirror", "args": "{target, p1, p2}", "desc": "Mirror entities across a line"},
+                {"name": "offset", "args": "{id, distance}", "desc": "Parallel offset (lines, arcs, circles, polylines)"},
+                {"name": "trim", "args": "{id, cut, keep}", "desc": "Trim entity at point. keep='start'|'end'"},
+                {"name": "fillet", "args": "{id1, id2, radius}", "desc": "Fillet two lines/arcs with radius"},
+                {"name": "projectOntoCircle", "args": "{point, center, radius}", "desc": "Nearest point on circle"},
+                {"name": "projectOnto", "args": "{point, line}", "desc": "Perpendicular projection onto line"},
+                {"name": "angleOf", "args": "{point, center}", "desc": "Angle in degrees from center to point"},
+                {"name": "checkpoint", "args": "{}", "desc": "Save undo snapshot"},
+                {"name": "undo", "args": "{}", "desc": "Undo last checkpoint"},
+                {"name": "redo", "args": "{}", "desc": "Redo last undo"},
+                {"name": "methods", "args": "{}", "desc": "List all available cad_call methods"},
+            ]);
+            serde_json::to_string(&methods).map_err(|e| e.to_string())
+        }
+
         _ => Err(format!("unknown method: {method}")),
     }
 }
@@ -1296,6 +1363,7 @@ pub(crate) fn add_glyph_paths(
                     path: subpath,
                     closed,
                 },
+                dash: None,
             });
             ids.push(id);
         }

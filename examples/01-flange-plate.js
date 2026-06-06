@@ -21,9 +21,9 @@ cad.addLayer("HOLES", { color: [100, 180, 255] });
 cad.addLayer("DIM", { color: [180, 180, 0] });
 cad.addLayer("_CL", { color: [80, 80, 80] });
 
-// Centerlines
-cad.addLine([-R - 20, 0], [R + 20, 0], { layer: "_CL" });
-cad.addLine([0, -R - 20], [0, R + 20], { layer: "_CL" });
+// Centerlines (long-dash-short-dash center line pattern)
+cad.addLine([-R - 20, 0], [R + 20, 0], { layer: "_CL", dash: [12, 3, 3, 3] });
+cad.addLine([0, -R - 20], [0, R + 20], { layer: "_CL", dash: [12, 3, 3, 3] });
 
 // Main geometry
 cad.addCircle([0, 0], R, { layer: "FLANGE" });
@@ -37,8 +37,8 @@ for (let i = 0; i < nBolts; i++) {
     cad.addCircle([cx, cy], holeR, { layer: "HOLES" });
 }
 
-// Bolt circle (dashed reference - shown as thin circle)
-cad.addCircle([0, 0], boltR, { layer: "_CL" });
+// Bolt circle (dashed reference)
+cad.addCircle([0, 0], boltR, { layer: "_CL", dash: [8, 4] });
 
 // Dimensions
 cad.measure([0, 0], [R, 0], { offset: -30, layer: "DIM", text_height: 6 });

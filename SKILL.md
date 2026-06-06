@@ -47,12 +47,12 @@ Entities inherit their layer's color when no explicit color is given.
 ### Geometry creation
 
 ```js
-cad.addLine([x1, y1], [x2, y2], { layer, color })
-cad.addCircle([cx, cy], radius, { layer, color })
-cad.addArc([cx, cy], radius, { from: deg, to: deg, layer, color })
+cad.addLine([x1, y1], [x2, y2], { layer, color, dash })
+cad.addCircle([cx, cy], radius, { layer, color, dash })
+cad.addArc([cx, cy], radius, { from: deg, to: deg, layer, color, dash })
 cad.addArc([cx, cy], radius, { p1: [x,y], p2: [x,y] })  // tangent points, always short arc
 cad.addArc([cx, cy], radius, { from, to, shortest: true }) // auto-correct to <180 sweep
-cad.addPolyline([[x,y], ...], { closed: bool, layer, color })
+cad.addPolyline([[x,y], ...], { closed: bool, layer, color, dash })
 cad.addText("label", [x, y], { height: 5, layer, color })
 cad.addHatch([[x,y], ...], { angle: 45, spacing: 5, layer, color })
 ```
@@ -60,6 +60,35 @@ cad.addHatch([[x,y], ...], { angle: 45, spacing: 5, layer, color })
 All return the created entity (with `.id`). Coordinates are in drawing
 units (mm for mechanical, arbitrary for schematics). Color is optional:
 omit it to inherit from the layer.
+
+### Line dashing
+
+Pass `dash: [on, off, ...]` to any geometry command. Values are
+alternating dash/gap lengths in drawing units. The pattern repeats
+along the entity's path.
+
+```js
+// Standard dashed line
+cad.addLine([0,0], [100,0], { dash: [8, 4] })
+
+// Center line pattern (long-short-long-short)
+cad.addLine([0,0], [100,0], { dash: [12, 3, 3, 3] })
+
+// Dashed circle (bolt circle, reference arc)
+cad.addCircle([0,0], 75, { dash: [8, 4] })
+
+// Dotted polyline (0.5 is rendered as a very short dash)
+cad.addPolyline([[0,0],[50,0],[50,50]], { dash: [0.5, 4] })
+```
+
+Common patterns:
+- **Dashed**: `[8, 4]`
+- **Center line**: `[12, 3, 3, 3]`
+- **Hidden/phantom**: `[6, 3, 2, 3]`
+- **Dotted**: `[0.5, 4]`
+
+DWG files imported with linetypes automatically get their dash patterns
+resolved. The entity's `dash` field appears in `entities()` output.
 
 ### Blocks (reusable symbols)
 
@@ -95,6 +124,15 @@ block inserts (e.g. C_WINDOWS, furniture blocks). Without it, block
 inserts appear as single point entities with no child lines. With it,
 each block's internal shapes are transformed to world coordinates and
 returned as individual entities with their block's layer.
+
+### Introspection
+
+```js
+cad.methods()   // list all cad_call methods with args and descriptions
+```
+
+Returns an array of `{name, args, desc}` objects. Useful for discovering
+available API methods and their parameters at runtime.
 
 ### Measurements and geometry helpers
 

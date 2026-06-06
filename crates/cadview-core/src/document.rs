@@ -12,6 +12,10 @@ pub struct DrawEntity {
     pub layer: String,
     pub color: Color,
     pub shape: Shape,
+    /// Dash pattern: alternating on/off lengths in drawing units.
+    /// None = continuous (solid). Empty vec = continuous.
+    #[serde(default)]
+    pub dash: Option<Vec<f64>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -173,6 +177,7 @@ impl Document {
             layer: layer.to_string(),
             color,
             shape: Shape::Line(Line::new(p0, p1)),
+            dash: None,
         });
         id
     }
@@ -190,6 +195,7 @@ impl Document {
             layer: layer.to_string(),
             color,
             shape: Shape::Circle(Circle::new(center, radius)),
+            dash: None,
         });
         id
     }
@@ -214,6 +220,7 @@ impl Document {
                 start_angle,
                 end_angle,
             },
+            dash: None,
         });
         id
     }
@@ -231,6 +238,7 @@ impl Document {
             layer: layer.to_string(),
             color,
             shape: Shape::Polyline { points, closed },
+            dash: None,
         });
         id
     }
@@ -262,6 +270,7 @@ impl Document {
             layer: ent.layer,
             color: ent.color,
             shape: ent.shape.transformed(xform),
+            dash: ent.dash,
         });
         Some(new_id)
     }
@@ -442,6 +451,7 @@ impl Document {
                 x_scale,
                 y_scale,
             },
+            dash: None,
         });
 
         vec![insert_id]
@@ -497,6 +507,9 @@ pub struct EntityJson {
     /// Abstract boundary edges for SolidFill / CurvePath segments.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub edges: Option<serde_json::Value>,
+    /// Dash pattern: alternating on/off lengths in drawing units.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dash: Option<Vec<f64>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -531,6 +544,7 @@ impl DrawEntity {
             text: None,
             height: None,
             edges: None,
+            dash: self.dash.clone(),
         };
         match &self.shape {
             Shape::Line(l) => {
@@ -762,6 +776,7 @@ fn text_to_curve_entities(
                     path: subpath,
                     closed,
                 },
+                dash: None,
             });
         }
     }
@@ -814,6 +829,7 @@ pub fn expand_for_render(doc: &Document) -> Vec<DrawEntity> {
                             layer: layer.to_string(),
                             color,
                             shape: shape.transformed(xform),
+                            dash: None,
                         });
                     }
                 }

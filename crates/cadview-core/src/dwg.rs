@@ -1089,6 +1089,8 @@ pub(crate) struct RawEntity {
     layer: String,
     color: acadrust::Color,
     shape: Shape,
+    linetype: String,
+    linetype_scale: f64,
 }
 
 pub(crate) struct InsertRef {
@@ -1129,6 +1131,24 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
         });
     }
 
+    // Build linetype name -> dash pattern lookup
+    let mut linetype_patterns: HashMap<String, Vec<f64>> = HashMap::new();
+    for lt in cad.line_types.iter() {
+        if lt.elements.is_empty() {
+            continue;
+        }
+        let pattern: Vec<f64> = lt
+            .elements
+            .iter()
+            .map(|e| e.length.abs()) // positive=dash, negative=gap, zero=dot
+            .map(|v| if v == 0.0 { 0.1 } else { v }) // dots -> tiny dash
+            .collect();
+        // Skip all-zero or single-element patterns
+        if pattern.len() >= 2 {
+            linetype_patterns.insert(lt.name.clone(), pattern);
+        }
+    }
+
     let mut raw_entities: Vec<RawEntity> = Vec::new();
     let mut inserts: Vec<InsertRef> = Vec::new();
 
@@ -1143,6 +1163,8 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
                         Point::new(line.start.x, line.start.y),
                         Point::new(line.end.x, line.end.y),
                     )),
+                    linetype: line.common.linetype.clone(),
+                    linetype_scale: line.common.linetype_scale,
                 });
             }
             EntityType::Arc(arc) => {
@@ -1156,6 +1178,8 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
                         start_angle: arc.start_angle,
                         end_angle: arc.end_angle,
                     },
+                    linetype: arc.common.linetype.clone(),
+                    linetype_scale: arc.common.linetype_scale,
                 });
             }
             EntityType::Circle(circle) => {
@@ -1167,6 +1191,8 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
                         Point::new(circle.center.x, circle.center.y),
                         circle.radius,
                     )),
+                    linetype: circle.common.linetype.clone(),
+                    linetype_scale: circle.common.linetype_scale,
                 });
             }
             EntityType::LwPolyline(lwp) => {
@@ -1199,6 +1225,8 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
                     layer: lwp.common.layer.clone(),
                     color: lwp.common.color,
                     shape,
+                    linetype: lwp.common.linetype.clone(),
+                    linetype_scale: lwp.common.linetype_scale,
                 });
             }
             EntityType::Ellipse(ell) => {
@@ -1213,6 +1241,8 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
                         start_param: ell.start_parameter,
                         end_param: ell.end_parameter,
                     },
+                    linetype: ell.common.linetype.clone(),
+                    linetype_scale: ell.common.linetype_scale,
                 });
             }
             EntityType::Spline(spl) => {
@@ -1252,6 +1282,8 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
                     layer: spl.common.layer.clone(),
                     color: spl.common.color,
                     shape,
+                    linetype: spl.common.linetype.clone(),
+                    linetype_scale: spl.common.linetype_scale,
                 });
             }
             EntityType::Hatch(hatch) => {
@@ -1290,6 +1322,8 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
                             layer: hatch.common.layer.clone(),
                             color: hatch.common.color,
                             shape,
+                            linetype: String::new(),
+                            linetype_scale: 1.0,
                         });
                     }
 
@@ -1407,6 +1441,8 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
                                 layer: hatch.common.layer.clone(),
                                 color: hatch.common.color,
                                 shape,
+                                linetype: String::new(),
+                                linetype_scale: 1.0,
                             });
                         }
                     }
@@ -1435,6 +1471,8 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
                                     boundary: region_boundary.clone(),
                                     holes: region_holes.clone(),
                                 },
+                                linetype: String::new(),
+                                linetype_scale: 1.0,
                             });
                         }
                     }
@@ -1454,6 +1492,8 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
                             height: mt.height,
                             rotation: mt.rotation,
                         },
+                        linetype: String::new(),
+                        linetype_scale: 1.0,
                     });
                 }
             }
@@ -1469,6 +1509,8 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
                             height: txt.height,
                             rotation: txt.rotation,
                         },
+                        linetype: String::new(),
+                        linetype_scale: 1.0,
                     });
                 }
             }
@@ -1528,12 +1570,14 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
     for raw in &raw_entities {
         if ms.is_some_and(|ms| raw.owner == ms) {
             let color = resolve_entity_color(&raw.color, &raw.layer, &layer_colors);
+            let dash = resolve_dash_pattern(&raw.linetype, raw.linetype_scale, &linetype_patterns);
             let id = doc.alloc_id();
             doc.entities.push(DrawEntity {
                 id,
                 layer: raw.layer.clone(),
                 color,
                 shape: raw.shape.clone(),
+                dash,
             });
         }
     }
@@ -1580,6 +1624,7 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
                 x_scale: ins.x_scale,
                 y_scale: ins.y_scale,
             },
+            dash: None,
         });
     }
 
@@ -1600,6 +1645,29 @@ pub(crate) fn resolve_entity_color(
         acadrust::Color::Index(i) => aci_to_rgb(*i),
         acadrust::Color::Rgb { r, g, b } => Color::rgb(*r, *g, *b),
     }
+}
+
+/// Resolve a DWG entity's linetype to a dash pattern.
+/// Returns None for continuous lines (no dashing).
+fn resolve_dash_pattern(
+    linetype: &str,
+    linetype_scale: f64,
+    patterns: &HashMap<String, Vec<f64>>,
+) -> Option<Vec<f64>> {
+    if linetype.is_empty()
+        || linetype.eq_ignore_ascii_case("ByLayer")
+        || linetype.eq_ignore_ascii_case("ByBlock")
+        || linetype.eq_ignore_ascii_case("Continuous")
+    {
+        return None;
+    }
+    let pattern = patterns.get(linetype)?;
+    let scale = if linetype_scale > 0.0 {
+        linetype_scale
+    } else {
+        1.0
+    };
+    Some(pattern.iter().map(|&v| v * scale).collect())
 }
 
 pub(crate) fn resolve_acadrust_color(color: &acadrust::Color) -> Color {

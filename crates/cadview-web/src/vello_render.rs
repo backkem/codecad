@@ -494,7 +494,8 @@ fn render_frame(state: &mut VelloState) {
     // 1 CSS pixel = dpr device pixels. Without this, strokes are
     // 1 device pixel (0.5 CSS px on 2x displays), too thin for clean AA.
     let dpr = web_sys::window().unwrap().device_pixel_ratio();
-    let stroke = kurbo::Stroke::new(dpr / cam_zoom);
+    let stroke_width = dpr / cam_zoom;
+    let solid_stroke = kurbo::Stroke::new(stroke_width);
 
     for ent in &all_entities {
         if matches!(&ent.shape, Shape::SolidFill { .. }) {
@@ -528,6 +529,15 @@ fn render_frame(state: &mut VelloState) {
         let color = peniko::Color::from_rgba8(ent.color.r, ent.color.g, ent.color.b, alpha);
 
         if let Some(Some(bezpath)) = state.path_cache.get(&ent.id) {
+            let stroke = if let Some(ref dash) = ent.dash {
+                if !dash.is_empty() {
+                    solid_stroke.clone().with_dashes(0.0, dash.iter().copied())
+                } else {
+                    solid_stroke.clone()
+                }
+            } else {
+                solid_stroke.clone()
+            };
             scene.stroke(&stroke, transform, color, None, bezpath);
         }
     }

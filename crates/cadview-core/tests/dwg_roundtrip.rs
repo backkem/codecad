@@ -78,6 +78,7 @@ fn roundtrip_synthetic() {
             ],
             closed: true,
         },
+        dash: None,
     });
     let id = EntityId(101);
     doc.entities.push(DrawEntity {
@@ -91,6 +92,7 @@ fn roundtrip_synthetic() {
             start_param: 0.0,
             end_param: std::f64::consts::TAU,
         },
+        dash: None,
     });
     let id = EntityId(102);
     doc.entities.push(DrawEntity {
@@ -109,6 +111,7 @@ fn roundtrip_synthetic() {
             ],
             closed: false,
         },
+        dash: None,
     });
     let id = EntityId(103);
     doc.entities.push(DrawEntity {
@@ -123,6 +126,7 @@ fn roundtrip_synthetic() {
             ],
             holes: Vec::new(),
         },
+        dash: None,
     });
 
     let tmp = std::env::temp_dir().join("cadview_rt_test.dwg");

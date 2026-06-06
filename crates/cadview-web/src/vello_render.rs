@@ -485,7 +485,8 @@ fn render_frame(state: &mut VelloState) {
         }
 
         if let Some(Some(bezpath)) = state.path_cache.get(&ent.id) {
-            let fill_color = peniko::Color::from_rgba8(ent.color.r, ent.color.g, ent.color.b, 35);
+            let c = session.doc.resolve_color(ent);
+            let fill_color = peniko::Color::from_rgba8(c.r, c.g, c.b, 35);
             scene.fill(peniko::Fill::EvenOdd, transform, fill_color, None, bezpath);
         }
     }
@@ -517,24 +518,28 @@ fn render_frame(state: &mut VelloState) {
             continue;
         }
 
+        let c = session.doc.resolve_color(ent);
+        let base_alpha = if ent.transparency > 0 {
+            ((255 - ent.transparency) as f32 / 255.0 * c.a as f32) as u8
+        } else {
+            c.a
+        };
         let alpha = if diag_screen < FADE_THRESHOLD {
             let t = ((diag_screen - CULL_THRESHOLD) / (FADE_THRESHOLD - CULL_THRESHOLD))
                 .clamp(0.0, 1.0) as f32;
             let smoothstep = t * t * (3.0 - 2.0 * t);
-            (smoothstep * ent.color.a as f32) as u8
+            (smoothstep * base_alpha as f32) as u8
         } else {
-            ent.color.a
+            base_alpha
         };
 
-        let color = peniko::Color::from_rgba8(ent.color.r, ent.color.g, ent.color.b, alpha);
+        let color = peniko::Color::from_rgba8(c.r, c.g, c.b, alpha);
 
         if let Some(Some(bezpath)) = state.path_cache.get(&ent.id) {
-            let stroke = if let Some(ref dash) = ent.dash {
-                if !dash.is_empty() {
-                    solid_stroke.clone().with_dashes(0.0, dash.iter().copied())
-                } else {
-                    solid_stroke.clone()
-                }
+            let stroke = if let Some(pattern) = session.doc.resolve_linetype_pattern(ent) {
+                solid_stroke
+                    .clone()
+                    .with_dashes(0.0, pattern.iter().copied())
             } else {
                 solid_stroke.clone()
             };

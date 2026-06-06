@@ -11,12 +11,7 @@ fn generate_minimal_dwgs() {
     // 1. Absolute minimum: one line
     {
         let mut doc = Document::new();
-        doc.add_line(
-            Point::new(0.0, 0.0),
-            Point::new(1000.0, 500.0),
-            "0",
-            Color::WHITE,
-        );
+        doc.add_line(Point::new(0.0, 0.0), Point::new(1000.0, 500.0), "0", None);
         let path = out.join("_test-1-line.dwg");
         save_dwg(&doc, path.to_str().unwrap()).expect("save failed");
         println!("Wrote: {}", path.display());
@@ -26,20 +21,15 @@ fn generate_minimal_dwgs() {
     {
         let mut doc = Document::new();
         doc.ensure_layer("TEST");
-        doc.add_line(
-            Point::new(0.0, 0.0),
-            Point::new(1000.0, 0.0),
-            "TEST",
-            Color::WHITE,
-        );
-        doc.add_circle(Point::new(500.0, 250.0), 100.0, "TEST", Color::WHITE);
+        doc.add_line(Point::new(0.0, 0.0), Point::new(1000.0, 0.0), "TEST", None);
+        doc.add_circle(Point::new(500.0, 250.0), 100.0, "TEST", None);
         doc.add_arc(
             Point::new(200.0, 200.0),
             50.0,
             0.0,
             std::f64::consts::FRAC_PI_2,
             "TEST",
-            Color::WHITE,
+            None,
         );
         let path = out.join("_test-2-mixed.dwg");
         save_dwg(&doc, path.to_str().unwrap()).expect("save failed");
@@ -57,7 +47,7 @@ fn generate_minimal_dwgs() {
                 (
                     Shape::Circle(kurbo::Circle::new(Point::new(0.0, 0.0), 35.0)),
                     "E_TEST".into(),
-                    Color::WHITE,
+                    None,
                 ),
                 (
                     Shape::Line(kurbo::Line::new(
@@ -65,7 +55,7 @@ fn generate_minimal_dwgs() {
                         Point::new(24.5, 24.5),
                     )),
                     "E_TEST".into(),
-                    Color::WHITE,
+                    None,
                 ),
             ],
             insert_point: Point::new(0.0, 0.0),
@@ -77,7 +67,10 @@ fn generate_minimal_dwgs() {
         doc.entities.push(DrawEntity {
             id: EntityId(1),
             layer: "E_TEST".into(),
-            color: Color::WHITE,
+            color: None,
+            linetype: None,
+            lineweight: None,
+            transparency: 0,
             shape: Shape::BlockInsert {
                 block_name: "TEST_SYMBOL".into(),
                 position: Point::new(500.0, 250.0),
@@ -85,14 +78,8 @@ fn generate_minimal_dwgs() {
                 x_scale: 1.0,
                 y_scale: 1.0,
             },
-            dash: None,
         });
-        doc.add_line(
-            Point::new(0.0, 0.0),
-            Point::new(1000.0, 0.0),
-            "0",
-            Color::WHITE,
-        );
+        doc.add_line(Point::new(0.0, 0.0), Point::new(1000.0, 0.0), "0", None);
 
         let path = out.join("_test-3-block.dwg");
         save_dwg(&doc, path.to_str().unwrap()).expect("save failed");

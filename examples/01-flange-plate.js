@@ -1,5 +1,5 @@
 // Parametric flange plate with bolt circle
-// Exercises: addCircle, addLine, measure, addText, layers, polar pattern
+// Exercises: addCircle, addLine, measure, addText, layers, linetypes, polar pattern
 //
 // A simple pipe flange: center bore, bolt circle with N holes,
 // outer diameter, and dimensioned radii.
@@ -15,15 +15,15 @@ const boreR = boreD / 2;
 const boltR = boltCircleD / 2;
 const holeR = boltHoleD / 2;
 
-// Layers
-cad.addLayer("FLANGE", { color: [200, 200, 200] });
-cad.addLayer("HOLES", { color: [100, 180, 255] });
-cad.addLayer("DIM", { color: [180, 180, 0] });
-cad.addLayer("_CL", { color: [80, 80, 80] });
+// Layers (ACI-safe colors for lossless DWG roundtrip)
+cad.addLayer("FLANGE", { color: [192, 192, 192] });
+cad.addLayer("HOLES", { color: [0, 0, 255] });
+cad.addLayer("DIM", { color: [255, 255, 0] });
+cad.addLayer("_CL", { color: [128, 128, 128], linetype: "Center" });
 
-// Centerlines (long-dash-short-dash center line pattern)
-cad.addLine([-R - 20, 0], [R + 20, 0], { layer: "_CL", dash: [12, 3, 3, 3] });
-cad.addLine([0, -R - 20], [0, R + 20], { layer: "_CL", dash: [12, 3, 3, 3] });
+// Centerlines (inherit Center linetype from layer)
+cad.addLine([-R - 20, 0], [R + 20, 0], { layer: "_CL" });
+cad.addLine([0, -R - 20], [0, R + 20], { layer: "_CL" });
 
 // Main geometry
 cad.addCircle([0, 0], R, { layer: "FLANGE" });
@@ -38,7 +38,7 @@ for (let i = 0; i < nBolts; i++) {
 }
 
 // Bolt circle (dashed reference)
-cad.addCircle([0, 0], boltR, { layer: "_CL", dash: [8, 4] });
+cad.addCircle([0, 0], boltR, { layer: "_CL", linetype: "Dashed" });
 
 // Dimensions
 cad.measure([0, 0], [R, 0], { offset: -30, layer: "DIM", text_height: 6 });

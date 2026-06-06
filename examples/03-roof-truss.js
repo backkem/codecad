@@ -10,11 +10,11 @@ const panels = 6;
 const panelW = span / panels;
 const half = panels / 2;
 
-cad.addLayer("CHORD", { color: [200, 160, 100] });   // top/bottom chords
-cad.addLayer("WEB", { color: [140, 140, 140] });      // diagonals + verticals
-cad.addLayer("DIM", { color: [180, 180, 0] });
-cad.addLayer("LABEL", { color: [150, 150, 150] });
-cad.addLayer("SUPPORT", { color: [100, 200, 100] });
+cad.addLayer("CHORD", { color: [191, 127, 0] });      // top/bottom chords
+cad.addLayer("WEB", { color: [128, 128, 128] });      // diagonals + verticals
+cad.addLayer("DIM", { color: [255, 255, 0] });
+cad.addLayer("LABEL", { color: [192, 192, 192] });
+cad.addLayer("SUPPORT", { color: [0, 255, 0] });
 
 // Bottom chord
 cad.addLine([0, 0], [span, 0], { layer: "CHORD" });

@@ -39,6 +39,15 @@ impl Color {
     }
 }
 
+/// Named linetype definition: a reusable dash pattern stored in the
+/// document's linetype table. Entities and layers reference by name.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinetypeDef {
+    pub name: String,
+    pub description: String,
+    pub pattern: Vec<f64>, // alternating dash/gap in drawing units
+}
+
 /// An edge in a fill boundary path. Stores abstract geometry so the
 /// renderer can flatten at zoom-adaptive tolerance.
 #[derive(Debug, Clone, Serialize, Deserialize)]

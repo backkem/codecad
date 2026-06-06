@@ -9,11 +9,11 @@ const G = 5; // grid spacing in mm
 function gpt(gx, gy) { return [gx * G, gy * G]; }
 
 // Layers
-cad.addLayer("SCH_COMP", { color: [0, 0, 0] });
-cad.addLayer("SCH_WIRE", { color: [0, 80, 200] });
-cad.addLayer("SCH_LABEL", { color: [120, 120, 120] });
-cad.addLayer("SCH_CTRL", { color: [200, 0, 0] });
-cad.addLayer("SCH_FRAME", { color: [60, 60, 60] });
+cad.addLayer("SCH_COMP", { color: [255, 255, 255] });
+cad.addLayer("SCH_WIRE", { color: [0, 0, 255] });
+cad.addLayer("SCH_LABEL", { color: [128, 128, 128] });
+cad.addLayer("SCH_CTRL", { color: [255, 0, 0] });
+cad.addLayer("SCH_FRAME", { color: [128, 128, 128] });
 
 // ── Block definitions ──────────────────────────────────────────────
 

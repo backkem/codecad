@@ -14,11 +14,11 @@ const wheelBase = 1000;
 const tubeOD = 32;        // tube outer diameter -> wall offset = OD/2
 const forkRake = 45;
 
-cad.addLayer("FRAME", { color: [220, 180, 80] });
-cad.addLayer("WHEELS", { color: [120, 120, 120] });
-cad.addLayer("DIM", { color: [180, 180, 0] });
-cad.addLayer("LABEL", { color: [150, 150, 150] });
-cad.addLayer("_CL", { color: [60, 60, 60] });
+cad.addLayer("FRAME", { color: [255, 255, 0] });
+cad.addLayer("WHEELS", { color: [128, 128, 128] });
+cad.addLayer("DIM", { color: [255, 255, 0] });
+cad.addLayer("LABEL", { color: [192, 192, 192] });
+cad.addLayer("_CL", { color: [128, 128, 128] });
 
 const DEG = Math.PI / 180;
 

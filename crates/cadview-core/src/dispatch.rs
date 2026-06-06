@@ -9,6 +9,47 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::f64::consts::PI;
 
+// ── Color argument: accepts [r,g,b] array or ACI index number ─────────
+
+#[derive(Debug, Clone)]
+enum ColorArg {
+    Rgb([u8; 3]),
+    Aci(u8),
+}
+
+impl ColorArg {
+    fn resolve(self) -> Color {
+        match self {
+            ColorArg::Rgb(c) => Color::rgb(c[0], c[1], c[2]),
+            ColorArg::Aci(i) => crate::dwg::aci_to_rgb(i),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ColorArg {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let v = serde_json::Value::deserialize(d)?;
+        match &v {
+            serde_json::Value::Array(arr) if arr.len() == 3 => {
+                let r = arr[0].as_u64().ok_or(serde::de::Error::custom("bad r"))? as u8;
+                let g = arr[1].as_u64().ok_or(serde::de::Error::custom("bad g"))? as u8;
+                let b = arr[2].as_u64().ok_or(serde::de::Error::custom("bad b"))? as u8;
+                Ok(ColorArg::Rgb([r, g, b]))
+            }
+            serde_json::Value::Number(n) => {
+                let i = n
+                    .as_u64()
+                    .ok_or(serde::de::Error::custom("bad ACI index"))?
+                    as u8;
+                Ok(ColorArg::Aci(i))
+            }
+            _ => Err(serde::de::Error::custom(
+                "color must be [r,g,b] array or ACI index number",
+            )),
+        }
+    }
+}
+
 // ── cad_call dispatcher ────────────────────────────────────────────────
 
 /// The ABI entry point. Routes method + JSON args to Document operations.
@@ -43,6 +84,7 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 "bounds": { "min": min, "max": max },
                 "entities": doc.entities.len(),
                 "layers": doc.layers.iter().map(|l| &l.name).collect::<Vec<_>>(),
+                "linetypes": doc.linetypes.len(),
                 "counts": counts,
             });
             Ok(result.to_string())
@@ -87,12 +129,15 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                                 } else {
                                     shape_layer
                                 };
-                                let color =
-                                    if *shape_color == Color::WHITE && ent.color != Color::WHITE {
-                                        ent.color
-                                    } else {
-                                        *shape_color
-                                    };
+                                let color = if shape_color.is_none()
+                                    || *shape_color == Some(Color::WHITE)
+                                {
+                                    // Inherit from insert entity; if that's also None
+                                    // (ByLayer), resolve to the insert's layer color.
+                                    ent.color.or_else(|| Some(doc.layer_color(&ent.layer)))
+                                } else {
+                                    *shape_color
+                                };
                                 if let Some(ref filter_layer) = ea.layer {
                                     if layer != filter_layer {
                                         continue;
@@ -102,16 +147,18 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                                     id: ent.id,
                                     layer: layer.to_string(),
                                     color,
+                                    linetype: None,
+                                    lineweight: None,
+                                    transparency: 0,
                                     shape: shape.transformed(xform),
-                                    dash: None,
                                 };
-                                result.push(expanded.to_json());
+                                result.push(expanded.to_json(doc));
                             }
                         }
                     }
                     // Include the entity itself if it passes the layer filter
                     if ea.layer.as_ref().is_none_or(|l| ent.layer == *l) {
-                        result.push(ent.to_json());
+                        result.push(ent.to_json(doc));
                     }
                 }
                 serde_json::to_string(&result).map_err(|e| e.to_string())
@@ -120,10 +167,10 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                     doc.entities
                         .iter()
                         .filter(|e| e.layer == *layer)
-                        .map(|e| e.to_json())
+                        .map(|e| e.to_json(doc))
                         .collect()
                 } else {
-                    doc.entities.iter().map(|e| e.to_json()).collect()
+                    doc.entities.iter().map(|e| e.to_json(doc)).collect()
                 };
                 serde_json::to_string(&ents).map_err(|e| e.to_string())
             }
@@ -164,8 +211,8 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                     } else {
                         shape_layer
                     };
-                    let color = if *shape_color == Color::WHITE && ent_color != Color::WHITE {
-                        ent_color
+                    let color = if shape_color.is_none() || *shape_color == Some(Color::WHITE) {
+                        ent_color.or_else(|| Some(doc.layer_color(&layer)))
                     } else {
                         *shape_color
                     };
@@ -173,10 +220,12 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                         id,
                         layer: child_layer.to_string(),
                         color,
+                        linetype: None,
+                        lineweight: None,
+                        transparency: 0,
                         shape: shape.transformed(xform),
-                        dash: None,
                     };
-                    result.push(expanded.to_json());
+                    result.push(expanded.to_json(doc));
                 }
                 serde_json::to_string(&result).map_err(|e| e.to_string())
             } else {
@@ -192,7 +241,7 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
             let args: Args = parse_args(args)?;
             let id = parse_entity_id(&args.id)?;
             match doc.entity(id) {
-                Some(e) => serde_json::to_string(&e.to_json()).map_err(|e| e.to_string()),
+                Some(e) => serde_json::to_string(&e.to_json(doc)).map_err(|e| e.to_string()),
                 None => Err(format!("entity {} not found", args.id)),
             }
         }
@@ -205,29 +254,30 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 #[serde(default = "default_layer")]
                 layer: String,
                 #[serde(default)]
-                color: Option<[u8; 3]>,
+                color: Option<ColorArg>,
                 #[serde(default)]
-                dash: Option<Vec<f64>>,
+                linetype: Option<String>,
+                #[serde(default)]
+                lineweight: Option<f64>,
+                #[serde(default)]
+                transparency: Option<u8>,
             }
             let a: Args = parse_args(args)?;
             doc.ensure_layer(&a.layer);
-            let color = a.color.map_or_else(
-                || doc.layer_color(&a.layer),
-                |c| Color::rgb(c[0], c[1], c[2]),
-            );
+            let color = a.color.map(ColorArg::resolve);
             let id = doc.add_line(
                 Point::new(a.start[0], a.start[1]),
                 Point::new(a.end[0], a.end[1]),
                 &a.layer,
                 color,
             );
-            if let Some(dash) = a.dash {
-                if let Some(ent) = doc.entity_mut(id) {
-                    ent.dash = Some(dash);
-                }
+            if let Some(ent) = doc.entity_mut(id) {
+                ent.linetype = a.linetype;
+                ent.lineweight = a.lineweight;
+                ent.transparency = a.transparency.unwrap_or(0);
             }
             let ent = doc.entity(id).expect("entity was just added");
-            serde_json::to_string(&ent.to_json()).map_err(|e| e.to_string())
+            serde_json::to_string(&ent.to_json(doc)).map_err(|e| e.to_string())
         }
 
         "addCircle" => {
@@ -238,29 +288,30 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 #[serde(default = "default_layer")]
                 layer: String,
                 #[serde(default)]
-                color: Option<[u8; 3]>,
+                color: Option<ColorArg>,
                 #[serde(default)]
-                dash: Option<Vec<f64>>,
+                linetype: Option<String>,
+                #[serde(default)]
+                lineweight: Option<f64>,
+                #[serde(default)]
+                transparency: Option<u8>,
             }
             let a: Args = parse_args(args)?;
             doc.ensure_layer(&a.layer);
-            let color = a.color.map_or_else(
-                || doc.layer_color(&a.layer),
-                |c| Color::rgb(c[0], c[1], c[2]),
-            );
+            let color = a.color.map(ColorArg::resolve);
             let id = doc.add_circle(
                 Point::new(a.center[0], a.center[1]),
                 a.radius,
                 &a.layer,
                 color,
             );
-            if let Some(dash) = a.dash {
-                if let Some(ent) = doc.entity_mut(id) {
-                    ent.dash = Some(dash);
-                }
+            if let Some(ent) = doc.entity_mut(id) {
+                ent.linetype = a.linetype;
+                ent.lineweight = a.lineweight;
+                ent.transparency = a.transparency.unwrap_or(0);
             }
             let ent = doc.entity(id).expect("entity was just added");
-            serde_json::to_string(&ent.to_json()).map_err(|e| e.to_string())
+            serde_json::to_string(&ent.to_json(doc)).map_err(|e| e.to_string())
         }
 
         "addArc" => {
@@ -282,16 +333,17 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 #[serde(default = "default_layer")]
                 layer: String,
                 #[serde(default)]
-                color: Option<[u8; 3]>,
+                color: Option<ColorArg>,
                 #[serde(default)]
-                dash: Option<Vec<f64>>,
+                linetype: Option<String>,
+                #[serde(default)]
+                lineweight: Option<f64>,
+                #[serde(default)]
+                transparency: Option<u8>,
             }
             let a: Args = parse_args(args)?;
             doc.ensure_layer(&a.layer);
-            let color = a.color.map_or_else(
-                || doc.layer_color(&a.layer),
-                |c| Color::rgb(c[0], c[1], c[2]),
-            );
+            let color = a.color.map(ColorArg::resolve);
             let center = Point::new(a.center[0], a.center[1]);
 
             let (mut from_rad, mut to_rad) = if let (Some(p1), Some(p2)) = (a.p1, a.p2) {
@@ -326,13 +378,13 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
             }
 
             let id = doc.add_arc(center, a.radius, from_rad, to_rad, &a.layer, color);
-            if let Some(dash) = a.dash {
-                if let Some(ent) = doc.entity_mut(id) {
-                    ent.dash = Some(dash);
-                }
+            if let Some(ent) = doc.entity_mut(id) {
+                ent.linetype = a.linetype;
+                ent.lineweight = a.lineweight;
+                ent.transparency = a.transparency.unwrap_or(0);
             }
             let ent = doc.entity(id).expect("entity was just added");
-            serde_json::to_string(&ent.to_json()).map_err(|e| e.to_string())
+            serde_json::to_string(&ent.to_json(doc)).map_err(|e| e.to_string())
         }
 
         "addPolyline" => {
@@ -344,25 +396,26 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 #[serde(default = "default_layer")]
                 layer: String,
                 #[serde(default)]
-                color: Option<[u8; 3]>,
+                color: Option<ColorArg>,
                 #[serde(default)]
-                dash: Option<Vec<f64>>,
+                linetype: Option<String>,
+                #[serde(default)]
+                lineweight: Option<f64>,
+                #[serde(default)]
+                transparency: Option<u8>,
             }
             let a: Args = parse_args(args)?;
             doc.ensure_layer(&a.layer);
-            let color = a.color.map_or_else(
-                || doc.layer_color(&a.layer),
-                |c| Color::rgb(c[0], c[1], c[2]),
-            );
+            let color = a.color.map(ColorArg::resolve);
             let pts: Vec<Point> = a.points.iter().map(|p| Point::new(p[0], p[1])).collect();
             let id = doc.add_polyline(pts, a.closed, &a.layer, color);
-            if let Some(dash) = a.dash {
-                if let Some(ent) = doc.entity_mut(id) {
-                    ent.dash = Some(dash);
-                }
+            if let Some(ent) = doc.entity_mut(id) {
+                ent.linetype = a.linetype;
+                ent.lineweight = a.lineweight;
+                ent.transparency = a.transparency.unwrap_or(0);
             }
             let ent = doc.entity(id).expect("entity was just added");
-            serde_json::to_string(&ent.to_json()).map_err(|e| e.to_string())
+            serde_json::to_string(&ent.to_json(doc)).map_err(|e| e.to_string())
         }
 
         "remove" => {
@@ -411,7 +464,11 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
             let mut copied = Vec::new();
             for id in ids {
                 if let Some(new_id) = doc.copy_entity(id, a.dx, a.dy) {
-                    copied.push(doc.entity(new_id).expect("entity was just added").to_json());
+                    copied.push(
+                        doc.entity(new_id)
+                            .expect("entity was just added")
+                            .to_json(doc),
+                    );
                 }
             }
             Ok(serde_json::json!(copied).to_string())
@@ -469,7 +526,7 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
             match doc.trim_entity(eid, cut, &a.keep) {
                 Some(new_id) => {
                     let ent = doc.entity(new_id).expect("entity was just added");
-                    serde_json::to_string(&ent.to_json()).map_err(|e| e.to_string())
+                    serde_json::to_string(&ent.to_json(doc)).map_err(|e| e.to_string())
                 }
                 None => Err(format!("cannot trim entity {}", a.id)),
             }
@@ -480,24 +537,39 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
             struct Args {
                 name: String,
                 #[serde(default)]
-                color: Option<[u8; 3]>,
+                color: Option<ColorArg>,
                 #[serde(default)]
                 visible: Option<bool>,
+                #[serde(default)]
+                linetype: Option<String>,
+                #[serde(default)]
+                lineweight: Option<f64>,
             }
             let a: Args = parse_args(args)?;
-            let color = a
-                .color
-                .map_or(Color::WHITE, |c| Color::rgb(c[0], c[1], c[2]));
+            let color = a.color.map_or(Color::WHITE, ColorArg::resolve);
             doc.add_layer(&a.name, color);
             if let Some(false) = a.visible {
                 if let Some(layer) = doc.layers.iter_mut().find(|l| l.name == a.name) {
                     layer.visible = false;
                 }
             }
-            Ok(
-                serde_json::json!({ "name": a.name, "color": [color.r, color.g, color.b] })
-                    .to_string(),
-            )
+            if let Some(lt) = &a.linetype {
+                if let Some(layer) = doc.layers.iter_mut().find(|l| l.name == a.name) {
+                    layer.linetype = lt.clone();
+                }
+            }
+            if let Some(lw) = a.lineweight {
+                if let Some(layer) = doc.layers.iter_mut().find(|l| l.name == a.name) {
+                    layer.lineweight = lw;
+                }
+            }
+            Ok(serde_json::json!({
+                "name": a.name,
+                "color": [color.r, color.g, color.b],
+                "linetype": doc.layers.iter().find(|l| l.name == a.name).map(|l| &l.linetype),
+                "lineweight": doc.layers.iter().find(|l| l.name == a.name).map(|l| l.lineweight),
+            })
+            .to_string())
         }
 
         "clear" => {
@@ -532,27 +604,26 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 #[serde(default = "default_layer")]
                 layer: String,
                 #[serde(default)]
-                color: Option<[u8; 3]>,
+                color: Option<ColorArg>,
             }
             let a: Args = parse_args(args)?;
             doc.ensure_layer(&a.layer);
-            let color = a.color.map_or_else(
-                || doc.layer_color(&a.layer),
-                |c| Color::rgb(c[0], c[1], c[2]),
-            );
+            let color = a.color.map(ColorArg::resolve);
 
             let id = doc.alloc_id();
             doc.entities.push(DrawEntity {
                 id,
                 layer: a.layer.clone(),
                 color,
+                linetype: None,
+                lineweight: None,
+                transparency: 0,
                 shape: Shape::Text {
                     text: a.text.clone(),
                     position: kurbo::Point::new(a.at[0], a.at[1]),
                     height: a.height,
                     rotation: 0.0,
                 },
-                dash: None,
             });
 
             let width = text::text_width(&a.text, a.height);
@@ -578,14 +649,11 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 #[serde(default = "default_layer")]
                 layer: String,
                 #[serde(default)]
-                color: Option<[u8; 3]>,
+                color: Option<ColorArg>,
             }
             let a: Args = parse_args(args)?;
             doc.ensure_layer(&a.layer);
-            let color = a.color.map_or_else(
-                || doc.layer_color(&a.layer),
-                |c| Color::rgb(c[0], c[1], c[2]),
-            );
+            let color = a.color.map(ColorArg::resolve);
 
             let from = Point::new(a.from[0], a.from[1]);
             let to = Point::new(a.to[0], a.to[1]);
@@ -690,14 +758,11 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 #[serde(default = "default_layer")]
                 layer: String,
                 #[serde(default)]
-                color: Option<[u8; 3]>,
+                color: Option<ColorArg>,
             }
             let a: Args = parse_args(args)?;
             doc.ensure_layer(&a.layer);
-            let color = a.color.map_or_else(
-                || doc.layer_color(&a.layer),
-                |c| Color::rgb(c[0], c[1], c[2]),
-            );
+            let color = a.color.map(ColorArg::resolve);
             let boundary: Vec<Point> = a.boundary.iter().map(|p| Point::new(p[0], p[1])).collect();
             if boundary.len() < 3 {
                 return Err("hatch boundary needs at least 3 points".to_string());
@@ -790,7 +855,7 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
             match new_id {
                 Some(id) => {
                     let ent = doc.entity(id).expect("entity was just added");
-                    serde_json::to_string(&ent.to_json()).map_err(|e| e.to_string())
+                    serde_json::to_string(&ent.to_json(doc)).map_err(|e| e.to_string())
                 }
                 None => Err(format!("cannot offset entity {}", a.id)),
             }
@@ -820,7 +885,7 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 #[serde(default)]
                 layer: Option<String>,
                 #[serde(default)]
-                color: Option<[u8; 3]>,
+                color: Option<ColorArg>,
             }
             #[derive(Deserialize)]
             struct Args {
@@ -834,9 +899,7 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
             let a: Args = parse_args(args)?;
             let mut shapes = Vec::new();
             for sd in &a.shapes {
-                let color = sd
-                    .color
-                    .map_or(Color::WHITE, |c| Color::rgb(c[0], c[1], c[2]));
+                let color = sd.color.clone().map(ColorArg::resolve);
                 let layer = sd.layer.clone().unwrap_or_default();
                 let shape = match sd.shape_type.as_str() {
                     "line" => {
@@ -897,7 +960,7 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
             }
             let a: Args = parse_args(args)?;
             let tmp_doc = load_dwg(&a.path).map_err(|e| format!("loadDwgAsBlock: {e}"))?;
-            let shapes: Vec<(Shape, String, Color)> = tmp_doc
+            let shapes: Vec<(Shape, String, Option<Color>)> = tmp_doc
                 .entities
                 .into_iter()
                 .map(|e| (e.shape, e.layer, e.color))
@@ -1104,7 +1167,7 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
             }
             // First ID is the block_insert entity, return it directly
             let insert_ent = doc.entity(ids[0]).expect("entity was just added");
-            serde_json::to_string(&insert_ent.to_json()).map_err(|e| e.to_string())
+            serde_json::to_string(&insert_ent.to_json(doc)).map_err(|e| e.to_string())
         }
 
         "connectedTo" => {
@@ -1138,7 +1201,7 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                     .iter()
                     .any(|sp| other_pts.iter().any(|op| geo::distance(*sp, *op) < tol));
                 if shares {
-                    connected.push(other.to_json());
+                    connected.push(other.to_json(doc));
                 }
             }
             serde_json::to_string(&connected).map_err(|e| e.to_string())
@@ -1260,18 +1323,66 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
             Ok(serde_json::json!([p.x, p.y]).to_string())
         }
 
+        "addLinetype" => {
+            #[derive(Deserialize)]
+            struct Args {
+                name: String,
+                pattern: Vec<f64>,
+                #[serde(default)]
+                description: Option<String>,
+            }
+            let a: Args = parse_args(args)?;
+            doc.linetypes.insert(
+                a.name.clone(),
+                crate::types::LinetypeDef {
+                    name: a.name.clone(),
+                    description: a.description.unwrap_or_default(),
+                    pattern: a.pattern.clone(),
+                },
+            );
+            Ok(serde_json::json!({"name": a.name, "pattern": a.pattern}).to_string())
+        }
+
+        "linetypes" => {
+            let lts: Vec<serde_json::Value> = doc
+                .linetypes
+                .values()
+                .map(|lt| {
+                    serde_json::json!({
+                        "name": lt.name,
+                        "description": lt.description,
+                        "pattern": lt.pattern,
+                    })
+                })
+                .collect();
+            serde_json::to_string(&lts).map_err(|e| e.to_string())
+        }
+
+        "aciColors" => {
+            let colors: Vec<serde_json::Value> = (1u16..=255)
+                .map(|i| {
+                    let (r, g, b) = acadrust::types::ACI_COLORS[i as usize];
+                    serde_json::json!({"index": i, "color": [r, g, b]})
+                })
+                .collect();
+            serde_json::to_string(&colors).map_err(|e| e.to_string())
+        }
+
         "methods" => {
             let methods = serde_json::json!([
                 {"name": "describe", "args": "{}", "desc": "Scene summary: bounds, entity counts, layers"},
                 {"name": "entities", "args": "{expand?, layer?}", "desc": "List all entities. expand=true flattens block inserts"},
                 {"name": "entity", "args": "{id}", "desc": "Get one entity by ID"},
                 {"name": "children", "args": "{id}", "desc": "Expanded child shapes of a block insert"},
-                {"name": "addLine", "args": "{start, end, layer?, color?, dash?}", "desc": "Add line. dash=[on,off,...] in drawing units"},
-                {"name": "addCircle", "args": "{center, radius, layer?, color?, dash?}", "desc": "Add circle"},
-                {"name": "addArc", "args": "{center, radius, from?, to?, p1?, p2?, shortest?, layer?, color?, dash?}", "desc": "Add arc (degrees or point-based)"},
-                {"name": "addPolyline", "args": "{points, closed?, layer?, color?, dash?}", "desc": "Add polyline"},
+                {"name": "addLine", "args": "{start, end, layer?, color?, linetype?, lineweight?, transparency?}", "desc": "Add line"},
+                {"name": "addCircle", "args": "{center, radius, layer?, color?, linetype?, lineweight?, transparency?}", "desc": "Add circle"},
+                {"name": "addArc", "args": "{center, radius, from?, to?, p1?, p2?, shortest?, layer?, color?, linetype?, lineweight?, transparency?}", "desc": "Add arc (degrees or point-based)"},
+                {"name": "addPolyline", "args": "{points, closed?, layer?, color?, linetype?, lineweight?, transparency?}", "desc": "Add polyline"},
                 {"name": "addText", "args": "{text, at, height?, layer?, color?}", "desc": "Add single-line text"},
-                {"name": "addLayer", "args": "{name, color?}", "desc": "Create/update layer"},
+                {"name": "addLayer", "args": "{name, color?, linetype?, lineweight?}", "desc": "Create/update layer"},
+                {"name": "addLinetype", "args": "{name, pattern, description?}", "desc": "Define named linetype. pattern=[dash,gap,...] in drawing units"},
+                {"name": "linetypes", "args": "{}", "desc": "List all defined linetypes"},
+                {"name": "aciColors", "args": "{}", "desc": "ACI palette: 255 entries of {index, color: [r,g,b]}"},
                 {"name": "measure", "args": "{from, to, offset?, layer?}", "desc": "Add dimension line between two points"},
                 {"name": "addHatch", "args": "{boundary, angle?, spacing?, layer?}", "desc": "Add line-pattern hatch fill"},
                 {"name": "defineBlock", "args": "{name, shapes, insert_point?}", "desc": "Define reusable block from shape list"},
@@ -1339,7 +1450,7 @@ pub(crate) fn add_glyph_paths(
     doc: &mut Document,
     glyph_paths: &[BezPath],
     layer: &str,
-    color: Color,
+    color: Option<Color>,
 ) -> Vec<EntityId> {
     let mut ids = Vec::new();
     for path in glyph_paths {
@@ -1359,11 +1470,13 @@ pub(crate) fn add_glyph_paths(
                 id,
                 layer: layer.to_string(),
                 color,
+                linetype: None,
+                lineweight: None,
+                transparency: 0,
                 shape: Shape::CurvePath {
                     path: subpath,
                     closed,
                 },
-                dash: None,
             });
             ids.push(id);
         }

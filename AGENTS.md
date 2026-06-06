@@ -250,7 +250,7 @@ Opens http://localhost:5173. WASM must be built first (step 1 above).
 
 ### Exporting example screenshots and DWGs
 
-All example PNGs are 2400x1600. To re-export after changing an example:
+All example PNGs are 960x640. To re-export after changing an example:
 
 ```bash
 # 1. Build everything and start server with examples
@@ -273,9 +273,9 @@ curl -s -X POST http://localhost:8765/api/run \
   -H "Content-Type: application/json" \
   -d '{"program": "return cad.saveDwg(\"examples/01-flange-plate.dwg\")"}'
 
-# 4. Screenshot via Chrome DevTools MCP (resize to 2400x1600 first)
+# 4. Screenshot via Chrome DevTools MCP (resize to 960x640 first)
 #    then downscale with Pillow to counter DPR scaling:
-#    python3 -c "from PIL import Image; im=Image.open('examples/01-flange-plate.png'); im.resize((2400,1600),Image.LANCZOS).save('examples/01-flange-plate.png')"
+#    python3 -c "from PIL import Image; im=Image.open('examples/01-flange-plate.png'); im.resize((960,640),Image.LANCZOS).save('examples/01-flange-plate.png')"
 ```
 
 ## The ABI: `cad_call`
@@ -469,6 +469,15 @@ cadview-server: 8 tests (store backends, registry, broadcast isolation).
 - **Shared cad API (TypeScript)**: `web/src/cad-api.ts` is the single
   source of truth. Browser imports directly, sandbox gets a Vite-built
   IIFE. No method list duplication.
+- **ByLayer style inheritance**: color, linetype, lineweight are
+  `Option` on DrawEntity (`None` = inherit from layer). Transparency
+  is entity-only (u8, 0=opaque). Named linetypes stored in
+  `Document.linetypes` table. Standard patterns (Dashed, Center,
+  Hidden, Phantom, Dot) pre-populated. Resolution happens at render
+  time, not creation time.
+  DWG AC1015 stores colors as ACI (AutoCAD Color Index), so RGB
+  values are lossy through save/reload. Use ACI palette values
+  in examples for lossless roundtrip.
 
 ## Required reading
 

@@ -7,10 +7,10 @@
 const fib = [1, 1, 2, 3, 5, 8];
 const scale = 20; // mm per unit
 
-cad.addLayer("SPIRAL", { color: [255, 120, 0] });
-cad.addLayer("GRID", { color: [120, 120, 120] });
-cad.addLayer("DIAG", { color: [80, 80, 80] });
-cad.addLayer("LABEL", { color: [160, 160, 160] });
+cad.addLayer("SPIRAL", { color: [255, 125, 0] });
+cad.addLayer("GRID", { color: [128, 128, 128] });
+cad.addLayer("DIAG", { color: [128, 128, 128] });
+cad.addLayer("LABEL", { color: [192, 192, 192] });
 
 // Square positions (bottom-left corner, in grid units)
 const positions = [

@@ -5,11 +5,11 @@
 // Half-section view (symmetric about centerline). Shows piston crown,
 // ring grooves, skirt, wrist pin bore, and connecting rod.
 
-cad.addLayer("SECTION", { color: [200, 200, 200] });
-cad.addLayer("HATCH", { color: [140, 140, 160] });
-cad.addLayer("_CL", { color: [80, 80, 80] });
-cad.addLayer("DIM", { color: [180, 180, 0] });
-cad.addLayer("LABEL", { color: [150, 150, 150] });
+cad.addLayer("SECTION", { color: [192, 192, 192] });
+cad.addLayer("HATCH", { color: [128, 128, 128] });
+cad.addLayer("_CL", { color: [128, 128, 128] });
+cad.addLayer("DIM", { color: [255, 255, 0] });
+cad.addLayer("LABEL", { color: [192, 192, 192] });
 
 // Piston parameters (mm)
 const bore = 86;

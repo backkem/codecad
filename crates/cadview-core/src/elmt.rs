@@ -73,7 +73,7 @@ pub fn parse_elmt(xml: &str) -> Result<ElmtSymbol, String> {
 
     let mut hotspot_x: f64 = 0.0;
     let mut hotspot_y: f64 = 0.0;
-    let mut shapes: Vec<(Shape, String, Color)> = Vec::new();
+    let mut shapes: Vec<(Shape, String, Option<Color>)> = Vec::new();
     let mut terminals: Vec<Terminal> = Vec::new();
     let mut names: Vec<(String, String)> = Vec::new();
     let mut en_standard = String::new();
@@ -112,32 +112,32 @@ pub fn parse_elmt(xml: &str) -> Result<ElmtSymbol, String> {
 
                     "line" if in_description => {
                         if let Some(shape) = parse_line(e, hotspot_x, hotspot_y) {
-                            shapes.push((shape, String::new(), Color::WHITE));
+                            shapes.push((shape, String::new(), Some(Color::WHITE)));
                         }
                     }
                     "ellipse" if in_description => {
                         if let Some(shape) = parse_ellipse(e, hotspot_x, hotspot_y) {
-                            shapes.push((shape, String::new(), Color::WHITE));
+                            shapes.push((shape, String::new(), Some(Color::WHITE)));
                         }
                     }
                     "arc" if in_description => {
                         if let Some(shape) = parse_arc(e, hotspot_x, hotspot_y) {
-                            shapes.push((shape, String::new(), Color::WHITE));
+                            shapes.push((shape, String::new(), Some(Color::WHITE)));
                         }
                     }
                     "rect" if in_description => {
                         if let Some(shape) = parse_rect(e, hotspot_x, hotspot_y) {
-                            shapes.push((shape, String::new(), Color::WHITE));
+                            shapes.push((shape, String::new(), Some(Color::WHITE)));
                         }
                     }
                     "polygon" if in_description => {
                         if let Some(shape) = parse_polygon(e, hotspot_x, hotspot_y) {
-                            shapes.push((shape, String::new(), Color::WHITE));
+                            shapes.push((shape, String::new(), Some(Color::WHITE)));
                         }
                     }
                     "text" if in_description => {
                         if let Some(shape) = parse_text(e, hotspot_x, hotspot_y) {
-                            shapes.push((shape, String::new(), Color::WHITE));
+                            shapes.push((shape, String::new(), Some(Color::WHITE)));
                         }
                     }
                     "terminal" if in_description => {

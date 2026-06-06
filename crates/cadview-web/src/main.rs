@@ -710,6 +710,16 @@ impl CadViewApp {
     fn to_color32(c: &cadview_core::Color) -> Color32 {
         Color32::from_rgb(c.r, c.g, c.b)
     }
+
+    /// Resolve an entity's optional color to a concrete Color32,
+    /// falling back to the entity's layer color from the document.
+    fn resolve_ent_color32(
+        ent: &cadview_core::DrawEntity,
+        doc: &cadview_core::Document,
+    ) -> Color32 {
+        let c = ent.color.unwrap_or_else(|| doc.layer_color(&ent.layer));
+        Self::to_color32(&c)
+    }
 }
 
 impl eframe::App for CadViewApp {
@@ -912,7 +922,7 @@ impl eframe::App for CadViewApp {
                 continue;
             }
 
-            let base_color = Self::to_color32(&ent.color);
+            let base_color = Self::resolve_ent_color32(ent, doc);
             let fill_color =
                 Color32::from_rgba_unmultiplied(base_color.r(), base_color.g(), base_color.b(), 35);
 
@@ -951,7 +961,7 @@ impl eframe::App for CadViewApp {
                 continue;
             }
 
-            let base_color = Self::to_color32(&ent.color);
+            let base_color = Self::resolve_ent_color32(ent, doc);
             let color = if diag_screen < FADE_THRESHOLD {
                 let t = ((diag_screen - CULL_THRESHOLD) / (FADE_THRESHOLD - CULL_THRESHOLD))
                     .clamp(0.0, 1.0) as f32;

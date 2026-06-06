@@ -110,7 +110,7 @@ pub async fn run_script(
                 let resolved = resolve_write(path);
                 let doc = doc_r.lock().unwrap();
                 let entities: Vec<cadview_core::EntityJson> =
-                    doc.entities.iter().map(|e| e.to_json()).collect();
+                    doc.entities.iter().map(|e| e.to_json(&doc)).collect();
                 let json = serde_json::to_string_pretty(&entities).map_err(|e| e.to_string())?;
                 std::fs::write(&resolved, &json).map_err(|e| format!("write {path}: {e}"))?;
                 Ok(serde_json::json!({

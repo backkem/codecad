@@ -26,6 +26,9 @@ export interface EntityJson {
   children?: string[];
   text?: string;
   height?: number;
+  linetype?: string;
+  lineweight?: number;
+  transparency?: number;
   _session?: string;
 }
 
@@ -35,7 +38,7 @@ export interface LayerInfo {
 }
 
 type Point2 = [number, number];
-type Color3 = [number, number, number];
+type Color3 = [number, number, number] | number; // [r,g,b] or ACI index
 type Target = string | string[] | EntityJson | EntityJson[];
 
 function parseResult(raw: string): unknown {
@@ -125,17 +128,31 @@ export function buildCadApi({
       call("angleOf", { point, center }) as number,
 
     // ── Add geometry ──────────────────────────────────────────────────
-    addLayer: (name: string, opts: { color?: Color3 } = {}) =>
-      call("addLayer", { name, ...opts }) as LayerInfo,
+    addLayer: (
+      name: string,
+      opts: { color?: Color3; linetype?: string; lineweight?: number } = {},
+    ) => call("addLayer", { name, ...opts }) as LayerInfo,
     addLine: (
       start: Point2,
       end: Point2,
-      opts: { layer?: string; color?: Color3; dash?: number[] } = {},
+      opts: {
+        layer?: string;
+        color?: Color3;
+        linetype?: string;
+        lineweight?: number;
+        transparency?: number;
+      } = {},
     ) => call("addLine", { start, end, ...opts }) as EntityJson,
     addCircle: (
       center: Point2,
       radius: number,
-      opts: { layer?: string; color?: Color3; dash?: number[] } = {},
+      opts: {
+        layer?: string;
+        color?: Color3;
+        linetype?: string;
+        lineweight?: number;
+        transparency?: number;
+      } = {},
     ) => call("addCircle", { center, radius, ...opts }) as EntityJson,
     addArc: (
       center: Point2,
@@ -148,13 +165,22 @@ export function buildCadApi({
         closed?: boolean;
         layer?: string;
         color?: Color3;
-        dash?: number[];
+        linetype?: string;
+        lineweight?: number;
+        transparency?: number;
       } = {},
     ) => call("addPolyline", { points, ...opts }) as EntityJson,
     addText: (
       text: string,
       at: Point2,
-      opts: { height?: number; layer?: string; color?: Color3 } = {},
+      opts: {
+        height?: number;
+        layer?: string;
+        color?: Color3;
+        linetype?: string;
+        lineweight?: number;
+        transparency?: number;
+      } = {},
     ) => call("addText", { text, at, ...opts }),
     measure: (
       from: Point2,
@@ -202,9 +228,27 @@ export function buildCadApi({
         keep,
       }) as EntityJson,
 
+    // ── Linetypes ──────────────────────────────────────────────────────
+    addLinetype: (
+      name: string,
+      pattern: number[],
+      opts?: { description?: string },
+    ) => call("addLinetype", { name, pattern, ...opts }),
+    linetypes: () =>
+      call("linetypes", {}) as {
+        name: string;
+        description: string;
+        pattern: number[];
+      }[],
+
     // ── Introspection ──────────────────────────────────────────────────
     methods: () =>
       call("methods", {}) as { name: string; args: string; desc: string }[],
+    aciColors: () =>
+      call("aciColors", {}) as {
+        index: number;
+        color: [number, number, number];
+      }[],
 
     // ── Layers ────────────────────────────────────────────────────────
     setLayerVisible: (name: string, visible: boolean) =>

@@ -44,15 +44,22 @@ cad.addLayer("NAME", { color: [r,g,b] })   // create layer with color
 
 Entities inherit their layer's color when no explicit color is given.
 
+**ACI-safe colors**: DWG format converts RGB to AutoCAD Color Index
+(ACI), which is lossy for non-standard colors. For lossless DWG
+roundtrip, use ACI palette values: red `[255,0,0]`, yellow
+`[255,255,0]`, green `[0,255,0]`, cyan `[0,255,255]`, blue
+`[0,0,255]`, white `[255,255,255]`, gray `[128,128,128]`,
+light gray `[192,192,192]`, dark gray `[80,80,80]`.
+
 ### Geometry creation
 
 ```js
-cad.addLine([x1, y1], [x2, y2], { layer, color, dash })
-cad.addCircle([cx, cy], radius, { layer, color, dash })
-cad.addArc([cx, cy], radius, { from: deg, to: deg, layer, color, dash })
+cad.addLine([x1, y1], [x2, y2], { layer, color, linetype, lineweight, transparency })
+cad.addCircle([cx, cy], radius, { layer, color, linetype, lineweight, transparency })
+cad.addArc([cx, cy], radius, { from: deg, to: deg, layer, color, linetype, lineweight, transparency })
 cad.addArc([cx, cy], radius, { p1: [x,y], p2: [x,y] })  // tangent points, always short arc
 cad.addArc([cx, cy], radius, { from, to, shortest: true }) // auto-correct to <180 sweep
-cad.addPolyline([[x,y], ...], { closed: bool, layer, color, dash })
+cad.addPolyline([[x,y], ...], { closed: bool, layer, color, linetype, lineweight, transparency })
 cad.addText("label", [x, y], { height: 5, layer, color })
 cad.addHatch([[x,y], ...], { angle: 45, spacing: 5, layer, color })
 ```
@@ -61,34 +68,40 @@ All return the created entity (with `.id`). Coordinates are in drawing
 units (mm for mechanical, arbitrary for schematics). Color is optional:
 omit it to inherit from the layer.
 
-### Line dashing
+### Linetypes and line styles
 
-Pass `dash: [on, off, ...]` to any geometry command. Values are
-alternating dash/gap lengths in drawing units. The pattern repeats
-along the entity's path.
+Entities inherit style from their layer by default. Override per-entity
+by passing explicit values.
 
+**ByLayer inheritance** (omit a property to inherit from the layer):
 ```js
-// Standard dashed line
-cad.addLine([0,0], [100,0], { dash: [8, 4] })
-
-// Center line pattern (long-short-long-short)
-cad.addLine([0,0], [100,0], { dash: [12, 3, 3, 3] })
-
-// Dashed circle (bolt circle, reference arc)
-cad.addCircle([0,0], 75, { dash: [8, 4] })
-
-// Dotted polyline (0.5 is rendered as a very short dash)
-cad.addPolyline([[0,0],[50,0],[50,50]], { dash: [0.5, 4] })
+cad.addLayer("CL", { color: [80, 80, 80], linetype: "Center" })
+cad.addLine([0,0], [100,0], { layer: "CL" })        // inherits Center linetype + gray color
+cad.addLine([0,0], [100,0], { layer: "CL", linetype: "Dashed" })  // override linetype only
 ```
 
-Common patterns:
-- **Dashed**: `[8, 4]`
-- **Center line**: `[12, 3, 3, 3]`
-- **Hidden/phantom**: `[6, 3, 2, 3]`
-- **Dotted**: `[0.5, 4]`
+**Standard linetypes** (pre-populated in every document):
+| Name | Pattern | Description |
+|------|---------|-------------|
+| Continuous | (solid) | Default |
+| Dashed | `[5, 2.5]` | `__ __ __ __` |
+| Center | `[12, 3, 3, 3]` | `____ _ ____ _` |
+| Hidden | `[4, 2]` | `_ _ _ _ _ _` |
+| Phantom | `[12, 3, 3, 3, 3, 3]` | `_____ _ _ _____` |
+| Dot | `[0.5, 2.5]` | `. . . . . .` |
 
-DWG files imported with linetypes automatically get their dash patterns
-resolved. The entity's `dash` field appears in `entities()` output.
+**Custom linetypes:**
+```js
+cad.addLinetype("MY_DASH", [10, 5, 2, 5])    // define custom pattern
+cad.linetypes()                                // list all available linetypes
+```
+
+**Lineweight and transparency:**
+```js
+cad.addLine([0,0], [100,0], { lineweight: 0.5 })     // 0.5mm stroke (ByLayer default: 0.25mm)
+cad.addCircle([0,0], 50, { transparency: 128 })        // 50% transparent (0=opaque, 255=fully transparent)
+cad.addLayer("THIN", { color: [192,192,192], lineweight: 0.13 })  // thin layer
+```
 
 ### Blocks (reusable symbols)
 
@@ -568,4 +581,3 @@ y_ = x * Math.sin(2*th) - y * Math.cos(2*th)
 
 - **Entity snap**: snap placement to existing entity endpoints/midpoints
 - **Spatial index** (rstar) for fast query_near, query_bounds on large drawings
-- **Line weight**: no per-entity or per-layer line weight yet

@@ -260,8 +260,12 @@ async fn handle_rpc_call(
             let Some(slot) = reg.get(doc_key) else {
                 return format!(r#"{{"error":"document '{}' not loaded"}}"#, doc_key);
             };
-            let entities: Vec<cadview_core::EntityJson> =
-                slot.document.entities.iter().map(|e| e.to_json()).collect();
+            let entities: Vec<cadview_core::EntityJson> = slot
+                .document
+                .entities
+                .iter()
+                .map(|e| e.to_json(&slot.document))
+                .collect();
             match serde_json::to_string_pretty(&entities) {
                 Ok(json) => match std::fs::write(path, &json) {
                     Ok(()) => {

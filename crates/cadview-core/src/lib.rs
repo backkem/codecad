@@ -44,12 +44,7 @@ mod tests {
     #[test]
     fn add_and_remove_line() {
         let mut doc = Document::new();
-        let id = doc.add_line(
-            Point::new(0.0, 0.0),
-            Point::new(5.0, 0.0),
-            "TEST",
-            Color::WHITE,
-        );
+        let id = doc.add_line(Point::new(0.0, 0.0), Point::new(5.0, 0.0), "TEST", None);
         assert_eq!(doc.entities.len(), 1);
         assert_eq!(doc.entity(id).unwrap().id, id);
 
@@ -61,19 +56,9 @@ mod tests {
     #[test]
     fn entity_ids_are_unique() {
         let mut doc = Document::new();
-        let id1 = doc.add_line(
-            Point::new(0.0, 0.0),
-            Point::new(1.0, 0.0),
-            "0",
-            Color::WHITE,
-        );
-        let id2 = doc.add_line(
-            Point::new(0.0, 0.0),
-            Point::new(0.0, 1.0),
-            "0",
-            Color::WHITE,
-        );
-        let id3 = doc.add_circle(Point::new(0.0, 0.0), 1.0, "0", Color::WHITE);
+        let id1 = doc.add_line(Point::new(0.0, 0.0), Point::new(1.0, 0.0), "0", None);
+        let id2 = doc.add_line(Point::new(0.0, 0.0), Point::new(0.0, 1.0), "0", None);
+        let id3 = doc.add_circle(Point::new(0.0, 0.0), 1.0, "0", None);
         assert_ne!(id1, id2);
         assert_ne!(id2, id3);
     }
@@ -81,12 +66,7 @@ mod tests {
     #[test]
     fn move_entity() {
         let mut doc = Document::new();
-        let id = doc.add_line(
-            Point::new(0.0, 0.0),
-            Point::new(5.0, 0.0),
-            "0",
-            Color::WHITE,
-        );
+        let id = doc.add_line(Point::new(0.0, 0.0), Point::new(5.0, 0.0), "0", None);
         assert!(doc.move_entity(id, 10.0, 20.0));
         let ent = doc.entity(id).unwrap();
         if let Shape::Line(l) = &ent.shape {
@@ -102,12 +82,7 @@ mod tests {
     #[test]
     fn copy_entity() {
         let mut doc = Document::new();
-        let id = doc.add_line(
-            Point::new(0.0, 0.0),
-            Point::new(5.0, 0.0),
-            "0",
-            Color::WHITE,
-        );
+        let id = doc.add_line(Point::new(0.0, 0.0), Point::new(5.0, 0.0), "0", None);
         let new_id = doc.copy_entity(id, 10.0, 20.0).unwrap();
         assert_ne!(id, new_id);
         if let Shape::Line(l) = &doc.entity(id).unwrap().shape {
@@ -128,12 +103,7 @@ mod tests {
     #[test]
     fn rotate_entity() {
         let mut doc = Document::new();
-        let id = doc.add_line(
-            Point::new(1.0, 0.0),
-            Point::new(2.0, 0.0),
-            "0",
-            Color::WHITE,
-        );
+        let id = doc.add_line(Point::new(1.0, 0.0), Point::new(2.0, 0.0), "0", None);
         assert!(doc.rotate_entity(id, Point::new(0.0, 0.0), 90.0));
         if let Shape::Line(l) = &doc.entity(id).unwrap().shape {
             assert!((l.p0.x).abs() < 1e-10);
@@ -148,12 +118,7 @@ mod tests {
     #[test]
     fn mirror_entity_x_axis() {
         let mut doc = Document::new();
-        let id = doc.add_line(
-            Point::new(1.0, 2.0),
-            Point::new(3.0, 4.0),
-            "0",
-            Color::WHITE,
-        );
+        let id = doc.add_line(Point::new(1.0, 2.0), Point::new(3.0, 4.0), "0", None);
         assert!(doc.mirror_entity(id, Point::new(0.0, 0.0), Point::new(1.0, 0.0)));
         if let Shape::Line(l) = &doc.entity(id).unwrap().shape {
             assert!((l.p0.x - 1.0).abs() < 1e-10);
@@ -168,12 +133,7 @@ mod tests {
     #[test]
     fn mirror_entity_vertical() {
         let mut doc = Document::new();
-        let id = doc.add_line(
-            Point::new(1.0, 0.0),
-            Point::new(3.0, 0.0),
-            "0",
-            Color::WHITE,
-        );
+        let id = doc.add_line(Point::new(1.0, 0.0), Point::new(3.0, 0.0), "0", None);
         assert!(doc.mirror_entity(id, Point::new(5.0, 0.0), Point::new(5.0, 1.0)));
         if let Shape::Line(l) = &doc.entity(id).unwrap().shape {
             assert!((l.p0.x - 9.0).abs() < 1e-10);
@@ -225,13 +185,8 @@ mod tests {
     #[test]
     fn bounds_update() {
         let mut doc = Document::new();
-        doc.add_line(
-            Point::new(0.0, 0.0),
-            Point::new(10.0, 5.0),
-            "0",
-            Color::WHITE,
-        );
-        doc.add_circle(Point::new(20.0, 20.0), 3.0, "0", Color::WHITE);
+        doc.add_line(Point::new(0.0, 0.0), Point::new(10.0, 5.0), "0", None);
+        doc.add_circle(Point::new(20.0, 20.0), 3.0, "0", None);
         let (x0, y0, x1, y1) = doc.bounds().unwrap();
         assert!((x0 - 0.0).abs() < 1e-10);
         assert!((y0 - 0.0).abs() < 1e-10);
@@ -242,13 +197,8 @@ mod tests {
     #[test]
     fn cad_call_describe() {
         let mut doc = Document::new();
-        doc.add_line(
-            Point::new(0.0, 0.0),
-            Point::new(5.0, 0.0),
-            "S_WALL",
-            Color::WHITE,
-        );
-        doc.add_circle(Point::new(3.0, 3.0), 1.0, "E_LITE", Color::WHITE);
+        doc.add_line(Point::new(0.0, 0.0), Point::new(5.0, 0.0), "S_WALL", None);
+        doc.add_circle(Point::new(3.0, 3.0), 1.0, "E_LITE", None);
 
         let result = cad_call(&mut doc, "describe", "{}").unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -305,7 +255,7 @@ mod tests {
             ],
             true,
             "S_WALL",
-            Color::WHITE,
+            None,
         );
         let ent = doc.entity(id).unwrap();
         if let Shape::Polyline { points, closed } = &ent.shape {
@@ -327,12 +277,7 @@ mod tests {
     #[test]
     fn trim_line_keep_start() {
         let mut doc = Document::new();
-        let id = doc.add_line(
-            Point::new(0.0, 0.0),
-            Point::new(100.0, 0.0),
-            "0",
-            Color::WHITE,
-        );
+        let id = doc.add_line(Point::new(0.0, 0.0), Point::new(100.0, 0.0), "0", None);
         let new_id = doc.trim_entity(id, Point::new(60.0, 0.0), "start").unwrap();
         assert!(doc.entity(id).is_none());
         let ent = doc.entity(new_id).unwrap();
@@ -347,12 +292,7 @@ mod tests {
     #[test]
     fn trim_line_keep_end() {
         let mut doc = Document::new();
-        let id = doc.add_line(
-            Point::new(0.0, 0.0),
-            Point::new(100.0, 0.0),
-            "0",
-            Color::WHITE,
-        );
+        let id = doc.add_line(Point::new(0.0, 0.0), Point::new(100.0, 0.0), "0", None);
         let new_id = doc.trim_entity(id, Point::new(40.0, 0.0), "end").unwrap();
         let ent = doc.entity(new_id).unwrap();
         if let Shape::Line(l) = &ent.shape {
@@ -372,7 +312,7 @@ mod tests {
             0.0_f64.to_radians(),
             90.0_f64.to_radians(),
             "0",
-            Color::WHITE,
+            None,
         );
         let cut = Point::new(
             50.0 * 45.0_f64.to_radians().cos(),
@@ -402,7 +342,7 @@ mod tests {
             0.0_f64.to_radians(),
             90.0_f64.to_radians(),
             "0",
-            Color::WHITE,
+            None,
         );
         let cut = Point::new(
             50.0 * 45.0_f64.to_radians().cos(),
@@ -448,7 +388,7 @@ mod tests {
                 (
                     Shape::Circle(Circle::new(Point::new(0.0, 0.0), 10.0)),
                     String::new(),
-                    Color::WHITE,
+                    None,
                 ),
                 (
                     Shape::Text {
@@ -458,7 +398,7 @@ mod tests {
                         rotation: 0.0,
                     },
                     String::new(),
-                    Color::WHITE,
+                    None,
                 ),
             ],
             insert_point: Point::ZERO,
@@ -705,12 +645,12 @@ mod tests {
                 (
                     Shape::Line(Line::new(Point::new(0.0, 0.0), Point::new(10.0, 0.0))),
                     String::new(),
-                    Color::WHITE,
+                    None,
                 ),
                 (
                     Shape::Circle(Circle::new(Point::new(5.0, 5.0), 2.0)),
                     "inner".to_string(),
-                    Color::rgb(255, 0, 0),
+                    Some(Color::rgb(255, 0, 0)),
                 ),
             ],
             insert_point: Point::ZERO,
@@ -965,14 +905,16 @@ mod tests {
         doc.entities.push(DrawEntity {
             id: EntityId(1),
             layer: "0".to_string(),
-            color: Color::WHITE,
+            color: None,
             shape: Shape::Text {
                 text: "Hello".into(),
                 position: Point::new(10.0, 20.0),
                 height: 5.0,
                 rotation: 0.0,
             },
-            dash: None,
+            linetype: None,
+            lineweight: None,
+            transparency: 0,
         });
         let result = cad_call(&mut doc, "entities", "{}").unwrap();
         let ents: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
@@ -989,7 +931,7 @@ mod tests {
         doc.entities.push(DrawEntity {
             id: EntityId(1),
             layer: "0".to_string(),
-            color: Color::WHITE,
+            color: None,
             shape: Shape::MText {
                 text: "\\Arich\\P".into(),
                 plain_text: "Hello World".into(),
@@ -997,7 +939,9 @@ mod tests {
                 height: 7.5,
                 rotation: 0.5,
             },
-            dash: None,
+            linetype: None,
+            lineweight: None,
+            transparency: 0,
         });
         let result = cad_call(&mut doc, "entities", "{}").unwrap();
         let ents: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
@@ -1030,14 +974,16 @@ mod tests {
         doc.entities.push(DrawEntity {
             id: EntityId(1),
             layer: "0".into(),
-            color: Color::WHITE,
+            color: None,
             shape: Shape::Text {
                 text: "Hi".into(),
                 position: Point::new(0.0, 0.0),
                 height: 10.0,
                 rotation: 0.0,
             },
-            dash: None,
+            linetype: None,
+            lineweight: None,
+            transparency: 0,
         });
         let expanded = expand_for_render(&doc);
         // Text should become CurvePath entities (glyph outlines)
@@ -1064,7 +1010,7 @@ mod tests {
                     rotation: 0.0,
                 },
                 String::new(),
-                Color::WHITE,
+                None,
             )],
             insert_point: Point::ZERO,
             default_layer: "0".into(),

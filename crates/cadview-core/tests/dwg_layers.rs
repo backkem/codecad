@@ -15,15 +15,15 @@ fn roundtrip_layers() {
         Point::new(0.0, 0.0),
         Point::new(100.0, 0.0),
         "TEST_RED",
-        Color::WHITE,
+        None,
     );
     doc.add_line(
         Point::new(0.0, 50.0),
         Point::new(100.0, 50.0),
         "TEST_BLUE",
-        Color::WHITE,
+        None,
     );
-    doc.add_circle(Point::new(50.0, 25.0), 10.0, "0", Color::WHITE);
+    doc.add_circle(Point::new(50.0, 25.0), 10.0, "0", None);
 
     println!(
         "Before save: {} layers, {} entities",

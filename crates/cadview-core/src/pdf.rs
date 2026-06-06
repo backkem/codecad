@@ -344,10 +344,12 @@ fn expand_entities(doc: &Document) -> Vec<ExpandedEntity> {
                     } else {
                         shape_layer
                     };
-                    let color = if *shape_color == Color::WHITE && ent.color != Color::WHITE {
-                        ent.color
+                    let color = if shape_color.is_some() && *shape_color != Some(Color::WHITE) {
+                        shape_color.unwrap_or(Color::WHITE)
+                    } else if let Some(c) = ent.color {
+                        c
                     } else {
-                        *shape_color
+                        doc.layer_color(layer)
                     };
                     result.push(ExpandedEntity {
                         shape: shape.transformed(xform),
@@ -360,7 +362,7 @@ fn expand_entities(doc: &Document) -> Vec<ExpandedEntity> {
             result.push(ExpandedEntity {
                 shape: ent.shape.clone(),
                 layer: ent.layer.clone(),
-                color: ent.color,
+                color: ent.color.unwrap_or_else(|| doc.layer_color(&ent.layer)),
             });
         }
     }

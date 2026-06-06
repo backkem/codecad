@@ -10,18 +10,25 @@ use std::f64::consts::PI;
 pub struct DrawEntity {
     pub id: EntityId,
     pub layer: String,
-    pub color: Color,
+    /// None = inherit from layer (ByLayer).
+    pub color: Option<Color>,
+    /// None = inherit from layer (ByLayer). References linetype table by name.
+    pub linetype: Option<String>,
+    /// None = inherit from layer (ByLayer). Millimeters.
+    pub lineweight: Option<f64>,
+    /// 0 = opaque (default). 1-255 = increasingly transparent. Entity-only.
+    pub transparency: u8,
     pub shape: Shape,
-    /// Dash pattern: alternating on/off lengths in drawing units.
-    /// None = continuous (solid). Empty vec = continuous.
-    #[serde(default)]
-    pub dash: Option<Vec<f64>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Layer {
     pub name: String,
     pub color: Color,
+    /// References linetype table by name. Default "Continuous".
+    pub linetype: String,
+    /// Default stroke width in mm. Default 0.25.
+    pub lineweight: f64,
     pub visible: bool,
 }
 
@@ -31,7 +38,7 @@ pub struct Layer {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockDef {
     pub name: String,
-    pub shapes: Vec<(Shape, String, Color)>, // (shape, layer, color)
+    pub shapes: Vec<(Shape, String, Option<Color>)>, // (shape, layer, color override)
     pub insert_point: Point,
     pub default_layer: String,
 }
@@ -50,6 +57,7 @@ pub fn block_from_bytes(data: &[u8]) -> Option<BlockDef> {
 struct Snapshot {
     layers: Vec<Layer>,
     entities: Vec<DrawEntity>,
+    linetypes: HashMap<String, LinetypeDef>,
     next_id: u64,
 }
 
@@ -58,18 +66,47 @@ pub struct Document {
     pub layers: Vec<Layer>,
     pub entities: Vec<DrawEntity>,
     pub blocks: HashMap<String, BlockDef>,
+    pub linetypes: HashMap<String, LinetypeDef>,
     next_id: u64,
     undo_stack: Vec<Snapshot>,
     redo_stack: Vec<Snapshot>,
 }
 
+/// Standard linetypes pre-populated in every new document.
+fn standard_linetypes() -> HashMap<String, LinetypeDef> {
+    let mut m = HashMap::new();
+    let add = |m: &mut HashMap<String, LinetypeDef>, name: &str, desc: &str, pat: Vec<f64>| {
+        m.insert(
+            name.to_string(),
+            LinetypeDef {
+                name: name.to_string(),
+                description: desc.to_string(),
+                pattern: pat,
+            },
+        );
+    };
+    add(&mut m, "Continuous", "Solid line", vec![]);
+    add(&mut m, "Dashed", "__ __ __ __", vec![5.0, 2.5]);
+    add(&mut m, "Center", "____ _ ____ _", vec![12.0, 3.0, 3.0, 3.0]);
+    add(&mut m, "Hidden", "_ _ _ _ _ _", vec![4.0, 2.0]);
+    add(
+        &mut m,
+        "Phantom",
+        "_____ _ _ _____",
+        vec![12.0, 3.0, 3.0, 3.0, 3.0, 3.0],
+    );
+    add(&mut m, "Dot", ". . . . . .", vec![0.5, 2.5]);
+    m
+}
+
 impl Document {
-    /// Empty document.
+    /// Empty document with standard linetypes.
     pub fn new() -> Self {
         Self {
             layers: Vec::new(),
             entities: Vec::new(),
             blocks: HashMap::new(),
+            linetypes: standard_linetypes(),
             next_id: 1,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
@@ -81,6 +118,7 @@ impl Document {
         self.undo_stack.push(Snapshot {
             layers: self.layers.clone(),
             entities: self.entities.clone(),
+            linetypes: self.linetypes.clone(),
             next_id: self.next_id,
         });
         self.redo_stack.clear();
@@ -99,10 +137,12 @@ impl Document {
             self.redo_stack.push(Snapshot {
                 layers: self.layers.clone(),
                 entities: self.entities.clone(),
+                linetypes: self.linetypes.clone(),
                 next_id: self.next_id,
             });
             self.layers = snap.layers;
             self.entities = snap.entities;
+            self.linetypes = snap.linetypes;
             self.next_id = snap.next_id;
             true
         } else {
@@ -115,10 +155,12 @@ impl Document {
             self.undo_stack.push(Snapshot {
                 layers: self.layers.clone(),
                 entities: self.entities.clone(),
+                linetypes: self.linetypes.clone(),
                 next_id: self.next_id,
             });
             self.layers = snap.layers;
             self.entities = snap.entities;
+            self.linetypes = snap.linetypes;
             self.next_id = snap.next_id;
             true
         } else {
@@ -170,14 +212,22 @@ impl Document {
 
     // ── Mutations ──────────────────────────────────────────────────
 
-    pub fn add_line(&mut self, p0: Point, p1: Point, layer: &str, color: Color) -> EntityId {
+    pub fn add_line(
+        &mut self,
+        p0: Point,
+        p1: Point,
+        layer: &str,
+        color: Option<Color>,
+    ) -> EntityId {
         let id = self.alloc_id();
         self.entities.push(DrawEntity {
             id,
             layer: layer.to_string(),
             color,
+            linetype: None,
+            lineweight: None,
+            transparency: 0,
             shape: Shape::Line(Line::new(p0, p1)),
-            dash: None,
         });
         id
     }
@@ -187,15 +237,17 @@ impl Document {
         center: Point,
         radius: f64,
         layer: &str,
-        color: Color,
+        color: Option<Color>,
     ) -> EntityId {
         let id = self.alloc_id();
         self.entities.push(DrawEntity {
             id,
             layer: layer.to_string(),
             color,
+            linetype: None,
+            lineweight: None,
+            transparency: 0,
             shape: Shape::Circle(Circle::new(center, radius)),
-            dash: None,
         });
         id
     }
@@ -207,20 +259,22 @@ impl Document {
         start_angle: f64,
         end_angle: f64,
         layer: &str,
-        color: Color,
+        color: Option<Color>,
     ) -> EntityId {
         let id = self.alloc_id();
         self.entities.push(DrawEntity {
             id,
             layer: layer.to_string(),
             color,
+            linetype: None,
+            lineweight: None,
+            transparency: 0,
             shape: Shape::Arc {
                 center,
                 radius,
                 start_angle,
                 end_angle,
             },
-            dash: None,
         });
         id
     }
@@ -230,15 +284,17 @@ impl Document {
         points: Vec<Point>,
         closed: bool,
         layer: &str,
-        color: Color,
+        color: Option<Color>,
     ) -> EntityId {
         let id = self.alloc_id();
         self.entities.push(DrawEntity {
             id,
             layer: layer.to_string(),
             color,
+            linetype: None,
+            lineweight: None,
+            transparency: 0,
             shape: Shape::Polyline { points, closed },
-            dash: None,
         });
         id
     }
@@ -269,8 +325,10 @@ impl Document {
             id: new_id,
             layer: ent.layer,
             color: ent.color,
+            linetype: ent.linetype,
+            lineweight: ent.lineweight,
+            transparency: ent.transparency,
             shape: ent.shape.transformed(xform),
-            dash: ent.dash,
         });
         Some(new_id)
     }
@@ -313,6 +371,9 @@ impl Document {
         let ent = self.entity(id)?;
         let layer = ent.layer.clone();
         let color = ent.color;
+        let linetype = ent.linetype.clone();
+        let lineweight = ent.lineweight;
+        let transparency = ent.transparency;
         let keep_start = matches!(keep, "start" | "from");
 
         match &ent.shape {
@@ -325,7 +386,13 @@ impl Document {
                     return None;
                 }
                 self.remove_entity(id);
-                Some(self.add_line(new_start, new_end, &layer, color))
+                let new_id = self.add_line(new_start, new_end, &layer, color);
+                if let Some(ent) = self.entity_mut(new_id) {
+                    ent.linetype = linetype;
+                    ent.lineweight = lineweight;
+                    ent.transparency = transparency;
+                }
+                Some(new_id)
             }
             Shape::Arc {
                 center,
@@ -369,25 +436,39 @@ impl Document {
                 }
 
                 self.remove_entity(id);
-                Some(self.add_arc(center, radius, new_start, new_end, &layer, color))
+                let new_id = self.add_arc(center, radius, new_start, new_end, &layer, color);
+                if let Some(ent) = self.entity_mut(new_id) {
+                    ent.linetype = linetype;
+                    ent.lineweight = lineweight;
+                    ent.transparency = transparency;
+                }
+                Some(new_id)
             }
             _ => None,
         }
     }
 
     pub fn add_layer(&mut self, name: &str, color: Color) {
+        self.add_layer_full(name, color, "Continuous", 0.25);
+    }
+
+    pub fn add_layer_full(&mut self, name: &str, color: Color, linetype: &str, lineweight: f64) {
         if let Some(layer) = self.layers.iter_mut().find(|l| l.name == name) {
-            layer.color = color; // update existing
+            layer.color = color;
+            layer.linetype = linetype.to_string();
+            layer.lineweight = lineweight;
         } else {
             self.layers.push(Layer {
                 name: name.to_string(),
                 color,
+                linetype: linetype.to_string(),
+                lineweight,
                 visible: true,
             });
         }
     }
 
-    /// Ensure a layer exists, creating it with default white if missing.
+    /// Ensure a layer exists, creating it with defaults if missing.
     pub fn ensure_layer(&mut self, name: &str) {
         if !self.layers.iter().any(|l| l.name == name) {
             self.add_layer(name, Color::WHITE);
@@ -400,6 +481,42 @@ impl Document {
             .iter()
             .find(|l| l.name == name)
             .map_or(Color::WHITE, |l| l.color)
+    }
+
+    pub fn layer_linetype(&self, name: &str) -> &str {
+        self.layers
+            .iter()
+            .find(|l| l.name == name)
+            .map_or("Continuous", |l| l.linetype.as_str())
+    }
+
+    pub fn layer_lineweight(&self, name: &str) -> f64 {
+        self.layers
+            .iter()
+            .find(|l| l.name == name)
+            .map_or(0.25, |l| l.lineweight)
+    }
+
+    // ── Style resolution (ByLayer) ────────────────────────────────
+
+    pub fn resolve_color(&self, ent: &DrawEntity) -> Color {
+        ent.color.unwrap_or_else(|| self.layer_color(&ent.layer))
+    }
+
+    pub fn resolve_linetype_pattern(&self, ent: &DrawEntity) -> Option<&[f64]> {
+        let name = ent
+            .linetype
+            .as_deref()
+            .unwrap_or_else(|| self.layer_linetype(&ent.layer));
+        self.linetypes
+            .get(name)
+            .map(|lt| lt.pattern.as_slice())
+            .filter(|p| !p.is_empty())
+    }
+
+    pub fn resolve_lineweight(&self, ent: &DrawEntity) -> f64 {
+        ent.lineweight
+            .unwrap_or_else(|| self.layer_lineweight(&ent.layer))
     }
 
     // ── Blocks ─────────────────────────────────────────────────────
@@ -438,12 +555,14 @@ impl Document {
         let place_layer = layer_override.unwrap_or(&def.default_layer).to_string();
 
         self.ensure_layer(&place_layer);
-        let color = self.layer_color(&place_layer);
         let insert_id = self.alloc_id();
         self.entities.push(DrawEntity {
             id: insert_id,
             layer: place_layer,
-            color,
+            color: None, // ByLayer
+            linetype: None,
+            lineweight: None,
+            transparency: 0,
             shape: Shape::BlockInsert {
                 block_name: block_name.to_string(),
                 position,
@@ -451,7 +570,6 @@ impl Document {
                 x_scale,
                 y_scale,
             },
-            dash: None,
         });
 
         vec![insert_id]
@@ -507,9 +625,12 @@ pub struct EntityJson {
     /// Abstract boundary edges for SolidFill / CurvePath segments.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub edges: Option<serde_json::Value>,
-    /// Dash pattern: alternating on/off lengths in drawing units.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub dash: Option<Vec<f64>>,
+    pub linetype: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lineweight: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transparency: Option<u8>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -519,13 +640,14 @@ pub struct BoundsJson {
 }
 
 impl DrawEntity {
-    pub fn to_json(&self) -> EntityJson {
+    pub fn to_json(&self, doc: &Document) -> EntityJson {
+        let resolved = doc.resolve_color(self);
         let bb = self.shape.bbox();
         let mut ej = EntityJson {
             id: format!("e_{}", self.id.0),
             entity_type: String::new(),
             layer: self.layer.clone(),
-            color: [self.color.r, self.color.g, self.color.b],
+            color: [resolved.r, resolved.g, resolved.b],
             bounds: BoundsJson {
                 min: [bb.0, bb.1],
                 max: [bb.2, bb.3],
@@ -544,7 +666,13 @@ impl DrawEntity {
             text: None,
             height: None,
             edges: None,
-            dash: self.dash.clone(),
+            linetype: self.linetype.clone(),
+            lineweight: self.lineweight,
+            transparency: if self.transparency > 0 {
+                Some(self.transparency)
+            } else {
+                None
+            },
         };
         match &self.shape {
             Shape::Line(l) => {
@@ -744,7 +872,7 @@ impl DrawEntity {
 /// Convert a single Text or MText entity into CurvePath entities.
 fn text_to_curve_entities(
     layer: &str,
-    color: Color,
+    color: Option<Color>,
     text_str: &str,
     position: Point,
     height: f64,
@@ -772,11 +900,13 @@ fn text_to_curve_entities(
                 id: EntityId(*next_id),
                 layer: layer.to_string(),
                 color,
+                linetype: None,
+                lineweight: None,
+                transparency: 0,
                 shape: Shape::CurvePath {
                     path: subpath,
                     closed,
                 },
-                dash: None,
             });
         }
     }
@@ -818,18 +948,23 @@ pub fn expand_for_render(doc: &Document) -> Vec<DrawEntity> {
                         } else {
                             shape_layer
                         };
-                        let color = if *shape_color == Color::WHITE && ent.color != Color::WHITE {
+                        // Expanded entities are detached from layers, so resolve to concrete color.
+                        let color = if shape_color.is_some() && *shape_color != Some(Color::WHITE) {
+                            *shape_color
+                        } else if ent.color.is_some() {
                             ent.color
                         } else {
-                            *shape_color
+                            Some(doc.layer_color(layer))
                         };
                         next_id += 1;
                         expanded.push(DrawEntity {
                             id: EntityId(next_id),
                             layer: layer.to_string(),
                             color,
+                            linetype: None,
+                            lineweight: None,
+                            transparency: 0,
                             shape: shape.transformed(xform),
-                            dash: None,
                         });
                     }
                 }
@@ -935,5 +1070,13 @@ pub fn layer_to_bytes(layer: &Layer) -> Vec<u8> {
 
 /// Deserialize a Layer from bincode bytes.
 pub fn layer_from_bytes(data: &[u8]) -> Option<Layer> {
+    bincode::deserialize(data).ok()
+}
+
+pub fn linetype_to_bytes(lt: &LinetypeDef) -> Vec<u8> {
+    bincode::serialize(lt).expect("bincode serialize failed")
+}
+
+pub fn linetype_from_bytes(data: &[u8]) -> Option<LinetypeDef> {
     bincode::deserialize(data).ok()
 }

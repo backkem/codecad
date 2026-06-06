@@ -13,30 +13,10 @@ use std::f64::consts::PI;
 
 // ── DWG loading ────────────────────────────────────────────────────────
 
+/// Convert ACI index to our Color, using acadrust's canonical 256-entry table.
 pub(crate) fn aci_to_rgb(index: u8) -> Color {
-    match index {
-        1 => Color::rgb(255, 0, 0),
-        2 => Color::rgb(255, 255, 0),
-        3 => Color::rgb(0, 255, 0),
-        4 => Color::rgb(0, 255, 255),
-        5 => Color::rgb(0, 0, 255),
-        6 => Color::rgb(255, 0, 255),
-        7 => Color::rgb(255, 255, 255),
-        8 => Color::rgb(128, 128, 128),
-        9 => Color::rgb(192, 192, 192),
-        10..=19 => Color::rgb(255, (index - 10) * 25, 0),
-        20..=29 => Color::rgb(255, 128 + (index - 20) * 12, 0),
-        30..=39 => Color::rgb(255, 255, (index - 30) * 25),
-        40..=49 => Color::rgb(255 - (index - 40) * 12, 255, 0),
-        50 | 51 | 53..=59 => Color::rgb(0, 255, (index - 50) * 25),
-        52 => Color::rgb(191, 127, 0), // brown-ish override for S-COLS
-        60..=69 => Color::rgb(0, 255 - (index - 60) * 12, 255),
-        70..=79 => Color::rgb((index - 70) * 25, 0, 255),
-        80..=89 => Color::rgb(255, 0, 255 - (index - 80) * 12),
-        91 => Color::rgb(128, 0, 128),
-        250 => Color::rgb(80, 80, 80),
-        _ => Color::rgb(200, 200, 200),
-    }
+    let (r, g, b) = acadrust::types::ACI_COLORS[index as usize];
+    Color::rgb(r, g, b)
 }
 
 pub fn load_dwg(path: &str) -> Result<Document> {
@@ -98,12 +78,37 @@ fn build_cad_document(doc: &Document) -> Result<acadrust::document::CadDocument>
                                 // Model space limits (reasonable default for architectural drawings in mm)
     cad.header.model_space_limits_min = acadrust::types::vector::Vector2::new(0.0, 0.0);
     cad.header.model_space_limits_max = acadrust::types::vector::Vector2::new(30000.0, 15000.0);
+    // ── 1a. Write linetype table ──────────────────────────────────
+    for (name, lt_def) in &doc.linetypes {
+        if name == "Continuous" || name == "ByLayer" || name == "ByBlock" {
+            continue; // already in acadrust default tables
+        }
+        let mut lt = acadrust::tables::linetype::LineType::new(name);
+        lt.description = lt_def.description.clone();
+        for (i, &val) in lt_def.pattern.iter().enumerate() {
+            if i % 2 == 0 {
+                lt.add_element(acadrust::tables::linetype::LineTypeElement::dash(val));
+            } else {
+                lt.add_element(acadrust::tables::linetype::LineTypeElement::space(val));
+            }
+        }
+        lt.pattern_length = lt_def.pattern.iter().sum();
+        lt.set_handle(cad.allocate_handle());
+        let _ = cad.line_types.add(lt);
+    }
+
+    // ── 1b. Write layers ───────────────────────────────────────────
     for layer in &doc.layers {
         if layer.name == "0" {
             continue;
         } // already exists
         let mut al = acadrust::tables::Layer::new(&layer.name);
         al.color = to_acadrust_color(&layer.color);
+        if layer.linetype != "Continuous" {
+            al.line_type = layer.linetype.clone();
+        }
+        al.line_weight =
+            acadrust::types::line_weight::LineWeight::from_value((layer.lineweight * 100.0) as i16);
         al.set_handle(cad.allocate_handle());
         let _ = cad.layers.add(al);
     }
@@ -136,7 +141,7 @@ fn build_cad_document(doc: &Document) -> Result<acadrust::document::CadDocument>
                 shape_layer
             };
             if let Some(mut et) =
-                shape_to_entity_type(&translated, layer, to_acadrust_color(shape_color))
+                shape_to_entity_type(&translated, layer, to_acadrust_color_opt(shape_color))
             {
                 et.common_mut().owner_handle = br_handle;
                 let _ = cad.add_entity(et);
@@ -162,13 +167,16 @@ fn build_cad_document(doc: &Document) -> Result<acadrust::document::CadDocument>
                 ins.set_y_scale(*y_scale);
                 ins.rotation = *rotation;
                 ins.set_layer(ent.layer.clone());
-                ins.set_color(to_acadrust_color(&ent.color));
-                cad.add_entity(ae::EntityType::Insert(ins))?;
+                ins.set_color(to_acadrust_color_opt(&ent.color));
+                let mut et = ae::EntityType::Insert(ins);
+                apply_style_to_entity(&mut et, ent);
+                cad.add_entity(et)?;
             }
             shape => {
-                if let Some(et) =
-                    shape_to_entity_type(shape, &ent.layer, to_acadrust_color(&ent.color))
+                if let Some(mut et) =
+                    shape_to_entity_type(shape, &ent.layer, to_acadrust_color_opt(&ent.color))
                 {
+                    apply_style_to_entity(&mut et, ent);
                     cad.add_entity(et)?;
                 }
             }
@@ -362,7 +370,8 @@ pub fn save_dwg_overlay(
             } else {
                 shape_layer
             };
-            if let Some(mut et) = shape_to_entity_type(shape, layer, to_acadrust_color(shape_color))
+            if let Some(mut et) =
+                shape_to_entity_type(shape, layer, to_acadrust_color_opt(shape_color))
             {
                 et.common_mut().owner_handle = br_handle;
                 let _ = cad.add_entity(et);
@@ -391,13 +400,16 @@ pub fn save_dwg_overlay(
                 ins.set_y_scale(*y_scale);
                 ins.rotation = *rotation;
                 ins.set_layer(ent.layer.clone());
-                ins.set_color(to_acadrust_color(&ent.color));
-                cad.add_entity(ae::EntityType::Insert(ins))?;
+                ins.set_color(to_acadrust_color_opt(&ent.color));
+                let mut et = ae::EntityType::Insert(ins);
+                apply_style_to_entity(&mut et, ent);
+                cad.add_entity(et)?;
             }
             shape => {
-                if let Some(et) =
-                    shape_to_entity_type(shape, &ent.layer, to_acadrust_color(&ent.color))
+                if let Some(mut et) =
+                    shape_to_entity_type(shape, &ent.layer, to_acadrust_color_opt(&ent.color))
                 {
+                    apply_style_to_entity(&mut et, ent);
                     cad.add_entity(et)?;
                 }
             }
@@ -698,6 +710,31 @@ pub(crate) fn to_acadrust_color(c: &Color) -> acadrust::types::Color {
             g: c.g,
             b: c.b,
         }
+    }
+}
+
+fn to_acadrust_color_opt(c: &Option<Color>) -> acadrust::types::Color {
+    match c {
+        None => acadrust::types::Color::ByLayer,
+        Some(c) => to_acadrust_color(c),
+    }
+}
+
+/// Set linetype, lineweight, and transparency on an acadrust EntityCommon
+/// from our DrawEntity style fields.
+/// Set linetype, lineweight, and transparency on an acadrust EntityType
+/// from our DrawEntity style fields.
+fn apply_style_to_entity(et: &mut acadrust::entities::EntityType, ent: &DrawEntity) {
+    let common = et.common_mut();
+    if let Some(ref lt) = ent.linetype {
+        common.linetype = lt.clone();
+    }
+    if let Some(lw) = ent.lineweight {
+        common.line_weight =
+            acadrust::types::line_weight::LineWeight::from_value((lw * 100.0) as i16);
+    }
+    if ent.transparency > 0 {
+        common.transparency = acadrust::types::transparency::Transparency::new(ent.transparency);
     }
 }
 
@@ -1084,6 +1121,7 @@ pub(crate) fn hatch_boundary_to_shapes(path: &acadrust::entities::BoundaryPath) 
     shapes
 }
 
+#[allow(dead_code)]
 pub(crate) struct RawEntity {
     owner: acadrust::Handle,
     layer: String,
@@ -1124,9 +1162,21 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
     for layer in cad.layers.iter() {
         let color = resolve_acadrust_color(&layer.color);
         layer_colors.insert(layer.name.clone(), color);
+        let linetype =
+            if layer.line_type.is_empty() || layer.line_type.eq_ignore_ascii_case("Continuous") {
+                "Continuous".to_string()
+            } else {
+                layer.line_type.clone()
+            };
+        let lineweight = match layer.line_weight {
+            acadrust::types::line_weight::LineWeight::Value(v) => v as f64 / 100.0,
+            _ => 0.25,
+        };
         layers.push(Layer {
             name: layer.name.clone(),
             color,
+            linetype,
+            lineweight,
             visible: true,
         });
     }
@@ -1566,29 +1616,49 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
     let mut doc = Document::new();
     doc.layers = layers;
 
+    // Populate linetypes from DWG (merge with standard ones from Document::new)
+    for lt in cad.line_types.iter() {
+        let pattern: Vec<f64> = lt
+            .elements
+            .iter()
+            .map(|e| e.length.abs())
+            .map(|v| if v == 0.0 { 0.1 } else { v })
+            .collect();
+        doc.linetypes.insert(
+            lt.name.clone(),
+            LinetypeDef {
+                name: lt.name.clone(),
+                description: lt.description.clone(),
+                pattern,
+            },
+        );
+    }
+
     // Model-space geometry
     for raw in &raw_entities {
         if ms.is_some_and(|ms| raw.owner == ms) {
-            let color = resolve_entity_color(&raw.color, &raw.layer, &layer_colors);
-            let dash = resolve_dash_pattern(&raw.linetype, raw.linetype_scale, &linetype_patterns);
+            let color = resolve_entity_color_opt(&raw.color, &raw.layer, &layer_colors);
+            let linetype = resolve_linetype_name(&raw.linetype);
             let id = doc.alloc_id();
             doc.entities.push(DrawEntity {
                 id,
                 layer: raw.layer.clone(),
                 color,
+                linetype,
+                lineweight: None,
+                transparency: 0,
                 shape: raw.shape.clone(),
-                dash,
             });
         }
     }
 
     // Build block definitions from raw entities
     for (block_name, indices) in &block_entities {
-        let shapes: Vec<(Shape, String, Color)> = indices
+        let shapes: Vec<(Shape, String, Option<Color>)> = indices
             .iter()
             .map(|&idx| {
                 let raw = &raw_entities[idx];
-                let color = resolve_entity_color(&raw.color, &raw.layer, &layer_colors);
+                let color = resolve_entity_color_opt(&raw.color, &raw.layer, &layer_colors);
                 (raw.shape.clone(), raw.layer.clone(), color)
             })
             .collect();
@@ -1611,12 +1681,15 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
         if !block_entities.contains_key(&ins.block_name) {
             continue;
         }
-        let color = resolve_entity_color(&ins.color, &ins.layer, &layer_colors);
+        let color = resolve_entity_color_opt(&ins.color, &ins.layer, &layer_colors);
         let id = doc.alloc_id();
         doc.entities.push(DrawEntity {
             id,
             layer: ins.layer.clone(),
             color,
+            linetype: None,
+            lineweight: None,
+            transparency: 0,
             shape: Shape::BlockInsert {
                 block_name: ins.block_name.clone(),
                 position: Point::new(ins.insert_x, ins.insert_y),
@@ -1624,50 +1697,38 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
                 x_scale: ins.x_scale,
                 y_scale: ins.y_scale,
             },
-            dash: None,
         });
     }
 
     Ok(doc)
 }
 
-pub(crate) fn resolve_entity_color(
-    entity_color: &acadrust::Color,
-    layer_name: &str,
-    layer_colors: &HashMap<String, Color>,
-) -> Color {
-    match entity_color {
-        acadrust::Color::ByLayer => layer_colors
-            .get(layer_name)
-            .copied()
-            .unwrap_or(Color::WHITE),
-        acadrust::Color::ByBlock => Color::WHITE,
-        acadrust::Color::Index(i) => aci_to_rgb(*i),
-        acadrust::Color::Rgb { r, g, b } => Color::rgb(*r, *g, *b),
-    }
-}
-
-/// Resolve a DWG entity's linetype to a dash pattern.
-/// Returns None for continuous lines (no dashing).
-fn resolve_dash_pattern(
-    linetype: &str,
-    linetype_scale: f64,
-    patterns: &HashMap<String, Vec<f64>>,
-) -> Option<Vec<f64>> {
+/// Resolve a DWG entity linetype name to an Option<String>.
+/// Returns None for ByLayer/ByBlock/Continuous (inherit from layer).
+fn resolve_linetype_name(linetype: &str) -> Option<String> {
     if linetype.is_empty()
         || linetype.eq_ignore_ascii_case("ByLayer")
         || linetype.eq_ignore_ascii_case("ByBlock")
         || linetype.eq_ignore_ascii_case("Continuous")
     {
-        return None;
-    }
-    let pattern = patterns.get(linetype)?;
-    let scale = if linetype_scale > 0.0 {
-        linetype_scale
+        None
     } else {
-        1.0
-    };
-    Some(pattern.iter().map(|&v| v * scale).collect())
+        Some(linetype.to_string())
+    }
+}
+
+/// Like resolve_entity_color but returns None for ByLayer/ByBlock
+/// (entity should inherit color from its layer at render time).
+fn resolve_entity_color_opt(
+    entity_color: &acadrust::Color,
+    _layer_name: &str,
+    _layer_colors: &HashMap<String, Color>,
+) -> Option<Color> {
+    match entity_color {
+        acadrust::Color::ByLayer | acadrust::Color::ByBlock => None,
+        acadrust::Color::Index(i) => Some(aci_to_rgb(*i)),
+        acadrust::Color::Rgb { r, g, b } => Some(Color::rgb(*r, *g, *b)),
+    }
 }
 
 pub(crate) fn resolve_acadrust_color(color: &acadrust::Color) -> Color {

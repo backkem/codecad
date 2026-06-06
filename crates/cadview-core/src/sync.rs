@@ -22,6 +22,7 @@ pub struct SyncDoc {
     entities: yrs::MapRef,
     layers: yrs::MapRef,
     blocks: yrs::MapRef,
+    linetypes: yrs::MapRef,
     meta: yrs::MapRef,
     /// When Some, we're inside a batch. Stores the entity hashes and layer
     /// names captured at begin_batch. Diffs are deferred until end_batch.
@@ -32,6 +33,7 @@ struct BatchState {
     ent_before: HashMap<u64, u64>,
     layer_before: std::collections::HashSet<String>,
     block_before: std::collections::HashSet<String>,
+    linetype_before: std::collections::HashSet<String>,
 }
 
 impl SyncDoc {
@@ -40,12 +42,14 @@ impl SyncDoc {
         let entities = doc.get_or_insert_map("entities");
         let layers = doc.get_or_insert_map("layers");
         let blocks = doc.get_or_insert_map("blocks");
+        let linetypes = doc.get_or_insert_map("linetypes");
         let meta = doc.get_or_insert_map("meta");
         Self {
             doc,
             entities,
             layers,
             blocks,
+            linetypes,
             meta,
             batch_state: std::cell::RefCell::new(None),
         }
@@ -66,6 +70,7 @@ impl SyncDoc {
         self.entities.clear(&mut txn);
         self.layers.clear(&mut txn);
         self.blocks.clear(&mut txn);
+        self.linetypes.clear(&mut txn);
 
         for ent in &doc.entities {
             let key = format!("e_{}", ent.id.0);
@@ -81,6 +86,11 @@ impl SyncDoc {
         for (name, block) in &doc.blocks {
             let bytes = crate::block_to_bytes(block);
             self.blocks.insert(&mut txn, name.as_str(), bytes);
+        }
+
+        for (name, lt) in &doc.linetypes {
+            let bytes = crate::linetype_to_bytes(lt);
+            self.linetypes.insert(&mut txn, name.as_str(), bytes);
         }
 
         let max_id = doc.entities.iter().map(|e| e.id.0).max().unwrap_or(0);
@@ -116,6 +126,14 @@ impl SyncDoc {
             }
         }
 
+        for (key, value) in self.linetypes.iter(&txn) {
+            if let Out::Any(Any::Buffer(buf)) = value {
+                if let Some(lt) = crate::linetype_from_bytes(&buf) {
+                    doc.linetypes.insert(key.to_string(), lt);
+                }
+            }
+        }
+
         if let Some(Out::Any(Any::Number(n))) = self.meta.get(&txn, "next_id") {
             doc.set_next_id(n as u64);
         }
@@ -146,16 +164,19 @@ impl SyncDoc {
         let ent_before = entity_hashes(local_doc);
         let layer_before = layer_names(local_doc);
         let block_before = block_names(local_doc);
+        let lt_before = linetype_names(local_doc);
 
         let result = crate::cad_call(local_doc, method, args)?;
 
         let ent_after = entity_hashes(local_doc);
         let layer_after = layer_names(local_doc);
         let block_after = block_names(local_doc);
+        let lt_after = linetype_names(local_doc);
 
         let update = if ent_before != ent_after
             || layer_before != layer_after
             || block_before != block_after
+            || lt_before != lt_after
         {
             self.diff_into_yrs(
                 local_doc,
@@ -165,6 +186,8 @@ impl SyncDoc {
                 &layer_after,
                 &block_before,
                 &block_after,
+                &lt_before,
+                &lt_after,
             )
         } else {
             Vec::new()
@@ -180,6 +203,7 @@ impl SyncDoc {
             ent_before: entity_hashes(local_doc),
             layer_before: layer_names(local_doc),
             block_before: block_names(local_doc),
+            linetype_before: linetype_names(local_doc),
         });
     }
 
@@ -192,10 +216,12 @@ impl SyncDoc {
         let ent_after = entity_hashes(local_doc);
         let layer_after = layer_names(local_doc);
         let block_after = block_names(local_doc);
+        let lt_after = linetype_names(local_doc);
 
         if bs.ent_before != ent_after
             || bs.layer_before != layer_after
             || bs.block_before != block_after
+            || bs.linetype_before != lt_after
         {
             self.diff_into_yrs(
                 local_doc,
@@ -205,6 +231,8 @@ impl SyncDoc {
                 &layer_after,
                 &bs.block_before,
                 &block_after,
+                &bs.linetype_before,
+                &lt_after,
             )
         } else {
             Vec::new()
@@ -223,6 +251,8 @@ impl SyncDoc {
         layer_after: &std::collections::HashSet<String>,
         block_before: &std::collections::HashSet<String>,
         block_after: &std::collections::HashSet<String>,
+        lt_before: &std::collections::HashSet<String>,
+        lt_after: &std::collections::HashSet<String>,
     ) -> Vec<u8> {
         let sv_before = {
             let txn = self.doc.transact();
@@ -280,6 +310,23 @@ impl SyncDoc {
                 if let Some(block) = doc.blocks.get(name) {
                     let bytes = crate::block_to_bytes(block);
                     self.blocks.insert(&mut txn, name.as_str(), bytes);
+                }
+            }
+        }
+
+        // Removed linetypes
+        for name in lt_before {
+            if !lt_after.contains(name) {
+                self.linetypes.remove(&mut txn, name.as_str());
+            }
+        }
+
+        // Added or changed linetypes
+        for name in lt_after {
+            if !lt_before.contains(name) {
+                if let Some(lt) = doc.linetypes.get(name) {
+                    let bytes = crate::linetype_to_bytes(lt);
+                    self.linetypes.insert(&mut txn, name.as_str(), bytes);
                 }
             }
         }
@@ -347,6 +394,10 @@ fn block_names(doc: &Document) -> std::collections::HashSet<String> {
     doc.blocks.keys().cloned().collect()
 }
 
+fn linetype_names(doc: &Document) -> std::collections::HashSet<String> {
+    doc.linetypes.keys().cloned().collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -361,9 +412,14 @@ mod tests {
             Point::new(0.0, 0.0),
             Point::new(100.0, 0.0),
             "WALLS",
-            Color::rgb(255, 0, 0),
+            Some(Color::rgb(255, 0, 0)),
         );
-        doc.add_circle(Point::new(50.0, 50.0), 25.0, "ELEC", Color::rgb(0, 255, 0));
+        doc.add_circle(
+            Point::new(50.0, 50.0),
+            25.0,
+            "ELEC",
+            Some(Color::rgb(0, 255, 0)),
+        );
         doc.add_polyline(
             vec![
                 Point::new(0.0, 0.0),
@@ -372,7 +428,7 @@ mod tests {
             ],
             true,
             "WALLS",
-            Color::rgb(255, 0, 0),
+            Some(Color::rgb(255, 0, 0)),
         );
 
         let sync = SyncDoc::new(1);
@@ -521,16 +577,16 @@ mod tests {
             Point::new(1.0, 2.0),
             Point::new(3.0, 4.0),
             "L",
-            Color::rgb(100, 200, 50),
+            Some(Color::rgb(100, 200, 50)),
         );
-        doc.add_circle(Point::new(5.0, 6.0), 7.0, "C", Color::rgb(10, 20, 30));
+        doc.add_circle(Point::new(5.0, 6.0), 7.0, "C", Some(Color::rgb(10, 20, 30)));
         doc.add_arc(
             Point::new(0.0, 0.0),
             50.0,
             0.0,
             1.5,
             "A",
-            Color::rgb(255, 0, 0),
+            Some(Color::rgb(255, 0, 0)),
         );
         doc.add_polyline(
             vec![
@@ -540,7 +596,7 @@ mod tests {
             ],
             true,
             "P",
-            Color::rgb(0, 255, 0),
+            Some(Color::rgb(0, 255, 0)),
         );
 
         for ent in &doc.entities {

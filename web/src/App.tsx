@@ -56,7 +56,7 @@ export function App() {
         })
         .catch((e) => console.error(`[CodeCAD] ?file= load failed: ${e}`));
     }
-  }, []);
+  }, [loadBytesAsTab]);
 
   // Switch active tab
   function activateTab(id: string) {
@@ -191,7 +191,7 @@ export function App() {
         }
       }
     },
-    [tabs],
+    [loadDroppedFile],
   );
 
   // Poll layers from the active session
@@ -230,7 +230,7 @@ export function App() {
       }
     }, 1000);
     return () => clearInterval(poll);
-  }, [activeTabId]);
+  }, []);
 
   const activeTab = tabs.find((t) => t.id === activeTabId);
 

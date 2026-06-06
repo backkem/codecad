@@ -536,6 +536,7 @@ function trackWasmProgress(onProgress: (pct: number) => void): () => void {
 
     const total = Number.parseInt(
       response.headers.get("content-length") || "0",
+      10,
     );
     if (!total || !response.body) return response;
 

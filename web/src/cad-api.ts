@@ -144,7 +144,12 @@ export function buildCadApi({
     ) => call("addArc", { center, radius, ...opts }) as EntityJson,
     addPolyline: (
       points: Point2[],
-      opts: { closed?: boolean; layer?: string; color?: Color3; dash?: number[] } = {},
+      opts: {
+        closed?: boolean;
+        layer?: string;
+        color?: Color3;
+        dash?: number[];
+      } = {},
     ) => call("addPolyline", { points, ...opts }) as EntityJson,
     addText: (
       text: string,
@@ -198,7 +203,8 @@ export function buildCadApi({
       }) as EntityJson,
 
     // ── Introspection ──────────────────────────────────────────────────
-    methods: () => call("methods", {}) as { name: string; args: string; desc: string }[],
+    methods: () =>
+      call("methods", {}) as { name: string; args: string; desc: string }[],
 
     // ── Layers ────────────────────────────────────────────────────────
     setLayerVisible: (name: string, visible: boolean) =>

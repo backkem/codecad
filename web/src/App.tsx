@@ -35,6 +35,7 @@ export function App() {
   const [dragOver, setDragOver] = useState(false);
 
   // Register tab rename callback (called by cad.save/saveDwg)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs once on mount
   useEffect(() => {
     onTabRenamed((sessionId, newLabel) => {
       setTabs((prev) =>
@@ -56,7 +57,7 @@ export function App() {
         })
         .catch((e) => console.error(`[CodeCAD] ?file= load failed: ${e}`));
     }
-  }, [loadBytesAsTab]);
+  }, []);
 
   // Switch active tab
   function activateTab(id: string) {
@@ -177,6 +178,7 @@ export function App() {
     setDragOver(false);
   }, []);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: stable ref
   const onDrop = useCallback(
     (e: DragEvent) => {
       e.preventDefault();
@@ -191,10 +193,11 @@ export function App() {
         }
       }
     },
-    [loadDroppedFile],
+    [tabs],
   );
 
   // Poll layers from the active session
+  // biome-ignore lint/correctness/useExhaustiveDependencies: restart poll on tab switch
   useEffect(() => {
     const poll = setInterval(() => {
       try {
@@ -230,7 +233,7 @@ export function App() {
       }
     }, 1000);
     return () => clearInterval(poll);
-  }, []);
+  }, [activeTabId]);
 
   const activeTab = tabs.find((t) => t.id === activeTabId);
 

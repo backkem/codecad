@@ -28,6 +28,27 @@ build-packed: build-wasm build-web build-sandbox-api
 build-packed-full: build-wasm build-web build-sandbox-api
     cargo build -p cadview-server --release --features embedded-dist,embedded-examples
 
+# Package an all-in-one release archive for the host platform.
+# Mirrors .github/workflows/release.yml; tag defaults to "dev".
+package tag="dev": build-wasm clean-dist build-web build-sandbox-api build-packed
+    #!/usr/bin/env bash
+    set -euo pipefail
+    target=$(rustc -vV | sed -n 's/^host: //p')
+    ext=""
+    if [[ "$target" == *windows* ]]; then ext=".exe"; fi
+    dir="codecad-{{tag}}-${target}"
+    rm -rf "release/$dir" && mkdir -p "release/$dir"
+    cp "target/release/cadview-server${ext}" "release/$dir/codecad${ext}"
+    cp README.md LICENSE "release/$dir/"
+    cd release
+    if [[ "$target" == *windows* ]]; then
+      rm -f "$dir.zip" && 7z a "$dir.zip" "$dir" >/dev/null && archive="$dir.zip"
+    else
+      tar czf "$dir.tar.gz" "$dir" && archive="$dir.tar.gz"
+    fi
+    shasum -a 256 "$archive" > "$archive.sha256"
+    echo "release/$archive"
+
 # Build embeddable viewer (ESM library, no React)
 build-embed:
     cd web && pnpm exec vite build --config vite.embed.config.ts

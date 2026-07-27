@@ -22,6 +22,27 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+const USAGE: &str = "\
+codecad - AI-native 2D CAD server
+
+Usage: codecad [OPTIONS] [PATH]
+
+PATH is a .dwg file or a directory of .dwg files. With no PATH, the
+current directory is scanned. Serves http://localhost:8765.
+
+Options:
+  --exec <SCRIPT>     Run a JS script headless and exit (no server)
+  --dist <DIR>        Serve frontend assets from disk instead of embedded
+  --examples <DIR>    Read example drawings from disk instead of embedded
+  -V, --version       Print version
+  -h, --help          Print this help
+
+Environment:
+  CADVIEW_TOKEN       Bearer token for the HTTP API and WebTransport
+                      (default: cadview-local-dev)
+  RUST_LOG            Log filter, e.g. RUST_LOG=info
+";
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
@@ -49,6 +70,14 @@ async fn main() -> anyhow::Result<()> {
             }
             "--exec" => {
                 exec_script = Some(args_iter.next().expect("--exec requires a script path"));
+            }
+            "--version" | "-V" => {
+                println!("codecad {}", env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
+            "--help" | "-h" => {
+                print!("{USAGE}");
+                return Ok(());
             }
             _ => positional.push(arg),
         }

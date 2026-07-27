@@ -1,0 +1,169 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  WASM_BINDGEN_VERSION: "0.2.121"
+
+jobs:
+  # Build the browser bundle and the JS sandbox component once. Both are
+  # baked into every platform binary, so they only need building on one
+  # runner.
+  assets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: assets
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli@${{ env.WASM_BINDGEN_VERSION }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: latest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - run: cd web && pnpm install --frozen-lockfile
+
+      - uses: extractions/setup-just@v2
+
+      # dist/: wasm-bindgen output + Vite bundle (embedded-dist)
+      - name: Build WASM + frontend
+        run: just build-wasm build-web
+
+      # crates/cadview-sandbox/cadview-sandbox.wasm: StarlingMonkey JS
+      # component, include_bytes!'d by cadview-server. Not in git.
+      - name: Build sandbox component
+        run: bash sandbox-component/build.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-wasm
+          path: crates/cadview-sandbox/cadview-sandbox.wasm
+          retention-days: 1
+
+  build:
+    needs: assets
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            ext: .exe
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            ext: ""
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            ext: ""
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            ext: ""
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            ext: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sandbox-wasm
+          path: crates/cadview-sandbox/
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # embedded-dist bakes in the frontend + WASM renderer. Examples are
+      # not bundled: they live on the Pages site.
+      # cad-client/cad-api-setup.js is committed, so no pnpm step is needed.
+      - name: Build server
+        run: >
+          cargo build --release --locked
+          --target ${{ matrix.target }}
+          -p cadview-server
+          --features embedded-dist
+
+      - name: Package
+        shell: bash
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          # workflow_dispatch runs on a branch, not a tag
+          if [ "$tag" = "$GITHUB_REF" ]; then tag="dev-${GITHUB_SHA:0:7}"; fi
+          dir="codecad-${tag}-${{ matrix.target }}"
+          mkdir "$dir"
+          cp "target/${{ matrix.target }}/release/cadview-server${{ matrix.ext }}" \
+             "$dir/codecad${{ matrix.ext }}"
+          cp README.md LICENSE "$dir/"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a "${dir}.zip" "$dir" >/dev/null
+            archive="${dir}.zip"
+          else
+            tar czf "${dir}.tar.gz" "$dir"
+            archive="${dir}.tar.gz"
+          fi
+          shasum -a 256 "$archive" > "${archive}.sha256"
+          ls -lh codecad-*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            codecad-*.tar.gz
+            codecad-*.zip
+            codecad-*.sha256
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            codecad-*.tar.gz
+            codecad-*.zip
+            codecad-*.sha256

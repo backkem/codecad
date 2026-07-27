@@ -33,9 +33,27 @@ tool and the data.
   document access. Mutations batch and broadcast to all viewers.
 - **HTTP API**: `POST /api/run` to execute scripts from curl, CI, or MCP.
 
+## Install
+
+Grab a binary from the [latest release](https://github.com/backkem/codecad/releases/latest).
+One file, no runtime deps: the frontend, the WASM renderer and the
+script sandbox are all baked in.
+
+```bash
+# Linux / macOS (pick your target triple)
+tar xzf codecad-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
+./codecad-v0.1.0-x86_64-unknown-linux-gnu/codecad path/to/file.dwg
+```
+
+Windows: unzip and run `codecad.exe`. On macOS, first run needs
+`xattr -d com.apple.quarantine codecad` (the binaries are unsigned).
+
+Builds are published for Windows x64, Linux x64/arm64, and macOS
+Intel/Apple Silicon. Run `codecad --help` for flags.
+
 ## Quick start
 
-Prerequisites: Rust nightly, `wasm-bindgen-cli`, Node.js + pnpm,
+Building from source needs `wasm-bindgen-cli`, Node.js + pnpm, and
 [just](https://github.com/casey/just).
 
 ```bash

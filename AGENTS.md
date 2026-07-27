@@ -240,6 +240,26 @@ Uses `rust-embed` behind feature flags `embedded-dist` and
 `embedded-examples`. The resulting binary needs no dist/ directory.
 `--dist <path>` still works to override at runtime.
 
+### Releases
+
+`just package [tag]` builds the packed binary for the host platform and
+writes `release/codecad-<tag>-<target>.{tar.gz,zip}` plus a `.sha256`.
+The archive holds the binary named `codecad`, README.md and LICENSE.
+
+Pushing a `v*` tag runs `.github/workflows/release.yml`, which does the
+same thing for five targets (Windows x64, Linux x64/arm64, macOS
+x86_64/arm64) and attaches the archives to a GitHub release:
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+One `assets` job builds dist/ and the sandbox component once (neither is
+in git), then each platform job downloads those and compiles
+`cadview-server --features embedded-dist`. Examples are deliberately not
+embedded; they ship with the Pages site. `workflow_dispatch` runs the
+build without publishing, for testing workflow changes.
+
 ### Dev mode (Vite HMR for frontend, no server)
 
 ```bash

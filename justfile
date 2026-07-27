@@ -46,7 +46,11 @@ package tag="dev": build-wasm clean-dist build-web build-sandbox-api build-packe
     else
       tar czf "$dir.tar.gz" "$dir" && archive="$dir.tar.gz"
     fi
-    shasum -a 256 "$archive" > "$archive.sha256"
+    if command -v sha256sum >/dev/null; then
+      sha256sum "$archive" > "$archive.sha256"
+    else
+      shasum -a 256 "$archive" > "$archive.sha256"
+    fi
     echo "release/$archive"
 
 # Build embeddable viewer (ESM library, no React)

@@ -16,6 +16,9 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::HtmlCanvasElement;
 
+/// The rAF callback, held in a cell so it can schedule itself.
+type FrameCb = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
+
 /// Per-renderer GPU state.
 struct VelloState {
     device: wgpu::Device,
@@ -122,7 +125,7 @@ pub fn start(canvas: HtmlCanvasElement, session_id: &str, renderer_key: &str) {
         // Demand-driven rendering: only run rAF when something changed.
         // `frame_pending` tracks whether a rAF is already scheduled.
         let frame_pending = Rc::new(Cell::new(false));
-        let cb: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
+        let cb: FrameCb = Rc::new(RefCell::new(None));
 
         // schedule_frame: request a single rAF if one isn't already queued.
         // Called by input handlers when they have new data.
@@ -177,7 +180,6 @@ pub fn start(canvas: HtmlCanvasElement, session_id: &str, renderer_key: &str) {
             std::mem::forget(observer);
         }
 
-        let cb_clone = Rc::clone(&cb);
         let state_clone = Rc::clone(&state);
         let input_clone = Rc::clone(&input);
         let pending_clone = Rc::clone(&frame_pending);

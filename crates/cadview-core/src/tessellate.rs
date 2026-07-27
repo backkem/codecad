@@ -435,8 +435,10 @@ pub fn triangulate_polygon(boundary: &[Point], holes: &[Vec<Point>]) -> (Vec<[f3
     let indices = earcutr::earcut(&coords, &hole_indices, 2).unwrap_or_default();
 
     let triangles: Vec<[f32; 2]> = coords
-        .chunks_exact(2)
-        .map(|c| [c[0] as f32, c[1] as f32])
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&[x, y]| [x as f32, y as f32])
         .collect();
     let tri_indices: Vec<u32> = indices.iter().map(|&i| i as u32).collect();
 

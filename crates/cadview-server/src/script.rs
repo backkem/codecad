@@ -252,7 +252,9 @@ fn program_frame(stack: &str) -> Option<&str> {
         .lines()
         .filter_map(|frame| frame.split_once('@').map(|(_, at)| at.trim()))
         .find(|at| {
-            !at.is_empty() && !at.starts_with("cad-bridge.js") && !at.starts_with("cad-api-setup.js")
+            !at.is_empty()
+                && !at.starts_with("cad-bridge.js")
+                && !at.starts_with("cad-api-setup.js")
         })
 }
 
@@ -475,13 +477,26 @@ mod tests {
     }
 
     async fn entity_count(registry: &Arc<Mutex<DocumentRegistry>>) -> usize {
-        registry.lock().await.get("doc").unwrap().document.entities.len()
+        registry
+            .lock()
+            .await
+            .get("doc")
+            .unwrap()
+            .document
+            .entities
+            .len()
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_script_draws_on_the_document_and_broadcasts_one_update() {
         let (dir, registry) = registry();
-        let mut updates = registry.lock().await.get("doc").unwrap().update_tx.subscribe();
+        let mut updates = registry
+            .lock()
+            .await
+            .get("doc")
+            .unwrap()
+            .update_tx
+            .subscribe();
 
         let output = run_script(
             &SANDBOX,
@@ -520,7 +535,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(output.value.as_deref(), Some(r#"{"zed":1,"alpha":2,"mid":3}"#));
+        assert_eq!(
+            output.value.as_deref(),
+            Some(r#"{"zed":1,"alpha":2,"mid":3}"#)
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -581,7 +599,11 @@ mod tests {
         assert_eq!(entity_count(&registry).await, 8);
 
         // A failing nested run is an error in the parent; the document stays.
-        std::fs::write(dir.path().join("bad.js"), "cad.addLine([0,0],[1,0]); null.x;").unwrap();
+        std::fs::write(
+            dir.path().join("bad.js"),
+            "cad.addLine([0,0],[1,0]); null.x;",
+        )
+        .unwrap();
         let output = run_script(
             &SANDBOX,
             &registry,
@@ -593,7 +615,11 @@ mod tests {
         .await
         .unwrap();
         assert!(
-            output.value.as_deref().unwrap().starts_with("exec: program error: TypeError"),
+            output
+                .value
+                .as_deref()
+                .unwrap()
+                .starts_with("exec: program error: TypeError"),
             "{output:?}"
         );
         assert_eq!(entity_count(&registry).await, 9);

@@ -12,7 +12,7 @@ embedded-examples = ["dep:rust-embed"]
 
 [dependencies]
 cadview-core = { path = "../cadview-core" }
-cadview-sandbox = { path = "../cadview-sandbox" }
+codelib = { git = "https://github.com/backkem/codelib" }
 kurbo = "0.13"
 wtransport = "0.7"
 axum = "0.8"

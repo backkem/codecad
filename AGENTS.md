@@ -21,11 +21,10 @@ crates are thin shells. Specifically:
 - **cadview-server**: HTTP server (axum), document store + registry,
   WebTransport session management, per-document broadcast, RPC
   dispatch, server-side script execution. Delegates all mutation
-  and sync to cadview-core.
-- **cadview-sandbox**: Wasmtime WASM component sandbox for running
-  JS scripts server-side. Custom WIT interface (cad-call, rpc-call,
-  read-file) gives scripts direct access to the document model.
-  Epoch-based timeouts, memory isolation, stdout/stderr capture.
+  and sync to cadview-core. Scripts run in a
+  [codelib](https://github.com/backkem/codelib) sandbox (embedded JS engine on wasmtime):
+  timeouts, a memory cap, stdout/stderr capture, and `host.call`
+  as the only way out, which `script.rs` answers with the document.
 
 When adding new functionality, default to putting it in core. Only
 put code in web/server if it genuinely cannot compile on the other
@@ -70,22 +69,11 @@ crates/
       src/assets.rs           # AssetProvider trait: embedded (rust-embed) or disk
       src/http.rs             # static file serving, /api/documents, /api/run, auth
       src/transport.rs        # WebTransport: stream classification, per-doc sync, RPC
-      src/script.rs           # server-side JS execution: run_script, exec_file
+      src/script.rs           # server-side JS execution (codelib): run_script,
+                              #   exec_file, host.call bridge, nested exec
       src/sync.rs             # re-exports cadview_core::sync::SyncDoc
-    cadview-sandbox/          # Wasmtime WASM component sandbox
-      src/lib.rs              # Sandbox struct, component caching, epoch timeouts
-      src/host.rs             # WasiView + custom cad::Host trait (closures)
-      src/error.rs            # SandboxError
-      cadview-sandbox.wasm    # pre-built StarlingMonkey JS component (~12MB)
-  wit/                        # WIT interface definitions
-    cadview-runtime.wit       # custom world: cad-call, rpc-call, read-file imports
-    deps/                     # WASI wit deps (cli, io, clocks, http, etc.)
-  sandbox-component/          # JS component build (jco componentize)
-    runtime-wrapper.js        # WIT imports -> globalThis bridge, exports run()
-    package.json              # pnpm: @bytecodealliance/jco + componentize-js
-    build.sh                  # Vite lib build + jco componentize pipeline
   cad-client/                 # build output for sandbox
-    cad-api-setup.js          # Vite-built IIFE (from cad-api.ts), embedded by Rust
+    cad-api-setup.js          # Vite-built IIFE (from cad-api.ts), a codelib prelude
   web/                        # frontend (TypeScript + React + Vite)
     package.json              # pnpm project (react, vite, typescript)
     vite.config.ts            # builds to ../dist/, aliases cadview-wasm
@@ -125,10 +113,10 @@ crates/
  │  Document + SyncDoc │   (HTTP header +           │                       │
  │  broadcast channel  │    injected into HTML)     │ Per-viewport:         │
  │                     │                           │  <canvas> + WebRunner │
- │ Sandbox (Wasmtime)  │                           │                       │
+ │ Sandbox (codelib)   │                           │                       │
  │  JS scripts via     │   POST /api/run           │ React: TabBar, Picker │
- │  cad-call WIT import│◄─── (HTTP, curl, MCP) ───│  ViewportContainer    │
- │  read-file, rpc-call│                           │                       │
+ │  host.call: cad.*,  │◄─── (HTTP, curl, MCP) ───│  ViewportContainer    │
+ │  rpc.*, readFile    │                           │                       │
  │  batch -> Yrs sync  │                           │ Shared: cad-api.ts    │
  └─────────────────────┘                           └───────────────────────┘
 ```
@@ -156,7 +144,7 @@ layers, screen size. Sessions are fully isolated (no shared state).
   for routing. Browser flushes pending Yrs updates before RPC.
 - **Client-only** (zoomTo, fitView, setLayerVisible): target js_target
   session's camera/layer state
-- **Server-side scripts** (runScript, exec): JS executed in Wasmtime
+- **Server-side scripts** (runScript, exec): JS executed in a codelib
   sandbox with direct cad_call access. All mutations batched into
   a single Yrs update, broadcast to connected browsers.
 
@@ -199,15 +187,13 @@ wasm-bindgen target/wasm32-unknown-unknown/release/cadview-web.wasm --out-dir di
 cd web && pnpm install && pnpm build && cd ..
 ```
 
-### Sandbox component (only when WIT or runtime-wrapper.js changes)
+### Script sandbox
 
-```bash
-cd sandbox-component && bash build.sh
-```
-
-Runs Vite lib build (TS -> JS for cad API setup) then jco componentize
-(JS -> WASM component). Output: `crates/cadview-sandbox/cadview-sandbox.wasm`
-(~12MB, committed). First Wasmtime compile takes ~2min, cached after that.
+Nothing to build: the JS engine ships inside the `codelib` crate
+(git dependency, pinned by `Cargo.lock`). The first server start on a machine
+compiles it to native code (~25 s), cached on disk after that.
+`cad-client/cad-api-setup.js` is committed; rebuild it with
+`just build-sandbox-api` only when `web/src/cad-api.ts` changes.
 
 ### Server mode (preferred)
 
@@ -254,8 +240,8 @@ x86_64/arm64) and attaches the archives to a GitHub release:
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
-One `assets` job builds dist/ and the sandbox component once (neither is
-in git), then each platform job downloads those and compiles
+One `assets` job builds dist/ once (it is not in git), then each
+platform job downloads it and compiles
 `cadview-server --features embedded-dist`. Examples are deliberately not
 embedded; they ship with the Pages site. `workflow_dispatch` runs the
 build without publishing, for testing workflow changes.
@@ -338,10 +324,10 @@ cad.api.listDocuments()                // GET /api/documents
 
 ## Server-side script execution
 
-JS scripts run in a Wasmtime WASM sandbox with direct access to the
-document via custom WIT imports (cad-call, rpc-call, read-file).
-All mutations are batched into a single Yrs update, broadcast to
-connected browsers in real time.
+JS scripts run in a codelib sandbox (JS engine in wasmtime) with
+access to the document through codelib's `host.call`. Default limits:
+30 s timeout, 512 MiB engine memory. All mutations are batched into a
+single Yrs update, broadcast to connected browsers in real time.
 
 ### Entry points
 
@@ -384,16 +370,19 @@ Scripts get `cad` on globalThis with the same API as the browser
        │
        └── vite.sandbox.config.ts -> cad-api-setup.js (IIFE)
               │
-              └── Rust host prepends to user script
+              └── codelib prelude, after the bridge prelude in script.rs
+                  (__cadCall/__rpcCall/__readFile -> host.call)
                      │
-                     └── runtime-wrapper.js (WIT imports -> globalThis bridge)
+                     └── codelib sandbox, host calls answered by script.rs
                             │
-                            └── Wasmtime sandbox (cadview-sandbox crate)
-                                   │
-                                   ├── cad-call -> cadview_core::cad_call()
-                                   ├── rpc-call -> save/saveDwg/exec handlers
-                                   └── read-file -> fs::read (path-sandboxed)
+                            ├── cad.<method> -> cadview_core::cad_call()
+                            ├── rpc.<method> -> save/saveDwg/loadDwg/exec handlers
+                            └── readFile     -> fs::read (path-sandboxed)
 ```
+
+`cad.exec(path)` runs the file as a nested codelib run on the same
+document (moved into the nested run and handed back), up to 8 deep,
+within what is left of the caller's time budget.
 
 ## Sync protocol
 
@@ -482,10 +471,11 @@ cadview-server: 8 tests (store backends, registry, broadcast isolation).
   `fn(&mut Document, method, args)`. All statefulness is in the shells.
 - **Per-session everything**: camera, render cache, hidden layers,
   sync stream, broadcast channel. No cross-session leakage.
-- **Wasmtime sandbox for server-side scripts**: real process isolation
-  (memory limits, epoch timeouts, crash containment). Custom WIT
-  imports for cad-call/rpc-call/read-file. Forward-compatible with
-  multi-tenant cloud deployment.
+- **codelib sandbox for server-side scripts**: wasmtime isolation
+  (memory limits, timeouts, crash containment) with the JS engine
+  embedded, no guest build. One `host.call` channel for
+  cad/rpc/readFile. Forward-compatible with multi-tenant cloud
+  deployment.
 - **Shared cad API (TypeScript)**: `web/src/cad-api.ts` is the single
   source of truth. Browser imports directly, sandbox gets a Vite-built
   IIFE. No method list duplication.

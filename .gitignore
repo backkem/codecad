@@ -11,7 +11,6 @@ dist/
 dist-embed/
 _site/
 release/
-**/cadview-sandbox.wasm
 
 # Working docs (prefixed with _)
 **/_*.md

@@ -142,9 +142,12 @@ async fn main() -> anyhow::Result<()> {
 
     let registry = Arc::new(Mutex::new(registry));
 
-    // Initialize WASM sandbox for server-side script execution.
-    let sandbox = Arc::new(script::create_sandbox().expect("Failed to initialize WASM sandbox"));
-    tracing::info!("WASM sandbox initialized");
+    // Initialize the sandbox for server-side script execution.
+    tracing::info!("Initializing script sandbox (the first start compiles the JS engine)");
+    let sandbox = script::create_sandbox()
+        .await
+        .expect("Failed to initialize script sandbox");
+    tracing::info!("Script sandbox initialized");
 
     // TLS for WebTransport
     let identity = wtransport::Identity::self_signed(["localhost", "127.0.0.1", "::1"])?;
@@ -198,7 +201,9 @@ async fn main() -> anyhow::Result<()> {
 
 /// Headless mode: load an optional DWG, run a script, print output, exit.
 async fn run_headless(positional: &[String], script_path: &str) -> anyhow::Result<()> {
-    let sandbox = Arc::new(script::create_sandbox().expect("Failed to initialize WASM sandbox"));
+    let sandbox = script::create_sandbox()
+        .await
+        .expect("Failed to initialize script sandbox");
 
     // Create registry with optional input DWG
     let mut registry =
@@ -248,7 +253,7 @@ async fn run_headless(positional: &[String], script_path: &str) -> anyhow::Resul
 async fn accept_wt_sessions(
     endpoint: wtransport::Endpoint<wtransport::endpoint::endpoint_side::Server>,
     registry: Arc<Mutex<DocumentRegistry>>,
-    sandbox: Arc<cadview_sandbox::Sandbox>,
+    sandbox: script::ScriptSandbox,
 ) -> anyhow::Result<()> {
     loop {
         let incoming = endpoint.accept().await;

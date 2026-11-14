@@ -29,8 +29,8 @@ tool and the data.
 
 - **Real-time sync**: edits propagate instantly to all connected browsers
   via Yrs CRDT over WebTransport.
-- **Server-side scripting**: JS in a Wasmtime WASM sandbox with direct
-  document access. Mutations batch and broadcast to all viewers.
+- **Server-side scripting**: JS in a [codelib](https://github.com/backkem/codelib)
+  sandbox (wasmtime) with direct document access. Mutations batch and broadcast to all viewers.
 - **HTTP API**: `POST /api/run` to execute scripts from curl, CI, or MCP.
 
 ## Install
@@ -70,14 +70,13 @@ Opens at http://localhost:8765. Drag-and-drop .dwg files onto the page.
 
 ## Architecture
 
-Four Rust crates, one TypeScript + React frontend:
+Three Rust crates (plus the `mtext` helper), one TypeScript + React frontend:
 
 | Crate | Role |
 |-------|------|
 | `cadview-core` | Document model, DWG parsing, `cad_call` dispatcher, Yrs CRDT sync. Compiles for wasm32 and native. Zero global state. |
 | `cadview-web` | WASM browser target: session registry, dual renderer (Vello + egui), wasm-bindgen exports. |
-| `cadview-server` | HTTP (axum) + WebTransport (wtransport). Document store, lazy loading, per-doc broadcast, script sandbox. |
-| `cadview-sandbox` | Wasmtime WASM component sandbox for server-side JS execution. |
+| `cadview-server` | HTTP (axum) + WebTransport (wtransport). Document store, lazy loading, per-doc broadcast, server-side JS scripts on [codelib](https://github.com/backkem/codelib). |
 
 See [docs/architecture.md](docs/architecture.md) for the full design and
 [AGENTS.md](AGENTS.md) for contributor/agent orientation.

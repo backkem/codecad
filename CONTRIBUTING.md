@@ -6,6 +6,9 @@
 - **wasm-bindgen-cli**: `cargo install wasm-bindgen-cli`
 - **Node.js** (20+) and **pnpm**
 - **just** (task runner): `cargo install just`
+- **codelib**: the server's script sandbox, fetched by cargo as a git
+  dependency (no checkout needed). Its JS engine is prebuilt; the first server start
+  compiles it to native code (~25 s), cached afterwards.
 
 ## Building
 

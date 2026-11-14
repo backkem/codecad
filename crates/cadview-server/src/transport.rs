@@ -26,7 +26,7 @@ use wtransport::Connection;
 pub async fn handle_session_v2(
     conn: Connection,
     registry: Arc<Mutex<DocumentRegistry>>,
-    sandbox: Arc<cadview_sandbox::Sandbox>,
+    sandbox: crate::script::ScriptSandbox,
 ) {
     tracing::info!("WebTransport session connected");
 
@@ -236,7 +236,7 @@ async fn handle_rpc_call(
     msg: &[u8],
     registry: Arc<Mutex<DocumentRegistry>>,
     default_doc_key: &str,
-    sandbox: &Arc<cadview_sandbox::Sandbox>,
+    sandbox: &crate::script::ScriptSandbox,
 ) -> String {
     let Ok(req) = serde_json::from_slice::<serde_json::Value>(msg) else {
         return r#"{"error":"invalid JSON"}"#.to_string();

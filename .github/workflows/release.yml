@@ -13,9 +13,9 @@ env:
   WASM_BINDGEN_VERSION: "0.2.121"
 
 jobs:
-  # Build the browser bundle and the JS sandbox component once. Both are
-  # baked into every platform binary, so they only need building on one
-  # runner.
+  # Build the browser bundle once. It is baked into every platform binary,
+  # so it only needs building on one runner. The script sandbox's JS engine
+  # comes with the codelib crate.
   assets:
     runs-on: ubuntu-latest
     steps:
@@ -51,21 +51,10 @@ jobs:
       - name: Build WASM + frontend
         run: just build-wasm build-web
 
-      # crates/cadview-sandbox/cadview-sandbox.wasm: StarlingMonkey JS
-      # component, include_bytes!'d by cadview-server. Not in git.
-      - name: Build sandbox component
-        run: bash sandbox-component/build.sh
-
       - uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist/
-          retention-days: 1
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sandbox-wasm
-          path: crates/cadview-sandbox/cadview-sandbox.wasm
           retention-days: 1
 
   build:
@@ -97,11 +86,6 @@ jobs:
         with:
           name: dist
           path: dist/
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: sandbox-wasm
-          path: crates/cadview-sandbox/
 
       - uses: dtolnay/rust-toolchain@stable
         with:

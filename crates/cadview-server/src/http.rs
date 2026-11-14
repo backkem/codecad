@@ -16,7 +16,7 @@ pub struct HttpState {
     pub wt_port: u16,
     pub registry: Arc<Mutex<DocumentRegistry>>,
     pub token: String,
-    pub sandbox: Arc<cadview_sandbox::Sandbox>,
+    pub sandbox: crate::script::ScriptSandbox,
 }
 
 pub fn router(state: Arc<HttpState>) -> Router {

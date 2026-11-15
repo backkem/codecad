@@ -22,7 +22,7 @@ import init, {
   yrs_pending_update,
   yrs_state_vector,
 } from "cadview-wasm";
-import type { CadApi, EntityJson, LayerInfo } from "./cad-api";
+import type { CadApi, EntityJson, LayerInfo, SavePdfOptions } from "./cad-api";
 import { buildCadApi } from "./cad-api";
 
 export type { CadApi, EntityJson, LayerInfo };
@@ -314,15 +314,15 @@ export const cad = {
     downloadBlob(bytes, path, "application/octet-stream");
     return { ok: true, path };
   },
-  savePdf: async (path = "output.pdf") => {
+  savePdf: async (path = "output.pdf", opts: SavePdfOptions = {}) => {
     if (_serverAvailable) {
       await flushAndWaitSync();
       const sid = cad.currentSession();
-      return rpcCall("savePdf", { path }, sid ?? undefined);
+      return rpcCall("savePdf", { ...opts, path }, sid ?? undefined);
     }
     const sid = cad.currentSession();
     if (!sid) return { ok: false, error: "no session" };
-    const bytes = export_pdf_bytes(sid);
+    const bytes = export_pdf_bytes(sid, JSON.stringify(opts));
     downloadBlob(bytes, path, "application/pdf");
     return { ok: true, path };
   },

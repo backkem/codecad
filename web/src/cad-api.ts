@@ -84,6 +84,15 @@ export interface Region {
   area: number;
 }
 
+export interface SavePdfOptions {
+  /**
+   * "paper" (default): readable on white, white becomes black, light
+   * colours are darkened. "mono": everything black. "screen": colours
+   * exactly as stored.
+   */
+  colors?: "paper" | "mono" | "screen";
+}
+
 function parseResult(raw: string): unknown {
   const result = JSON.parse(raw);
   if (result && typeof result === "object" && "error" in result)
@@ -530,7 +539,8 @@ export function buildCadApi({
     // ── RPC (server operations) ───────────────────────────────────────
     save: (path = "cadview-output.json") => rpc("save", { path }),
     saveDwg: (path = "output.dwg") => rpc("saveDwg", { path }),
-    savePdf: (path = "output.pdf") => rpc("savePdf", { path }),
+    savePdf: (path = "output.pdf", opts: SavePdfOptions = {}) =>
+      rpc("savePdf", { ...opts, path }),
     loadDwg: (path: string) => rpc("loadDwg", { path }),
     loadElmt: (
       path: string,

@@ -218,9 +218,17 @@ cad.addPolyline([[0,0,0.5], [10,0]], { closed })     // [x, y, bulge] -> arc seg
 ```js
 await cad.save("output.json")         // save as JSON to server disk
 await cad.saveDwg("output.dwg")       // save as DWG to server disk
+await cad.savePdf("output.pdf", { colors: "paper" })  // one-page PDF, fitted to A4 landscape
 await cad.loadDwg("input.dwg")        // load DWG from server disk
 await cad.exec("scripts/foo.js")      // run server-side script
 ```
+
+`savePdf` colours: drawings are authored for a dark screen, so the
+default `"paper"` makes them readable on white. White and greys get
+their lightness inverted (white becomes black) and keep at least 3:1
+contrast; light colours keep their hue and are darkened to at least
+4.5:1. `"mono"` prints everything black, `"screen"` keeps the stored
+colours. Any other value is an error.
 
 `save` and `saveDwg` flush pending Yrs sync before writing. Paths are
 relative to the server's working directory.

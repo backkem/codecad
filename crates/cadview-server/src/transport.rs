@@ -311,11 +311,14 @@ async fn handle_rpc_call(
         }
         "savePdf" => {
             let path = req["args"]["path"].as_str().unwrap_or("output.pdf");
+            let opts = match cadview_core::pdf::PdfOptions::from_args(&req["args"]) {
+                Ok(o) => o,
+                Err(e) => return serde_json::json!({ "error": e }).to_string(),
+            };
             let reg = registry.lock().await;
             let Some(slot) = reg.get(doc_key) else {
                 return format!(r#"{{"error":"document '{}' not loaded"}}"#, doc_key);
             };
-            let opts = cadview_core::pdf::PdfOptions::default();
             let bytes = cadview_core::export_pdf_bytes(&slot.document, &opts);
             match std::fs::write(path, &bytes) {
                 Ok(()) => {

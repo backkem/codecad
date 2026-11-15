@@ -27,7 +27,11 @@ declare module "cadview-wasm" {
 
   // Binary export (returns bytes for browser download)
   export function export_dwg_bytes(session_id: string): Uint8Array;
-  export function export_pdf_bytes(session_id: string): Uint8Array;
+  /** opts_json: JSON of SavePdfOptions; throws on an unknown `colors`. */
+  export function export_pdf_bytes(
+    session_id: string,
+    opts_json: string,
+  ): Uint8Array;
 
   // Yrs sync (per-session, takes explicit session_id)
   export function yrs_state_vector(session_id: string): Uint8Array;

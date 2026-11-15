@@ -624,14 +624,17 @@ pub fn export_dwg_bytes(session_id: &str) -> Result<Vec<u8>, JsValue> {
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
-pub fn export_pdf_bytes(session_id: &str) -> Vec<u8> {
+pub fn export_pdf_bytes(session_id: &str, opts_json: &str) -> Result<Vec<u8>, JsValue> {
+    let args: serde_json::Value =
+        serde_json::from_str(opts_json).map_err(|e| JsValue::from_str(&format!("savePdf: {e}")))?;
+    let opts =
+        cadview_core::pdf::PdfOptions::from_args(&args).map_err(|e| JsValue::from_str(&e))?;
     let reg = SESSIONS.lock().unwrap();
     let session = match reg.sessions.get(session_id) {
         Some(s) => s,
-        None => return Vec::new(),
+        None => return Ok(Vec::new()),
     };
-    let opts = cadview_core::pdf::PdfOptions::default();
-    cadview_core::export_pdf_bytes(&session.doc, &opts)
+    Ok(cadview_core::export_pdf_bytes(&session.doc, &opts))
 }
 
 // ── Entry points ──────────────────────────────────────────────────────

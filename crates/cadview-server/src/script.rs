@@ -380,8 +380,8 @@ fn rpc_call(state: &mut RunState, method: &str, args: &str) -> Result<String, St
         "savePdf" => {
             let a: Value = serde_json::from_str(args).map_err(|e| e.to_string())?;
             let path = a["path"].as_str().unwrap_or("output.pdf");
+            let opts = cadview_core::pdf::PdfOptions::from_args(&a)?;
             let resolved = resolve_write(&state.write_base, path);
-            let opts = cadview_core::pdf::PdfOptions::default();
             let bytes = cadview_core::export_pdf_bytes(doc, &opts);
             std::fs::write(&resolved, &bytes).map_err(|e| format!("pdf: {e}"))?;
             Ok(serde_json::json!({

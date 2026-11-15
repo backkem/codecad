@@ -499,6 +499,7 @@ fn render_frame(state: &mut VelloState) {
     let dpr = web_sys::window().unwrap().device_pixel_ratio();
     let stroke_width = dpr / cam_zoom;
     let solid_stroke = kurbo::Stroke::new(stroke_width);
+    let mut dash_budget = DASH_BUDGET;
 
     for ent in &all_entities {
         if matches!(&ent.shape, Shape::SolidFill { .. }) {
@@ -538,7 +539,11 @@ fn render_frame(state: &mut VelloState) {
         let color = peniko::Color::from_rgba8(c.r, c.g, c.b, alpha);
 
         if let Some(Some(bezpath)) = state.path_cache.get(&ent.id) {
-            let stroke = if let Some(pattern) = session.doc.resolve_linetype_pattern(ent) {
+            let pattern = session
+                .doc
+                .resolve_linetype_pattern(ent)
+                .filter(|p| dash_lod(p, bezpath, cam_zoom, &mut dash_budget));
+            let stroke = if let Some(pattern) = pattern {
                 solid_stroke
                     .clone()
                     .with_dashes(0.0, pattern.iter().copied())
@@ -592,6 +597,36 @@ fn render_frame(state: &mut VelloState) {
     state.queue.submit(Some(encoder.finish()));
 
     surface_texture.present();
+}
+
+// Vello dashes on the CPU, one subpath per dash (about 6 GPU lines each),
+// into fixed-size GPU buffers (2^21 lines). On overflow Vello drops the
+// whole frame without an error and the canvas keeps the previous one.
+// Dash patterns are in world units, so a wide view of a drawing with
+// millimetre patterns asks for hundreds of thousands of dashes.
+
+/// Below this period on screen (device px) a pattern draws solid; the
+/// dashes would blur into a line anyway.
+const MIN_DASH_PERIOD_PX: f64 = 4.0;
+/// Dashes per frame (about 600k GPU lines); dashed entities past it draw
+/// solid, leaving the rest of the buffer for everything else.
+const DASH_BUDGET: f64 = 100_000.0;
+
+/// Whether to stroke `path` with `pattern` at this zoom, charging the
+/// dashes it produces against `budget`.
+fn dash_lod(pattern: &[f64], path: &BezPath, zoom: f64, budget: &mut f64) -> bool {
+    use kurbo::Shape as _;
+    let period: f64 = pattern.iter().map(|v| v.abs()).sum();
+    if period * zoom < MIN_DASH_PERIOD_PX {
+        return false;
+    }
+    let dashes_per_period = pattern.len().div_ceil(2) as f64;
+    let dashes = (path.perimeter(period * 0.1) / period).ceil() * dashes_per_period;
+    if dashes > *budget {
+        return false;
+    }
+    *budget -= dashes;
+    true
 }
 
 fn expand_blocks_and_text(doc: &cadview_core::Document, expanded: &mut Vec<DrawEntity>) {

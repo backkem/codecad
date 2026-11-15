@@ -16,6 +16,10 @@ pub struct PdfOptions {
     pub skip_layers: Vec<String>,
     pub line_width_pt: f32,
     pub colors: PdfColorMode,
+    /// Stroke entities at their own lineweight (mm) where one is set on
+    /// the entity or its layer. Off by default: every stroke then uses
+    /// `line_width_pt` and the per-layer factors.
+    pub lineweights: bool,
 }
 
 /// How entity colours map onto the white PDF page. Drawings are
@@ -58,6 +62,15 @@ impl PdfOptions {
             Some(serde_json::Value::String(s)) => opts.colors = PdfColorMode::parse(s)?,
             Some(other) => return Err(format!("savePdf: colors must be a string, got {other}")),
         }
+        match args.get("lineweights") {
+            None | Some(serde_json::Value::Null) => {}
+            Some(serde_json::Value::Bool(b)) => opts.lineweights = *b,
+            Some(other) => {
+                return Err(format!(
+                    "savePdf: lineweights must be true or false, got {other}"
+                ));
+            }
+        }
         Ok(opts)
     }
 }
@@ -85,6 +98,7 @@ impl Default for PdfOptions {
             .collect(),
             line_width_pt: 0.1,
             colors: PdfColorMode::default(),
+            lineweights: false,
         }
     }
 }
@@ -93,6 +107,18 @@ struct ExpandedEntity {
     shape: Shape,
     layer: String,
     color: Color,
+    /// Stroke width in mm, when one was set on purpose (see
+    /// `explicit_lineweight`).
+    lineweight: Option<f64>,
+}
+
+const PT_PER_MM: f64 = 72.0 / 25.4;
+
+/// The stroke width in mm when it was set on purpose: on the entity, or
+/// on its layer as anything but the 0.25 default.
+fn explicit_lineweight(doc: &Document, entity: Option<f64>, layer: &str) -> Option<f64> {
+    let lw = entity.unwrap_or_else(|| doc.layer_lineweight(layer));
+    ((lw - 0.25).abs() > 1e-9).then_some(lw)
 }
 
 pub fn export_pdf(doc: &Document, opts: &PdfOptions) -> Vec<u8> {
@@ -163,7 +189,10 @@ pub fn export_pdf(doc: &Document, opts: &PdfOptions) -> Vec<u8> {
         let (r, g, b) = *mapped
             .entry(key)
             .or_insert_with(|| map_color(opts.colors, stored));
-        let lw = line_weight(&ent.layer, opts.line_width_pt);
+        let lw = match ent.lineweight.filter(|_| opts.lineweights) {
+            Some(mm) => (mm * PT_PER_MM) as f32,
+            None => line_weight(&ent.layer, opts.line_width_pt),
+        };
 
         match &ent.shape {
             Shape::Text {
@@ -533,6 +562,7 @@ fn expand_entities(doc: &Document) -> Vec<ExpandedEntity> {
                         shape: shape.transformed(xform),
                         layer: layer.clone(),
                         color,
+                        lineweight: explicit_lineweight(doc, ent.lineweight, layer),
                     });
                 }
             }
@@ -541,6 +571,7 @@ fn expand_entities(doc: &Document) -> Vec<ExpandedEntity> {
                 shape: ent.shape.clone(),
                 layer: ent.layer.clone(),
                 color: ent.color.unwrap_or_else(|| doc.layer_color(&ent.layer)),
+                lineweight: explicit_lineweight(doc, ent.lineweight, &ent.layer),
             });
         }
     }
@@ -572,6 +603,30 @@ fn for_each_point(path: &BezPath, mut f: impl FnMut(Point)) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lineweights_option_parses_and_defaults_off() {
+        assert!(
+            !PdfOptions::from_args(&serde_json::json!({}))
+                .unwrap()
+                .lineweights
+        );
+        assert!(
+            PdfOptions::from_args(&serde_json::json!({ "lineweights": true }))
+                .unwrap()
+                .lineweights
+        );
+        assert!(PdfOptions::from_args(&serde_json::json!({ "lineweights": "yes" })).is_err());
+    }
+
+    #[test]
+    fn explicit_lineweight_ignores_the_default() {
+        let doc = Document::default();
+        // No such layer: the layer default (0.25) is not an explicit weight.
+        assert_eq!(explicit_lineweight(&doc, None, "nope"), None);
+        assert_eq!(explicit_lineweight(&doc, Some(0.25), "nope"), None);
+        assert_eq!(explicit_lineweight(&doc, Some(0.8), "nope"), Some(0.8));
+    }
 
     fn rgb8(r: u8, g: u8, b: u8) -> [f64; 3] {
         [r as f64 / 255.0, g as f64 / 255.0, b as f64 / 255.0]

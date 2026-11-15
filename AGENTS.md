@@ -358,7 +358,7 @@ Scripts get `cad` on globalThis with the same API as the browser
 | `cad.readFile(path)` | Read file from disk (relative to script dir) |
 | `cad.save(path)` | Save document as JSON |
 | `cad.saveDwg(path)` | Save document as DWG |
-| `cad.savePdf(path, { colors })` | Save a one-page PDF. `colors`: `"paper"` (default, readable on white), `"mono"`, `"screen"` (as stored) |
+| `cad.savePdf(path, { colors, lineweights })` | Save a one-page PDF. `colors`: `"paper"` (default, readable on white), `"mono"`, `"screen"` (as stored). `lineweights: true` strokes entities at their own lineweight where one is set (default: uniform hairlines) |
 | `cad.exec(path)` | Execute another .js file |
 | `console.log(...)` | Captured in response `stdout` field |
 

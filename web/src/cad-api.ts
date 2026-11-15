@@ -91,6 +91,11 @@ export interface SavePdfOptions {
    * exactly as stored.
    */
   colors?: "paper" | "mono" | "screen";
+  /**
+   * true: stroke entities at their own lineweight (mm) where one is set
+   * on the entity or its layer. Default false: uniform hairlines.
+   */
+  lineweights?: boolean;
 }
 
 function parseResult(raw: string): unknown {

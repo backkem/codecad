@@ -62,6 +62,41 @@ Each rung is built by a **builder/tester pair** and sized at **≤ about 2 weeks
 | **N6** packaging | `release.yml` gains a `cadview-desktop` build per target (Windows x64, Linux x64/arm64, macOS x86_64/arm64), archived as `codecad-desktop-<tag>-<target>` next to `codecad`. macOS `.app` bundle (unsigned at first, notarization documented). Windows `.exe` with icon. Linux tarball. `just package-desktop`. | A `workflow_dispatch` run produces all five archives with `.sha256` files. Each job runs `codecad-desktop --version`. Linux x64 also runs `--screenshot` on `01-flange-plate.dwg` under lavapipe and matches within the pixel tolerance. A tag push attaches the archives to the release. |
 | **N🎯** vision | A desktop CodeCAD that opens a folder of DWGs in tabs, edits and saves offline, runs drawing scripts locally, connects to a shared server and syncs live with browser users, and shows the 3D model and renders of the same document. It ships from the same tag as the server. | A scripted end-to-end test on a release archive, with no repo checkout:<br>1. Open `examples/` offline, run `01-flange-plate.js`, save as DWG.<br>2. Connect to a server and sync an edit with a WT peer within the N3a latency bound.<br>3. Open the bookshelf in 3D and write a headless render PNG.<br><br>Separately, a review checklist confirms every non-UI change in this ladder landed in core, render, render3d or store. |
 
+### N0b: what landed (2026-11-17)
+
+N0b landed with one change to the split described above: the decisions
+went to core, not to `cadview-render`.
+
+- **`cadview_core::render`** (pure, wasm32 + native) owns `Camera`
+  (`fit` with the 1.1 margin, `apply(CameraCmd)`, world-to-pixel
+  transform), `CameraCmd`, `View` (size, camera, hidden layers, pixel
+  ratio, background), `SceneCache` (block/text expansion plus the BezPath
+  cache, invalidated on entity count change as before) and
+  `build_display_list`. The display list is renderer-neutral: background,
+  one transform, and ordered items that each borrow an exact `BezPath`
+  with a fill (even-odd or non-zero) or a stroke (width, optional dashes),
+  colour and final alpha already resolved. Frustum culling, the 0.5 px
+  cull, the smoothstep fade to 8 px, transparency, ByLayer colour,
+  linetype dashes, the `pixel_ratio / zoom` stroke width and fills before
+  strokes all live there, with unit tests.
+- **`cadview-render`** holds backends only, with no `Shape` match: the
+  Vello scene builder (wasm32 + native, feature `gpu`), a headless GPU
+  render (one wgpu device and `vello::Renderer` per process, Msaa16,
+  Rgba8Unorm readback), the CPU rasterizer (feature `cpu`), PNG encoding,
+  and `render_png(&Document, &RenderOptions)` with `Auto | Gpu | Cpu`.
+  `RenderOptions` parses the `cad.render` JSON, so a desktop shell can
+  reuse it for `--screenshot`.
+- **`cadview-web`** draws through both: `vello_render.rs` keeps canvas,
+  rAF, input and surface code. `main.rs` is split into `session.rs`,
+  `exports.rs` and `egui_render.rs` (a pure move; the egui renderer's
+  drawing is unchanged).
+- **`cadview-server`** got the first consumer: `cad.render` (sandbox and
+  browser RPC) and `--render <PNG> --size WxH --render-backend`. N1's
+  `--screenshot` can reuse `render_png` as is.
+- Not yet done for the N0b gate: the browser pixel check against the
+  committed PNGs needs the web toolchain (node, pnpm, wasm-bindgen CLI),
+  which the machine that did this work did not have.
+
 ## Risks
 
 - **egui's look and feel vs a "Linebender ideal".** egui is immediate-mode and looks like egui. Keeping the chrome behind a small boundary and the real work in `cadview-render` keeps a later masonry switch cheap. The gate is masonry shipping external textures (xilem#1319) on a current vello.

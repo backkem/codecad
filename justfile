@@ -85,6 +85,7 @@ run file:
 # Run tests
 test:
     cargo test -p cadview-core
+    cargo test -p cadview-render
     cargo test -p cadview-web
     cargo test -p cadview-server
 

@@ -57,11 +57,27 @@ crates/
                               #   update encoding. Used by both web and server.
       src/geo.rs              # geometry helpers (distance, lerp, polygon tests)
       src/text.rs             # skrifa glyph outlines -> polylines
+      src/render.rs           # Camera, CameraCmd, View, SceneCache (block/text
+                              #   expansion + BezPath cache), build_display_list:
+                              #   every 2D drawing decision (culling, LOD, colour,
+                              #   linetype, paint order) as a renderer-neutral list
+    cadview-render/           # backends for the display list (no CAD logic)
+      src/scene.rs            # display list -> vello::Scene (wasm32 + native)
+      src/gpu.rs              # headless wgpu + Vello render, one device per process
+      src/cpu.rs              # CPU rasterizer (vello_cpu), the fallback without a GPU
+      src/options.rs          # RenderOptions (the cad.render JSON), Backend
+      src/lib.rs              # render_png / render_rgba: Auto|Gpu|Cpu, PNG encode
+      examples/pngdiff.rs     # compare two PNGs (fraction of differing pixels)
+      examples/render.rs      # batch DWG -> PNG with timings
     cadview-web/              # wasm-bindgen target (browser renderer)
-      src/main.rs             # SessionRegistry, egui renderer, wasm-bindgen
-                              #   exports (session_*, cad_call, yrs_*, start_renderer)
-      src/vello_render.rs     # Vello GPU renderer: wgpu surface, Scene builder,
-                              #   demand-driven rAF, pointer/wheel input, BezPath cache
+      src/main.rs             # entry points, module wiring
+      src/session.rs          # SessionRegistry, DocumentSession, SESSIONS
+      src/exports.rs          # wasm-bindgen exports (session_*, cad_call, yrs_*,
+                              #   start_renderer, export_*)
+      src/egui_render.rs      # egui fallback renderer + its tessellation cache
+      src/vello_render.rs     # Vello renderer shell: wgpu surface, demand-driven
+                              #   rAF, pointer/wheel input; draws core's display
+                              #   list through cadview-render's scene builder
     cadview-server/           # native Rust server
       src/main.rs             # entry: HTTP (axum) + WebTransport (wtransport)
       src/store.rs            # DocumentStore trait (SingleFileStore, FolderStore)
@@ -71,6 +87,7 @@ crates/
       src/transport.rs        # WebTransport: stream classification, per-doc sync, RPC
       src/script.rs           # server-side JS execution (codelib): run_script,
                               #   exec_file, host.call bridge, nested exec
+      src/render.rs           # cad.render handler (sandbox, WT RPC and --render)
       src/sync.rs             # re-exports cadview_core::sync::SyncDoc
   cad-client/                 # build output for sandbox
     cad-api-setup.js          # Vite-built IIFE (from cad-api.ts), a codelib prelude
@@ -279,10 +296,16 @@ curl -s -X POST http://localhost:8765/api/run \
   -H "Content-Type: application/json" \
   -d '{"program": "return cad.saveDwg(\"examples/01-flange-plate.dwg\")"}'
 
-# 4. Screenshot via Chrome DevTools MCP (resize to 960x640 first)
-#    then downscale with Pillow to counter DPR scaling:
-#    python3 -c "from PIL import Image; im=Image.open('examples/01-flange-plate.png'); im.resize((960,640),Image.LANCZOS).save('examples/01-flange-plate.png')"
+# 4. Screenshot: render natively (GPU, else CPU), no browser needed
+cargo run -p cadview-server --release -- examples/01-flange-plate.dwg \
+  --render examples/01-flange-plate.png --size 960x640
 ```
+
+The native render draws the same display list as the browser's Vello
+view; against the committed PNGs (made by `examples/lib/render.mjs`,
+headless Chromium on SwiftShader) it differs on at most 0.05 % of pixels
+(anti-aliasing on curves). Use `render.mjs` when you need the embed
+viewer's exact output, and `pngdiff` (see "Render to PNG") to compare.
 
 ## The ABI: `cad_call`
 
@@ -360,6 +383,7 @@ Scripts get `cad` on globalThis with the same API as the browser
 | `cad.saveDwg(path)` | Save document as DWG |
 | `cad.savePdf(path, { colors, lineweights })` | Save a one-page PDF. `colors`: `"paper"` (default, readable on white), `"mono"`, `"screen"` (as stored). `lineweights: true` strokes entities at their own lineweight where one is set (default: uniform hairlines) |
 | `cad.exec(path)` | Execute another .js file |
+| `cad.render(opts)` | Render the document to a PNG (GPU, else CPU) |
 | `console.log(...)` | Captured in response `stdout` field |
 
 ### Architecture
@@ -423,6 +447,14 @@ Dual renderer behind `vello-renderer` feature flag (default on).
 JS host auto-detects WebGPU via `navigator.gpu.requestAdapter()`.
 Override with `?renderer=vello` or `?renderer=egui` query param.
 
+What gets drawn is decided once, in `cadview_core::render`:
+`build_display_list(&Document, &mut SceneCache, &View)` returns a
+`DisplayList` (background, one world-to-pixel transform, and ordered
+items, each an exact `BezPath` with a fill or stroke paint). Backends in
+`cadview-render` only turn that list into pixels: the Vello scene
+builder (browser and headless GPU) and the CPU rasterizer. They never
+match on `Shape`.
+
 - **Vello (default, WebGPU)**: GPU compute-based 2D renderer.
   `Shape::to_bezpath()` converts all entity types to kurbo BezPaths,
   Vello renders natively on GPU. No CPU tessellation. Intermediate
@@ -436,16 +468,59 @@ Override with `?renderer=vello` or `?renderer=egui` query param.
 - **Screen-space LOD**: entities with screen-space bbox < 0.5px are
   culled. Between 0.5-8px, smoothstep alpha fade. Both renderers.
 - **Frustum culling**: entities outside the viewport are skipped.
-- **BezPath cache** (Vello): paths computed once per entity, reused
-  every frame. Invalidated on entity count change.
+- **Dash LOD**: a linetype pattern under 4 px per repeat on screen, or
+  past a budget of 100 000 dashes per frame, draws solid (Vello drops
+  the whole frame when its dash buffers overflow). Decided in core, so
+  the PNG renderer follows the same rule.
+- **BezPath cache** (`SceneCache`, core): paths computed once per
+  entity, reused every frame. Invalidated on entity count change.
+
+### Render to PNG
+
+The server renders natively, with no browser: GPU (wgpu + Vello, Msaa16,
+the same scene the browser draws) and a CPU fallback. `backend: "auto"`
+(the default) uses the GPU and falls back to the CPU with a logged
+warning; `"gpu"` or `"cpu"` force one and fail if it is unavailable.
+The GPU device is created once per process (the first render pays for
+shader compilation). Build without the `gpu` feature
+(`--no-default-features`) for a CPU-only server.
+
+```bash
+# A DWG straight to PNG
+cadview-server examples/01-flange-plate.dwg --render out.png --size 960x640
+
+# After a script
+cadview-server --exec examples/01-flange-plate.js --render out.png --render-backend gpu
+```
+
+```js
+// From a script, or the browser console (flushes sync first)
+cad.render({ out: "renders/plate.png", size: [960, 640] })
+// -> { ok, path, width, height, backend: "gpu" | "cpu", bytes, ms }
+```
+
+Options: `out` (default `render.png`, relative to the server's working
+directory), `size` (default `[960, 640]`), `bounds: {min, max}` (default:
+fit the whole drawing with a 10 % margin), `hiddenLayers`, `backend`,
+`pixelRatio` (default 1; scales the size and the 1 px stroke width
+together, like a high-DPI screen).
+
+Compare two PNGs with
+`cargo run -p cadview-render --example pngdiff -- a.png b.png [diff.png]`
+(prints the fraction of pixels differing by more than 8/255 in any
+channel).
 
 ## Tests
 
 ```bash
 cargo test -p cadview-core
+cargo test -p cadview-render
 cargo test -p cadview-web
 cargo test -p cadview-server
 ```
+
+cadview-render's GPU tests print `SKIPPED` and pass when no GPU adapter
+is found.
 
 cadview-core: 35+ tests (entity CRUD, cad_call dispatch, geometry).
 cadview-web: 12 tests (session registry isolation, create/destroy/use).

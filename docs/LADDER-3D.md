@@ -82,6 +82,23 @@ Each rung is built by a **builder/tester pair** and sized at **≤ about 2 weeks
 | **3D6b** headless renders | Server `render` RPC and sandbox `cad.render({out, size, spp})` through `cadview-render3d::headless` (native wgpu; lavapipe on GPU-less hosts). The example export pipeline gains 3D PNGs. | `curl /api/run` with `cad.render` writes a 960x640 PNG **on the GPU-less CI runner in ≤ 10 min** at the configured spp. On a GPU-A host the same scene renders in ≤ 30 s. The two PNGs differ by mean ꟻLIP ≤ 0.05. If lavapipe misses the time budget, the fallback named in design §9.4 is adopted, and its gate replaces this one. |
 | **3D🎯** vision | `examples/07-bookshelf.js` runs the full design §10.1 script: model, interference check, plant and chair, path-traced render, an A3 shop drawing at 1:10 with three views, section A-A, dimensions, a cut-list table and a title block. It runs from the browser console and from `/api/run`. A room variant drops the bookshelf into a floor-plan DWG and renders it in place. | One `just export 07-bookshelf` produces:<br>• `07-bookshelf.dwg`, which opens in a third-party DWG viewer with views, hatch, dimensions and table<br>• `07-bookshelf.png` (the drawing)<br>• `07-bookshelf-render.png` (path-traced)<br><br>The cut list printed by the script matches the drawing's table. Changing `W = 900` and re-running updates the parts, views, dimensions, cut list and render with no manual fix-ups. All goldens still pass. |
 
+**Notes (2026-11-17).**
+
+- **3D6b builds on the 2D headless path.** `cad.render` already exists for
+  2D (LADDER-NATIVE N0b): the server RPC, the sandbox method, the
+  `--render` CLI flag, `RenderOptions` parsing (it already accepts and
+  ignores `spp`), a process-wide wgpu device with Vello, readback to
+  RGBA8, PNG encoding, and `Auto | Gpu | Cpu` selection with a CPU
+  fallback. 3D6b adds a 3D branch behind the same handler
+  (`crates/cadview-server/src/render.rs`) and should share the device
+  that `cadview-render`'s GPU backend creates rather than open a second
+  one.
+- **Re-check 3D2a's version claim.** crates.io now has vello 0.12.0,
+  wgpu 30.0.2 and eframe 0.37.0. The "one wgpu, 30" result above was
+  measured against vello 0.11 and eframe 0.36; before 3D2a, re-run the
+  smoke crates and decide which vello/eframe pair actually shares one
+  wgpu.
+
 ## Risks
 
 - **ogeom is about ten weeks old with one maintainer.** The mitigations are an exact pin, the Truck differential corpus from 3D0b onward, the right to vendor, and documents that store no kernel data. If ogeom stalls before 3D3a, `TruckKernel` plus our own HLR adapter and closed-form silhouettes carry 3D0–3D3. Roundovers then drop to `fallback: "visual"` until a kernel can do them.

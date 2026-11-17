@@ -22,7 +22,14 @@ import init, {
   yrs_pending_update,
   yrs_state_vector,
 } from "cadview-wasm";
-import type { CadApi, EntityJson, LayerInfo, SavePdfOptions } from "./cad-api";
+import type {
+  CadApi,
+  EntityJson,
+  LayerInfo,
+  RenderOptions,
+  RenderResult,
+  SavePdfOptions,
+} from "./cad-api";
 import { buildCadApi } from "./cad-api";
 
 export type { CadApi, EntityJson, LayerInfo };
@@ -325,6 +332,22 @@ export const cad = {
     const bytes = export_pdf_bytes(sid, JSON.stringify(opts));
     downloadBlob(bytes, path, "application/pdf");
     return { ok: true, path };
+  },
+  // Server-side PNG render. Flush pending sync first so the server sees
+  // the latest edits.
+  render: async (opts: RenderOptions = {}): Promise<RenderResult> => {
+    if (!_serverAvailable) {
+      throw new Error("cad.render needs the CodeCAD server");
+    }
+    await flushAndWaitSync();
+    const sid = cad.currentSession();
+    const result = (await rpcCall(
+      "render",
+      { out: "render.png", ...opts },
+      sid ?? undefined,
+    )) as RenderResult & { error?: string };
+    if (result.error) throw new Error(result.error);
+    return result;
   },
 
   // HTTP API

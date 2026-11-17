@@ -123,6 +123,34 @@ function normalizeTarget(t: Target): string | string[] {
   return t as string;
 }
 
+/** Options for `cad.render`. */
+export interface RenderOptions {
+  /** Output path, relative to the server's working directory. Default "render.png". */
+  out?: string;
+  /** Image size in pixels (times pixelRatio). Default [960, 640]. */
+  size?: [number, number];
+  /** World region to fit, with a 10 % margin. Default: the whole drawing. */
+  bounds?: { min: Point2; max: Point2 };
+  /** Layers to leave out. */
+  hiddenLayers?: string[];
+  /** Default "auto": GPU if available, else CPU. */
+  backend?: "auto" | "gpu" | "cpu";
+  /** Device pixels per CSS pixel; scales size and stroke width. Default 1. */
+  pixelRatio?: number;
+  /** Samples per pixel for future 3D renders; ignored in 2D. */
+  spp?: number;
+}
+
+export interface RenderResult {
+  ok: boolean;
+  path: string;
+  width: number;
+  height: number;
+  backend: "gpu" | "cpu";
+  bytes: number;
+  ms: number;
+}
+
 export interface CadApiBackends {
   /** Dispatch to cad_call. Returns JSON result string. */
   call: (method: string, argsJson: string) => string;
@@ -546,6 +574,11 @@ export function buildCadApi({
     saveDwg: (path = "output.dwg") => rpc("saveDwg", { path }),
     savePdf: (path = "output.pdf", opts: SavePdfOptions = {}) =>
       rpc("savePdf", { ...opts, path }),
+    /** Render the drawing to a PNG on the server (GPU, else CPU). */
+    render: (opts: RenderOptions = {}) =>
+      rpc("render", { out: "render.png", ...opts }) as
+        | RenderResult
+        | Promise<RenderResult>,
     loadDwg: (path: string) => rpc("loadDwg", { path }),
     loadElmt: (
       path: string,

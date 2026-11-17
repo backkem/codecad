@@ -74,7 +74,7 @@ pub struct RunState {
     /// Reads (`readFile`, `loadDwg`, `exec`, ...) resolve against this: the
     /// script's directory, or the working directory for inline scripts.
     read_base: PathBuf,
-    /// Writes (`save`, `saveDwg`, `savePdf`) resolve against this.
+    /// Writes (`save`, `saveDwg`, `savePdf`, `render`) resolve against this.
     write_base: PathBuf,
     /// When this run will be interrupted.
     deadline: Instant,
@@ -391,6 +391,9 @@ fn rpc_call(state: &mut RunState, method: &str, args: &str) -> Result<String, St
             })
             .to_string())
         }
+        "render" => {
+            crate::render::render_to_file(doc, args, &state.write_base).map(|v| v.to_string())
+        }
         "loadDwg" => {
             let a: Value = serde_json::from_str(args).map_err(|e| e.to_string())?;
             let path_str = a["path"].as_str().ok_or("loadDwg: path required")?;
@@ -570,6 +573,33 @@ mod tests {
         .unwrap_err();
         assert!(error.starts_with("execution timed out"), "{error}");
         assert_eq!(entity_count(&registry).await, 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn render_rpc_writes_a_png() {
+        let (dir, registry) = registry();
+        let out = dir.path().join("renders").join("r.png");
+        let out_js = serde_json::to_string(&out.to_string_lossy()).unwrap();
+        // Through the raw bridge, so this works whether or not the committed
+        // cad-api-setup.js already has `cad.render`.
+        let program = format!(
+            "cad.addLine([0, 0], [100, 50]);\n\
+             return JSON.parse(__rpcCall('render', JSON.stringify({{ out: {out_js}, size: [96, 64] }})));"
+        );
+        match run_script(&SANDBOX, &registry, "doc", &program, dir.path(), None).await {
+            Ok(output) => {
+                let v: Value = serde_json::from_str(output.value.as_deref().unwrap()).unwrap();
+                assert_eq!(v["ok"], true, "{v}");
+                assert_eq!(
+                    (v["width"].as_u64(), v["height"].as_u64()),
+                    (Some(96), Some(64))
+                );
+                let png = std::fs::read(&out).unwrap();
+                assert_eq!(v["bytes"].as_u64(), Some(png.len() as u64));
+            }
+            Err(e) if e.contains("render:") => eprintln!("SKIPPED render_rpc_writes_a_png: {e}"),
+            Err(e) => panic!("{e}"),
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]

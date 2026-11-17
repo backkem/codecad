@@ -4,14 +4,11 @@
 //! Requires WebGPU; the JS host detects capability and falls back to
 //! the egui renderer on browsers without WebGPU support.
 
-use crate::{Camera, CameraCmd, SESSIONS};
-use cadview_core::{DrawEntity, EntityId, Shape};
-use kurbo::{Affine, BezPath};
+use crate::session::{RepaintFn, SESSIONS};
+use cadview_core::render::{build_display_list, Camera, CameraCmd, SceneCache, View};
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::rc::Rc;
 use vello::peniko;
-use vello::Scene;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::HtmlCanvasElement;
@@ -35,11 +32,9 @@ struct VelloState {
     session_id: String,
     renderer_key: String,
     canvas: HtmlCanvasElement,
-    /// Block/text expansion cache. Cleared on entity count change.
-    expanded: Vec<DrawEntity>,
-    expanded_count: usize,
-    /// BezPath cache per entity ID. Avoids re-converting every frame.
-    path_cache: HashMap<EntityId, Option<BezPath>>,
+    /// Expanded blocks/text and per-entity BezPaths (cadview-core).
+    /// Cleared on entity count change.
+    cache: SceneCache,
 }
 
 impl VelloState {
@@ -114,9 +109,7 @@ pub fn start(canvas: HtmlCanvasElement, session_id: &str, renderer_key: &str) {
             session_id,
             renderer_key,
             canvas: canvas.clone(),
-            expanded: Vec::new(),
-            expanded_count: 0,
-            path_cache: HashMap::new(),
+            cache: SceneCache::new(),
         }));
 
         // Input handlers
@@ -158,7 +151,7 @@ pub fn start(canvas: HtmlCanvasElement, session_id: &str, renderer_key: &str) {
             reg.renderers.insert(rk.clone(), sid);
             reg.repaint_fns.insert(
                 rk,
-                crate::RepaintFn(Box::new(move || {
+                RepaintFn(Box::new(move || {
                     sched();
                 })),
             );
@@ -245,7 +238,7 @@ pub fn start(canvas: HtmlCanvasElement, session_id: &str, renderer_key: &str) {
                     let dirty = session.render_dirty;
                     session.render_dirty = false;
                     session.camera_cmd.is_some()
-                        || session.doc.entities.len() != s.expanded_count
+                        || session.doc.entities.len() != s.cache.entity_count()
                         || dirty
                 } else {
                     false
@@ -364,17 +357,6 @@ fn render_frame(state: &mut VelloState) {
         return;
     }
 
-    let mut scene = Scene::new();
-
-    // Background
-    scene.fill(
-        peniko::Fill::NonZero,
-        Affine::IDENTITY,
-        peniko::Color::from_rgb8(30, 30, 30),
-        None,
-        &kurbo::Rect::new(0.0, 0.0, width as f64, height as f64),
-    );
-
     // Lock session
     let mut reg = SESSIONS.lock().unwrap();
     let Some(session) = reg.sessions.get_mut(&state.session_id) else {
@@ -391,167 +373,37 @@ fn render_frame(state: &mut VelloState) {
     let auto_fit = !session.initialized || (session.last_entity_count == 0 && entity_count > 0);
 
     if let Some(cmd) = camera_cmd {
-        match cmd {
-            CameraCmd::FitAll => {
-                if let Some(bounds) = session.doc.bounds() {
-                    session.camera = Camera::fit(bounds, width as f32, height as f32);
-                }
-            }
-            CameraCmd::FitBounds(x0, y0, x1, y1) => {
-                session.camera = Camera::fit((x0, y0, x1, y1), width as f32, height as f32);
-            }
-            CameraCmd::SetView(cx, cy, zoom) => {
-                session.camera.center_x = cx;
-                session.camera.center_y = cy;
-                session.camera.zoom = zoom;
-            }
-        }
+        session.camera.apply(cmd, &session.doc, sw, sh);
         session.initialized = true;
     } else if auto_fit {
-        if let Some(bounds) = session.doc.bounds() {
-            session.camera = Camera::fit(bounds, width as f32, height as f32);
-        }
+        session
+            .camera
+            .apply(CameraCmd::FitAll, &session.doc, sw, sh);
         session.initialized = true;
     }
     session.last_entity_count = entity_count;
 
-    let cam_cx = session.camera.center_x;
-    let cam_cy = session.camera.center_y;
-    let cam_zoom = session.camera.zoom;
-
-    // World-to-screen: center on screen, zoom, flip Y
-    let transform = Affine::translate((sw / 2.0, sh / 2.0))
-        * Affine::scale_non_uniform(cam_zoom, -cam_zoom)
-        * Affine::translate((-cam_cx, -cam_cy));
-
-    let half_w = (sw / 2.0) / cam_zoom;
-    let half_h = (sh / 2.0) / cam_zoom;
-    let view_x0 = cam_cx - half_w;
-    let view_x1 = cam_cx + half_w;
-    let view_y0 = cam_cy - half_h;
-    let view_y1 = cam_cy + half_h;
-
-    const CULL_THRESHOLD: f64 = 0.5;
-    const FADE_THRESHOLD: f64 = 8.0;
-
-    // Block/text expansion
-    if state.expanded_count != entity_count {
-        state.expanded.clear();
-        state.expanded_count = entity_count;
-        state.path_cache.clear();
-    }
-    if state.expanded.is_empty()
-        && session.doc.entities.iter().any(|e| {
-            matches!(
-                &e.shape,
-                Shape::BlockInsert { .. } | Shape::Text { .. } | Shape::MText { .. }
-            )
-        })
-    {
-        expand_blocks_and_text(&session.doc, &mut state.expanded);
-    }
-
-    // All renderable entities
-    let all_entities: Vec<&DrawEntity> = session
-        .doc
-        .entities
-        .iter()
-        .filter(|e| {
-            !matches!(
-                &e.shape,
-                Shape::BlockInsert { .. } | Shape::Text { .. } | Shape::MText { .. }
-            )
-        })
-        .chain(state.expanded.iter())
-        .collect();
-
-    // Ensure path cache is populated for visible entities
-    for ent in &all_entities {
-        state
-            .path_cache
-            .entry(ent.id)
-            .or_insert_with(|| ent.shape.to_bezpath());
-    }
-
-    // Pass 1: SolidFill
-    for ent in &all_entities {
-        if !matches!(&ent.shape, Shape::SolidFill { .. }) {
-            continue;
-        }
-        if session.hidden_layers.iter().any(|n| n == &ent.layer) {
-            continue;
-        }
-        let (bx0, by0, bx1, by1) = ent.shape.bbox();
-        if bx1 < view_x0 || bx0 > view_x1 || by1 < view_y0 || by0 > view_y1 {
-            continue;
-        }
-
-        if let Some(Some(bezpath)) = state.path_cache.get(&ent.id) {
-            let c = session.doc.resolve_color(ent);
-            let fill_color = peniko::Color::from_rgba8(c.r, c.g, c.b, 35);
-            scene.fill(peniko::Fill::EvenOdd, transform, fill_color, None, bezpath);
-        }
-    }
-
-    // Pass 2: Strokes
     // 1 CSS pixel = dpr device pixels. Without this, strokes are
     // 1 device pixel (0.5 CSS px on 2x displays), too thin for clean AA.
     let dpr = web_sys::window().unwrap().device_pixel_ratio();
-    let stroke_width = dpr / cam_zoom;
-    let solid_stroke = kurbo::Stroke::new(stroke_width);
-    let mut dash_budget = DASH_BUDGET;
+    let mut view = View::new(width, height, session.camera);
+    view.hidden_layers = &session.hidden_layers;
+    view.pixel_ratio = dpr;
 
-    for ent in &all_entities {
-        if matches!(&ent.shape, Shape::SolidFill { .. }) {
-            continue;
-        }
-        if session.hidden_layers.iter().any(|n| n == &ent.layer) {
-            continue;
-        }
-
-        let (bx0, by0, bx1, by1) = ent.shape.bbox();
-        if bx1 < view_x0 || bx0 > view_x1 || by1 < view_y0 || by0 > view_y1 {
-            continue;
-        }
-
-        let dw = bx1 - bx0;
-        let dh = by1 - by0;
-        let diag_screen = (dw * dw + dh * dh).sqrt() * cam_zoom;
-        if diag_screen < CULL_THRESHOLD {
-            continue;
-        }
-
-        let c = session.doc.resolve_color(ent);
-        let base_alpha = if ent.transparency > 0 {
-            ((255 - ent.transparency) as f32 / 255.0 * c.a as f32) as u8
-        } else {
-            c.a
-        };
-        let alpha = if diag_screen < FADE_THRESHOLD {
-            let t = ((diag_screen - CULL_THRESHOLD) / (FADE_THRESHOLD - CULL_THRESHOLD))
-                .clamp(0.0, 1.0) as f32;
-            let smoothstep = t * t * (3.0 - 2.0 * t);
-            (smoothstep * base_alpha as f32) as u8
-        } else {
-            base_alpha
-        };
-
-        let color = peniko::Color::from_rgba8(c.r, c.g, c.b, alpha);
-
-        if let Some(Some(bezpath)) = state.path_cache.get(&ent.id) {
-            let pattern = session
-                .doc
-                .resolve_linetype_pattern(ent)
-                .filter(|p| dash_lod(p, bezpath, cam_zoom, &mut dash_budget));
-            let stroke = if let Some(pattern) = pattern {
-                solid_stroke
-                    .clone()
-                    .with_dashes(0.0, pattern.iter().copied())
-            } else {
-                solid_stroke.clone()
-            };
-            scene.stroke(&stroke, transform, color, None, bezpath);
-        }
+    // Everything drawn (culling, LOD, colours, linetypes, order) is decided
+    // by cadview-core; cadview-render turns the list into a Vello scene.
+    let expanded_before = state.cache.expanded_len();
+    let list = build_display_list(&session.doc, &mut state.cache, &view);
+    let scene = cadview_render::scene::build_scene(&list);
+    drop(list);
+    if state.cache.expanded_len() != expanded_before {
+        web_sys::console::log_1(
+            &format!(
+                "expand_blocks_and_text: {} expanded entities",
+                state.cache.expanded_len()
+            )
+            .into(),
+        );
     }
 
     drop(reg);
@@ -597,44 +449,6 @@ fn render_frame(state: &mut VelloState) {
     state.queue.submit(Some(encoder.finish()));
 
     surface_texture.present();
-}
-
-// Vello dashes on the CPU, one subpath per dash (about 6 GPU lines each),
-// into fixed-size GPU buffers (2^21 lines). On overflow Vello drops the
-// whole frame without an error and the canvas keeps the previous one.
-// Dash patterns are in world units, so a wide view of a drawing with
-// millimetre patterns asks for hundreds of thousands of dashes.
-
-/// Below this period on screen (device px) a pattern draws solid; the
-/// dashes would blur into a line anyway.
-const MIN_DASH_PERIOD_PX: f64 = 4.0;
-/// Dashes per frame (about 600k GPU lines); dashed entities past it draw
-/// solid, leaving the rest of the buffer for everything else.
-const DASH_BUDGET: f64 = 100_000.0;
-
-/// Whether to stroke `path` with `pattern` at this zoom, charging the
-/// dashes it produces against `budget`.
-fn dash_lod(pattern: &[f64], path: &BezPath, zoom: f64, budget: &mut f64) -> bool {
-    use kurbo::Shape as _;
-    let period: f64 = pattern.iter().map(|v| v.abs()).sum();
-    if period * zoom < MIN_DASH_PERIOD_PX {
-        return false;
-    }
-    let dashes_per_period = pattern.len().div_ceil(2) as f64;
-    let dashes = (path.perimeter(period * 0.1) / period).ceil() * dashes_per_period;
-    if dashes > *budget {
-        return false;
-    }
-    *budget -= dashes;
-    true
-}
-
-fn expand_blocks_and_text(doc: &cadview_core::Document, expanded: &mut Vec<DrawEntity>) {
-    let result = cadview_core::expand_for_render(doc);
-    web_sys::console::log_1(
-        &format!("expand_blocks_and_text: {} expanded entities", result.len()).into(),
-    );
-    expanded.extend(result);
 }
 
 // ── Input handling ────────────────────────────────────────────────────

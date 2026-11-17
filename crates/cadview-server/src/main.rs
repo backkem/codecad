@@ -9,6 +9,7 @@
 pub mod assets;
 mod http;
 pub mod registry;
+mod render;
 pub mod script;
 pub mod store;
 mod sync;
@@ -32,6 +33,11 @@ current directory is scanned. Serves http://localhost:8765.
 
 Options:
   --exec <SCRIPT>     Run a JS script headless and exit (no server)
+  --render <PNG>      Render the drawing to a PNG and exit (no server).
+                      Works on a .dwg PATH alone, or after --exec
+  --size <WxH>        Render size in pixels (default 960x640)
+  --render-backend <auto|gpu|cpu>
+                      Render backend (default auto: GPU, else CPU)
   --dist <DIR>        Serve frontend assets from disk instead of embedded
   --examples <DIR>    Read example drawings from disk instead of embedded
   -V, --version       Print version
@@ -51,6 +57,9 @@ async fn main() -> anyhow::Result<()> {
     let mut dist_override: Option<PathBuf> = None;
     let mut examples_override: Option<PathBuf> = None;
     let mut exec_script: Option<String> = None;
+    let mut render_out: Option<String> = None;
+    let mut render_size: Option<[u32; 2]> = None;
+    let mut render_backend: Option<cadview_render::Backend> = None;
     let mut positional: Vec<String> = Vec::new();
 
     let mut args_iter = std::env::args().skip(1);
@@ -71,6 +80,19 @@ async fn main() -> anyhow::Result<()> {
             "--exec" => {
                 exec_script = Some(args_iter.next().expect("--exec requires a script path"));
             }
+            "--render" => {
+                render_out = Some(args_iter.next().expect("--render requires a PNG path"));
+            }
+            "--size" => {
+                let s = args_iter.next().expect("--size requires WxH, e.g. 960x640");
+                render_size = Some(parse_size(&s)?);
+            }
+            "--render-backend" => {
+                let s = args_iter
+                    .next()
+                    .expect("--render-backend requires auto, gpu or cpu");
+                render_backend = Some(s.parse().map_err(|e: String| anyhow::anyhow!(e))?);
+            }
             "--version" | "-V" => {
                 println!("codecad {}", env!("CARGO_PKG_VERSION"));
                 return Ok(());
@@ -83,9 +105,18 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Headless mode: run a script and exit (no HTTP/WebTransport server).
-    if let Some(script_path) = exec_script {
-        return run_headless(&positional, &script_path).await;
+    if render_out.is_none() && (render_size.is_some() || render_backend.is_some()) {
+        anyhow::bail!("--size and --render-backend need --render <PNG>");
+    }
+    let render = render_out.map(|out| {
+        let size = render_size.unwrap_or([960, 640]);
+        let backend = render_backend.unwrap_or_default();
+        serde_json::json!({ "out": out, "size": size, "backend": backend }).to_string()
+    });
+
+    // Headless mode: run a script and/or render, then exit (no HTTP/WebTransport server).
+    if exec_script.is_some() || render.is_some() {
+        return run_headless(&positional, exec_script.as_deref(), render.as_deref()).await;
     }
 
     // Resolve asset providers
@@ -199,8 +230,40 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Headless mode: load an optional DWG, run a script, print output, exit.
-async fn run_headless(positional: &[String], script_path: &str) -> anyhow::Result<()> {
+/// Parse `WxH` (e.g. `960x640`).
+fn parse_size(s: &str) -> anyhow::Result<[u32; 2]> {
+    let (w, h) = s
+        .split_once(['x', 'X'])
+        .ok_or_else(|| anyhow::anyhow!("--size expects WxH, e.g. 960x640, got '{s}'"))?;
+    let w: u32 = w.trim().parse()?;
+    let h: u32 = h.trim().parse()?;
+    if w == 0 || h == 0 {
+        anyhow::bail!("--size must be positive, got '{s}'");
+    }
+    Ok([w, h])
+}
+
+/// Headless mode: load an optional DWG, run an optional script, render an
+/// optional PNG (args are `cad.render` JSON), print output, exit.
+async fn run_headless(
+    positional: &[String],
+    script_path: Option<&str>,
+    render: Option<&str>,
+) -> anyhow::Result<()> {
+    let Some(script_path) = script_path else {
+        // Render only: no sandbox needed.
+        let path = positional
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("--render needs a .dwg PATH or --exec <SCRIPT>"))?;
+        let doc = cadview_core::load_dwg(path)?;
+        tracing::info!("Loaded {} entities from {path}", doc.entities.len());
+        let cwd = std::env::current_dir()?;
+        let result = render::render_to_file(&doc, render.unwrap_or("{}"), &cwd)
+            .map_err(|e| anyhow::anyhow!(e))?;
+        println!("{result}");
+        return Ok(());
+    };
+
     let sandbox = script::create_sandbox()
         .await
         .expect("Failed to initialize script sandbox");
@@ -245,6 +308,17 @@ async fn run_headless(positional: &[String], script_path: &str) -> anyhow::Resul
     }
     if let Some(val) = &output.value {
         println!("{val}");
+    }
+
+    if let Some(args) = render {
+        let reg = registry.lock().await;
+        let slot = reg
+            .get(&doc_key)
+            .ok_or_else(|| anyhow::anyhow!("document '{doc_key}' missing after the script"))?;
+        let cwd = std::env::current_dir()?;
+        let result =
+            render::render_to_file(&slot.document, args, &cwd).map_err(|e| anyhow::anyhow!(e))?;
+        println!("{result}");
     }
 
     Ok(())

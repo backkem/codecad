@@ -7,11 +7,15 @@ license.workspace = true
 repository.workspace = true
 
 [features]
+default = ["gpu"]
+# GPU render backend for cad.render / --render. Without it, rendering is CPU-only.
+gpu = ["cadview-render/gpu"]
 embedded-dist = ["dep:rust-embed"]
 embedded-examples = ["dep:rust-embed"]
 
 [dependencies]
 cadview-core = { path = "../cadview-core" }
+cadview-render = { path = "../cadview-render", default-features = false, features = ["cpu", "cpu-multithreading"] }
 codelib = { git = "https://github.com/backkem/codelib" }
 kurbo = "0.13"
 wtransport = "0.7"

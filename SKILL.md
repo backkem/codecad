@@ -234,6 +234,20 @@ colours. Any other value is an error.
 `save` and `saveDwg` flush pending Yrs sync before writing. Paths are
 relative to the server's working directory.
 
+### Look at what you drew
+
+```js
+cad.render({ out: "check.png" })                     // 960x640, fit all
+cad.render({ out: "detail.png", size: [960, 640],
+             bounds: { min: [0, 0], max: [50, 30] } }) // zoom to a region
+cad.render({ out: "no-dims.png", hiddenLayers: ["DIM"] })
+// -> { ok, path, width, height, backend: "gpu" | "cpu", bytes, ms }
+```
+
+Renders on the server (GPU, else CPU) exactly what the browser's Vello
+view shows: dark background, 1 px strokes, hatches as light tints. Read
+the PNG back to check placement and proportions before saving the DWG.
+
 ### Viewport
 
 ```js

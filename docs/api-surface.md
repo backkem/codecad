@@ -77,11 +77,35 @@ curl -X POST http://localhost:8765/api/run \
 | `cad.exec(path)` | Run .js file from disk (RPC to server sandbox) |
 | `cad.runScript(code)` | Run inline JS code (RPC to server sandbox) |
 | `cad.readFile(path)` | Read file from disk (server sandbox only) |
+| `cad.render(opts)` | Render the document to a PNG on the server (see below) |
 | `POST /api/run` | HTTP endpoint: `{program}` or `{exec}` field |
 
 Scripts in the sandbox see all `cad.*` methods. `readFile` paths are
 relative to the script's directory and sandboxed to the project root.
 `console.log` output is captured in the response `stdout` field.
+
+### Render to PNG
+
+```js
+cad.render({
+  out: "render.png",        // relative to the server's working directory
+  size: [960, 640],         // pixels (times pixelRatio)
+  bounds: { min, max },     // optional; default fits the whole drawing
+  hiddenLayers: ["DIM"],    // optional
+  backend: "auto",          // "auto" (GPU, else CPU) | "gpu" | "cpu"
+  pixelRatio: 1,            // scales size and stroke width together
+})
+// -> { ok, path, width, height, backend: "gpu" | "cpu", bytes, ms }
+```
+
+Same picture as the browser's Vello view (decided by
+`cadview_core::render`, drawn by `cadview-render`). In the browser,
+`cad.render` flushes pending sync first, like `savePdf`. Unknown fields
+are ignored, so the 3D form `cad.render({out, size, spp})` from
+`docs/3d-design.md` already parses; `spp` has no effect in 2D. The same
+render is available from the CLI:
+`cadview-server drawing.dwg --render out.png --size 960x640
+--render-backend auto`.
 
 ---
 

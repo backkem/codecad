@@ -45,6 +45,20 @@ When adding or bumping a dependency, always `cargo search <crate>` to
 check the latest published version. Don't assume the version in
 Cargo.toml is current.
 
+## Public repository
+
+This repository is public. Everything committed, and every commit
+message, is published.
+
+- **No tool attribution in commits.** No `Co-Authored-By` trailers for
+  AI assistants, no "generated with" lines, no links to chat or agent
+  sessions. Commit messages describe the change and nothing else.
+- **Nothing machine-specific.** No setup scripts for one person's
+  environment, no private hostnames, drive letters, home paths or
+  internal tool names, in files or in commit messages. Describe a
+  requirement generically (the tool, its version, where the version is
+  pinned) and keep environment-specific helpers outside the repo.
+
 ## Crate layout
 
 ```
@@ -203,6 +217,42 @@ wasm-bindgen target/wasm32-unknown-unknown/release/cadview-web.wasm --out-dir di
 # 2. Frontend (Vite bundles TS/React + WASM into dist/)
 cd web && pnpm install && pnpm build && cd ..
 ```
+
+### Web toolchain
+
+The web build needs Node, pnpm, `just`, the `wasm32-unknown-unknown`
+target (`rustup target add wasm32-unknown-unknown`) and the
+`wasm-bindgen` CLI. The CLI version must equal the `wasm-bindgen` crate
+version in `Cargo.lock`, or it refuses the wasm file; CI installs the
+same version in `.github/workflows/`:
+
+```bash
+cargo install wasm-bindgen-cli --version <version from Cargo.lock>
+```
+
+The native crates (core, render, server) build and test without any of
+this.
+
+### Build caches and worktrees
+
+- **One `target/` per checkout.** Never point two checkouts (the main
+  one, a git worktree, a second clone) at the same `CARGO_TARGET_DIR` or
+  `build.build-dir`. Cargo names workspace crates by their path relative
+  to the workspace root and decides freshness by file time, so a checkout
+  whose sources are older than the last build reuses the other checkout's
+  compiled crates without recompiling. Tested on cargo 1.98.1: with a
+  shared build directory, a test added only in a worktree ran, and
+  failed, in the main checkout. `-Z checksum-freshness` would make
+  sharing safe but is nightly-only; revisit when it is stable.
+- **Keep the number of caches down instead.** A cache for this workspace
+  is several GB (native debug, release and wasm32 each add their own).
+  Build and test in one checkout where possible, one cargo invocation at
+  a time. When a worktree needs its own build, build only the packages it
+  changes (`-p`), and delete its `target/` when the work is merged.
+- **Check free disk before a large or parallel build**, and ask before
+  putting build output anywhere other than the checkout's own `target/`.
+  A container or VM usually shares its host's disk, so both run out
+  together.
 
 ### Script sandbox
 

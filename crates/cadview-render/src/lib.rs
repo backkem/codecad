@@ -12,7 +12,7 @@
 //! - [`render_png`] (native): options -> display list -> backend -> PNG.
 
 pub mod options;
-pub use options::{Backend, Bounds, RenderOptions};
+pub use options::{parse_size, Backend, Bounds, RenderOptions, MAX_EDGE};
 
 #[cfg(feature = "gpu")]
 pub mod scene;
@@ -222,31 +222,39 @@ mod native {
         Ok(out)
     }
 
-    /// Decode a PNG to straight RGBA8 (for tests and tools).
+    /// Decode any PNG to straight RGBA8, row-major (for tests and tools).
     pub fn decode_png(bytes: &[u8]) -> Result<(Vec<u8>, u32, u32), String> {
         let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
-        decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::ALPHA);
+        // Palette -> RGB, tRNS -> alpha, low bit depths -> 8, 16-bit -> 8.
+        decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
         let mut reader = decoder.read_info().map_err(|e| format!("png: {e}"))?;
         let mut buf = vec![0; reader.output_buffer_size().ok_or("png: image too large")?];
         let info = reader
             .next_frame(&mut buf)
             .map_err(|e| format!("png: {e}"))?;
-        buf.truncate(info.buffer_size());
-        let (w, h) = (info.width, info.height);
-        let rgba = match info.color_type {
-            png::ColorType::Rgba => buf,
-            png::ColorType::GrayscaleAlpha => buf
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .flat_map(|p| [p[0], p[0], p[0], p[1]])
-                .collect(),
-            other => return Err(format!("png: unexpected color type {other:?}")),
-        };
         if info.bit_depth != png::BitDepth::Eight {
             return Err(format!("png: unsupported bit depth {:?}", info.bit_depth));
         }
-        Ok((rgba, w, h))
+        let channels = match info.color_type {
+            png::ColorType::Grayscale => 1,
+            png::ColorType::GrayscaleAlpha => 2,
+            png::ColorType::Rgb => 3,
+            png::ColorType::Rgba => 4,
+            other => return Err(format!("png: unexpected colour type {other:?}")),
+        };
+        let (w, h) = (info.width as usize, info.height as usize);
+        let mut rgba = Vec::with_capacity(w * h * 4);
+        for row in buf.chunks(info.line_size).take(h) {
+            for p in row[..w * channels].chunks_exact(channels) {
+                rgba.extend_from_slice(&match channels {
+                    1 => [p[0], p[0], p[0], 255],
+                    2 => [p[0], p[0], p[0], p[1]],
+                    3 => [p[0], p[1], p[2], 255],
+                    _ => [p[0], p[1], p[2], p[3]],
+                });
+            }
+        }
+        Ok((rgba, info.width, info.height))
     }
 }
 

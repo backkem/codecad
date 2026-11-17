@@ -924,11 +924,64 @@ fn text_to_curve_entities(
     }]
 }
 
+/// One shape of a block definition, placed in world space by an insert.
+pub(crate) struct PlacedShape {
+    pub shape: Shape,
+    pub layer: String,
+    pub color: Color,
+}
+
+/// The shapes of the block that `insert` (a `BlockInsert` entity) refers
+/// to, transformed to world space (translate, rotate, scale, insert-point
+/// offset) with layer and colour resolved: a shape keeps its own layer and
+/// its own non-white colour, otherwise it takes the insert's layer and
+/// colour, and failing that the layer's colour. Empty for any other entity
+/// and for an unknown block. Shared by the screen and PDF paths.
+pub(crate) fn placed_block_shapes(doc: &Document, insert: &DrawEntity) -> Vec<PlacedShape> {
+    let Shape::BlockInsert {
+        block_name,
+        position,
+        rotation,
+        x_scale,
+        y_scale,
+    } = &insert.shape
+    else {
+        return Vec::new();
+    };
+    let Some(def) = doc.blocks.get(block_name) else {
+        return Vec::new();
+    };
+    let xform = Affine::translate((position.x, position.y))
+        * Affine::rotate(*rotation)
+        * Affine::scale_non_uniform(*x_scale, *y_scale)
+        * Affine::translate((-def.insert_point.x, -def.insert_point.y));
+    def.shapes
+        .iter()
+        .map(|(shape, shape_layer, shape_color)| {
+            let layer = if shape_layer.is_empty() {
+                &insert.layer
+            } else {
+                shape_layer
+            };
+            let color = match (shape_color, insert.color) {
+                (Some(c), _) if *c != Color::WHITE => *c,
+                (_, Some(c)) => c,
+                _ => doc.layer_color(layer),
+            };
+            PlacedShape {
+                shape: shape.transformed(xform),
+                layer: layer.clone(),
+                color,
+            }
+        })
+        .collect()
+}
+
 /// Expand a Document's entities for rendering. Returns a list of synthetic
 /// DrawEntity values that replace BlockInsert, Text, and MText:
 ///
 /// - BlockInsert: each shape in the block definition is transformed to
-///   world coordinates (translate, rotate, scale, insert-point offset).
+///   world coordinates (see [`placed_block_shapes`]).
 /// - Text / MText: converted to CurvePath glyph outlines.
 /// - Text / MText inside blocks: handled in a second pass after block
 ///   expansion so that block-internal labels become renderable curves.
@@ -941,43 +994,20 @@ pub fn expand_for_render(doc: &Document) -> Vec<DrawEntity> {
 
     for ent in &doc.entities {
         match &ent.shape {
-            Shape::BlockInsert {
-                block_name,
-                position,
-                rotation,
-                x_scale,
-                y_scale,
-            } => {
-                if let Some(def) = doc.blocks.get(block_name) {
-                    let xform = Affine::translate((position.x, position.y))
-                        * Affine::rotate(*rotation)
-                        * Affine::scale_non_uniform(*x_scale, *y_scale)
-                        * Affine::translate((-def.insert_point.x, -def.insert_point.y));
-                    for (shape, shape_layer, shape_color) in &def.shapes {
-                        let layer = if shape_layer.is_empty() {
-                            &ent.layer
-                        } else {
-                            shape_layer
-                        };
-                        // Expanded entities are detached from layers, so resolve to concrete color.
-                        let color = if shape_color.is_some() && *shape_color != Some(Color::WHITE) {
-                            *shape_color
-                        } else if ent.color.is_some() {
-                            ent.color
-                        } else {
-                            Some(doc.layer_color(layer))
-                        };
-                        next_id += 1;
-                        expanded.push(DrawEntity {
-                            id: EntityId(next_id),
-                            layer: layer.to_string(),
-                            color,
-                            linetype: None,
-                            lineweight: None,
-                            transparency: 0,
-                            shape: shape.transformed(xform),
-                        });
-                    }
+            Shape::BlockInsert { .. } => {
+                for placed in placed_block_shapes(doc, ent) {
+                    next_id += 1;
+                    expanded.push(DrawEntity {
+                        id: EntityId(next_id),
+                        layer: placed.layer,
+                        // Expanded entities are detached from layers, so
+                        // they carry a concrete colour.
+                        color: Some(placed.color),
+                        linetype: None,
+                        lineweight: None,
+                        transparency: 0,
+                        shape: placed.shape,
+                    });
                 }
             }
             Shape::Text {

@@ -6,9 +6,6 @@ use cadview_core::render::DisplayList;
 use std::sync::{Mutex, OnceLock};
 use vello::peniko;
 
-/// Largest output edge accepted, in pixels (also capped by the device).
-pub const MAX_EDGE: u32 = 16384;
-
 /// One wgpu device and Vello renderer, reused across renders.
 pub struct GpuRenderer {
     device: wgpu::Device,
@@ -61,7 +58,10 @@ impl GpuRenderer {
             })
             .await
             .map_err(|e| format!("request_device on {adapter_name}: {e}"))?;
-        let max_edge = device.limits().max_texture_dimension_2d.min(MAX_EDGE);
+        let max_edge = device
+            .limits()
+            .max_texture_dimension_2d
+            .min(crate::options::MAX_EDGE);
 
         let renderer = vello::Renderer::new(
             &device,

@@ -4,7 +4,7 @@
 //! as `Vec<u8>` so the caller decides what to do with it (write to disk
 //! on server, offer as blob download on WASM).
 
-use kurbo::{Affine, BezPath, PathEl, Point};
+use kurbo::{BezPath, PathEl, Point};
 use printpdf::*;
 
 use crate::{Color, Document, Shape};
@@ -532,39 +532,14 @@ fn update_bounds(
 fn expand_entities(doc: &Document) -> Vec<ExpandedEntity> {
     let mut result = Vec::new();
     for ent in &doc.entities {
-        if let Shape::BlockInsert {
-            block_name,
-            position,
-            rotation,
-            x_scale,
-            y_scale,
-        } = &ent.shape
-        {
-            if let Some(def) = doc.blocks.get(block_name) {
-                let xform = Affine::translate((position.x, position.y))
-                    * Affine::rotate(*rotation)
-                    * Affine::scale_non_uniform(*x_scale, *y_scale)
-                    * Affine::translate((-def.insert_point.x, -def.insert_point.y));
-                for (shape, shape_layer, shape_color) in &def.shapes {
-                    let layer = if shape_layer.is_empty() {
-                        &ent.layer
-                    } else {
-                        shape_layer
-                    };
-                    let color = if shape_color.is_some() && *shape_color != Some(Color::WHITE) {
-                        shape_color.unwrap_or(Color::WHITE)
-                    } else if let Some(c) = ent.color {
-                        c
-                    } else {
-                        doc.layer_color(layer)
-                    };
-                    result.push(ExpandedEntity {
-                        shape: shape.transformed(xform),
-                        layer: layer.clone(),
-                        color,
-                        lineweight: explicit_lineweight(doc, ent.lineweight, layer),
-                    });
-                }
+        if matches!(&ent.shape, Shape::BlockInsert { .. }) {
+            for placed in crate::document::placed_block_shapes(doc, ent) {
+                result.push(ExpandedEntity {
+                    lineweight: explicit_lineweight(doc, ent.lineweight, &placed.layer),
+                    shape: placed.shape,
+                    layer: placed.layer,
+                    color: placed.color,
+                });
             }
         } else {
             result.push(ExpandedEntity {

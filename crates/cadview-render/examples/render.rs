@@ -30,12 +30,9 @@ fn main() -> ExitCode {
             },
             "--size" => {
                 let s = args.next().unwrap_or_default();
-                let parsed = s
-                    .split_once('x')
-                    .and_then(|(w, h)| Some([w.parse().ok()?, h.parse().ok()?]));
-                match parsed {
-                    Some(v) => size = v,
-                    None => return usage("--size needs WxH"),
+                match cadview_render::parse_size(&s) {
+                    Ok(v) => size = v,
+                    Err(_) => return usage("--size needs WxH"),
                 }
             }
             "--out" => match args.next() {

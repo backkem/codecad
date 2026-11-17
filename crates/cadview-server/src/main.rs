@@ -85,7 +85,9 @@ async fn main() -> anyhow::Result<()> {
             }
             "--size" => {
                 let s = args_iter.next().expect("--size requires WxH, e.g. 960x640");
-                render_size = Some(parse_size(&s)?);
+                render_size = Some(
+                    cadview_render::parse_size(&s).map_err(|e| anyhow::anyhow!("--size: {e}"))?,
+                );
             }
             "--render-backend" => {
                 let s = args_iter
@@ -228,19 +230,6 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
-}
-
-/// Parse `WxH` (e.g. `960x640`).
-fn parse_size(s: &str) -> anyhow::Result<[u32; 2]> {
-    let (w, h) = s
-        .split_once(['x', 'X'])
-        .ok_or_else(|| anyhow::anyhow!("--size expects WxH, e.g. 960x640, got '{s}'"))?;
-    let w: u32 = w.trim().parse()?;
-    let h: u32 = h.trim().parse()?;
-    if w == 0 || h == 0 {
-        anyhow::bail!("--size must be positive, got '{s}'");
-    }
-    Ok([w, h])
 }
 
 /// Headless mode: load an optional DWG, run an optional script, render an

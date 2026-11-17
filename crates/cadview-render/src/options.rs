@@ -47,6 +47,19 @@ pub struct Bounds {
 /// Largest accepted output edge in pixels.
 pub const MAX_EDGE: u32 = 16384;
 
+/// Parse `WxH` (for example `960x640`) into a positive size.
+pub fn parse_size(s: &str) -> Result<[u32; 2], String> {
+    let parsed = s
+        .split_once(['x', 'X'])
+        .and_then(|(w, h)| Some([w.trim().parse().ok()?, h.trim().parse().ok()?]));
+    match parsed {
+        Some([w, h]) if w > 0 && h > 0 => Ok([w, h]),
+        _ => Err(format!(
+            "size must be WxH with both positive, e.g. 960x640, got '{s}'"
+        )),
+    }
+}
+
 /// `cad.render` options. Unknown fields (`out`, `spp`, ...) are ignored here;
 /// the caller handles `out`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

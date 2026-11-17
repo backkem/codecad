@@ -24,6 +24,9 @@ tool and the data.
   isolated camera, layers, and undo history.
 - **Scriptable**: every drawing operation is a `cad_call(method, args_json)`
   you can drive from the browser console or your own code.
+- **General by design**: the core knows geometry, not what it means. A
+  floor plan, a schematic or a machine part is your script's knowledge,
+  built on the same generic calls and queries.
 
 **With server** -- run `cadview-server` for persistence, sync, and automation:
 

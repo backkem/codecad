@@ -284,6 +284,14 @@ This is a deliberate split, and it shapes the API:
   `docs/pcb-direction.md`. The 3D test harness
   (`docs/3d-test-harness.md`) rests on the same idea.
 
+Domain libraries follow from this. A library for a domain (drafting
+conventions today, woodworking or circuit boards later) is TypeScript or
+JavaScript that runs in the script sandbox and in the browser, and uses
+only the public `cad.*` API. It is never compiled into the core and is not
+part of the `cad` API prelude, so the core has no knowledge of any
+domain and a library can live outside this repository.
+`examples/lib/drafting.js` is the first one.
+
 The limit of this split: it holds while code is the editor. A person who
 drags an entity in the viewer changes geometry without the script's
 knowledge, and nothing in the core can tell that a domain rule broke.

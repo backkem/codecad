@@ -5,6 +5,10 @@ Open-source 2D CAD you can actually program. Runs in the browser, reads
 that draws for you, point an AI agent at it, or collaborate live across
 multiple browsers.
 
+The name is the design. **Code** brings the meaning: the use case, the
+domain, the rules. **CAD** is the core: generic, exact drawing and shape
+work. The two meet in one function-call API, built agent-first.
+
 <p align="center">
   <img src="docs/brand/readme-hero.png" alt="CodeCAD" width="100%">
 </p>

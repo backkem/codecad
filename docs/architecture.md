@@ -248,6 +248,11 @@ cad.useSession("first-floor.dwg")
 
 ## Semantics live in code
 
+The name is the split: CodeCAD is code plus CAD. Code brings the meaning
+(the use case, the domain, the rules). CAD is the core, mostly generic
+drawing and shape work. The package is agent-first: everything a script
+or an agent needs is a function call.
+
 CodeCAD is general because it does not know what a drawing means. The
 core stores exact geometry, layers, blocks and (soon) solids, and answers
 geometric questions. What the geometry stands for (a room, a wall

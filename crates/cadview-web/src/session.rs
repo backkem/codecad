@@ -25,6 +25,10 @@ pub(crate) struct DocumentSession {
     pub(crate) initialized: bool,
     pub(crate) last_entity_count: usize,
     pub(crate) cache: RenderCache,
+    /// Bumped whenever `doc` may have changed in place (a mutation, a sync
+    /// update, a newly loaded file). Renderers compare it with the value
+    /// they last saw and drop their cached paths when it moved.
+    pub(crate) doc_rev: u64,
     /// Set by client-side commands (setLayerVisible, etc.) to signal
     /// renderers that a repaint is needed even without entity changes.
     pub(crate) render_dirty: bool,
@@ -43,6 +47,7 @@ impl DocumentSession {
             initialized: false,
             last_entity_count: 0,
             render_dirty: false,
+            doc_rev: 0,
             cache: RenderCache::new(),
         }
     }

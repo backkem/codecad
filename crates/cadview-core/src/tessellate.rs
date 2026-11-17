@@ -130,6 +130,26 @@ pub fn triangulate_fill(
     triangulate_polygon(&flat_boundary, &flat_holes)
 }
 
+/// Triangulate a fill path at a given tolerance: the first subpath is the
+/// outer boundary, every further subpath a hole (how `SolidFill` builds
+/// its path). For renderers that can only draw triangles.
+pub fn triangulate_path(path: &BezPath, tolerance: f64) -> (Vec<[f32; 2]>, Vec<u32>) {
+    let mut rings = flatten_bezpath_adaptive(path, tolerance)
+        .into_iter()
+        .map(|mut ring| {
+            // A closed subpath repeats its first point at the end.
+            if ring.len() > 1 && ring.first() == ring.last() {
+                ring.pop();
+            }
+            ring
+        });
+    let Some(boundary) = rings.next() else {
+        return (Vec::new(), Vec::new());
+    };
+    let holes: Vec<Vec<Point>> = rings.collect();
+    triangulate_polygon(&boundary, &holes)
+}
+
 /// Tessellate an ellipse/elliptic arc to polyline points at given tolerance.
 pub fn tessellate_ellipse(
     center: Point,

@@ -88,7 +88,8 @@ crates/
       src/session.rs          # SessionRegistry, DocumentSession, SESSIONS
       src/exports.rs          # wasm-bindgen exports (session_*, cad_call, yrs_*,
                               #   start_renderer, export_*)
-      src/egui_render.rs      # egui fallback renderer + its tessellation cache
+      src/egui_render.rs      # egui fallback renderer: draws core's display list,
+                              #   flattening each path to polylines or triangles
       src/vello_render.rs     # Vello renderer shell: wgpu surface, demand-driven
                               #   rAF, pointer/wheel input; draws core's display
                               #   list through cadview-render's scene builder
@@ -510,9 +511,11 @@ match on `Shape`.
   Vello renders natively on GPU. No CPU tessellation. Intermediate
   Rgba8Unorm texture + `TextureBlitter` blit to Bgra8 surface
   (Windows). Demand-driven rAF: zero frames when idle.
-- **egui (fallback)**: CPU tessellation via eframe/egui Painter.
-  `RenderCache` caches arcs, curves, fills per entity per zoom level.
-  Only calls `request_repaint()` on interaction (zero idle frames).
+- **egui (fallback)**: draws the same display list through the
+  eframe/egui Painter. egui only draws polylines and triangles, so each
+  path is flattened (fills triangulated) on the CPU and cached per path
+  and zoom level in `RenderCache`. Only calls `request_repaint()` on
+  interaction (zero idle frames).
 - **Per-session canvas**: each visible session gets its own `<canvas>`.
   React manages lifecycle via `ViewportContainer`.
 - **Screen-space LOD**: entities with screen-space bbox < 0.5px are
@@ -523,7 +526,10 @@ match on `Shape`.
   the whole frame when its dash buffers overflow). Decided in core, so
   the PNG renderer follows the same rule.
 - **BezPath cache** (`SceneCache`, core): paths computed once per
-  entity, reused every frame. Invalidated on entity count change.
+  entity, reused every frame. Rebuilt when the entity count changes, and
+  when a shell calls `invalidate()` because entities changed in place:
+  the web shell bumps a per-session `doc_rev` on every mutation, sync
+  update and file load, and both renderers compare against it.
 
 ### Render to PNG
 

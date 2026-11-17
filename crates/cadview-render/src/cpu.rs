@@ -167,6 +167,7 @@ mod tests {
 
     fn stroke<'a>(path: &'a BezPath, color: Color, width: f64) -> DrawItem<'a> {
         DrawItem {
+            key: cadview_core::render::PathKey::Expanded(0),
             path,
             color,
             paint: Paint::Stroke {
@@ -178,6 +179,7 @@ mod tests {
 
     fn fill<'a>(path: &'a BezPath, color: Color, even_odd: bool) -> DrawItem<'a> {
         DrawItem {
+            key: cadview_core::render::PathKey::Expanded(0),
             path,
             color,
             paint: Paint::Fill { even_odd },
@@ -340,6 +342,7 @@ mod tests {
         let l = line(0.0, 0.0, 100.0, 0.0);
         let pattern = [10.0, 10.0];
         let dashed = DrawItem {
+            key: cadview_core::render::PathKey::Expanded(0),
             path: &l,
             color: RED,
             paint: Paint::Stroke {
@@ -367,6 +370,7 @@ mod tests {
         let l = line(0.0, 0.0, 40.0, 0.0);
         for pattern in [&[][..], &[0.0, 0.0][..], &[f64::NAN, 1.0][..]] {
             let item = DrawItem {
+                key: cadview_core::render::PathKey::Expanded(0),
                 path: &l,
                 color: RED,
                 paint: Paint::Stroke {
@@ -414,6 +418,7 @@ mod tests {
                 fill(&hole, Color { a: 120, ..RED }, true),
                 stroke(&l, Color::WHITE, 0.6),
                 DrawItem {
+                    key: cadview_core::render::PathKey::Expanded(0),
                     path: &circle,
                     color: Color::WHITE,
                     paint: Paint::Stroke {

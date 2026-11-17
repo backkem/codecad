@@ -185,6 +185,8 @@ pub struct SceneCache {
     /// Paths of `expanded`, by index (expanded IDs are synthetic and could
     /// collide with real ones, so they get their own table).
     expanded_paths: Vec<Option<BezPath>>,
+    /// Bumped whenever the cached paths are thrown away.
+    generation: u64,
 }
 
 fn is_expandable(shape: &Shape) -> bool {
@@ -209,13 +211,29 @@ impl SceneCache {
         self.expanded.len()
     }
 
+    /// Counts how often the cached paths have been thrown away. A
+    /// [`PathKey`] names the same path for as long as this stays the same,
+    /// so backends that keep their own per-path data (flattened points,
+    /// triangles) drop it when the generation changes.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Throw the cached paths away. The entity count catches adds and
+    /// removes; call this when entities may have changed in place (moved,
+    /// edited, document replaced), which the count cannot see.
+    pub fn invalidate(&mut self) {
+        self.expanded.clear();
+        self.expanded_paths.clear();
+        self.direct_paths.clear();
+        self.generation += 1;
+    }
+
     /// Bring the cache up to date with `doc`.
     pub fn update(&mut self, doc: &Document) {
         let entity_count = doc.entities.len();
         if self.entity_count != entity_count {
-            self.expanded.clear();
-            self.expanded_paths.clear();
-            self.direct_paths.clear();
+            self.invalidate();
             self.entity_count = entity_count;
         }
         if self.expanded.is_empty() && doc.entities.iter().any(|e| is_expandable(&e.shape)) {
@@ -239,17 +257,21 @@ impl SceneCache {
     fn renderables<'a>(
         &'a self,
         doc: &'a Document,
-    ) -> impl Iterator<Item = (&'a DrawEntity, Option<&'a BezPath>)> + 'a {
+    ) -> impl Iterator<Item = (PathKey, &'a DrawEntity, Option<&'a BezPath>)> + 'a {
         let direct = doc
             .entities
             .iter()
             .filter(|e| !is_expandable(&e.shape))
-            .map(|e| (e, self.direct_paths.get(&e.id).and_then(|p| p.as_ref())));
+            .map(|e| {
+                let path = self.direct_paths.get(&e.id).and_then(|p| p.as_ref());
+                (PathKey::Entity(e.id), e, path)
+            });
         let expanded = self
             .expanded
             .iter()
             .zip(self.expanded_paths.iter())
-            .map(|(e, p)| (e, p.as_ref()));
+            .enumerate()
+            .map(|(i, (e, p))| (PathKey::Expanded(i), e, p.as_ref()));
         direct.chain(expanded)
     }
 }
@@ -271,9 +293,19 @@ pub struct DisplayList<'a> {
     pub items: Vec<DrawItem<'a>>,
 }
 
+/// Which cached path an item draws: one of the document's own entities, or
+/// the n-th entity expanded from a block insert or text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PathKey {
+    Entity(EntityId),
+    Expanded(usize),
+}
+
 /// One path to fill or stroke.
 #[derive(Debug, Clone)]
 pub struct DrawItem<'a> {
+    /// Names `path` within one [`SceneCache::generation`].
+    pub key: PathKey,
     /// Exact geometry in world coordinates.
     pub path: &'a BezPath,
     /// Straight (non-premultiplied) RGBA8, final alpha already resolved.
@@ -391,7 +423,7 @@ pub fn display_list<'a>(
     let mut items = Vec::new();
 
     // Pass 1: solid fills.
-    for (ent, path) in cache.renderables(doc) {
+    for (key, ent, path) in cache.renderables(doc) {
         if !matches!(&ent.shape, Shape::SolidFill { .. }) {
             continue;
         }
@@ -401,6 +433,7 @@ pub fn display_list<'a>(
         if let Some(path) = path {
             let c = doc.resolve_color(ent);
             items.push(DrawItem {
+                key,
                 path,
                 color: Color {
                     r: c.r,
@@ -416,7 +449,7 @@ pub fn display_list<'a>(
     // Pass 2: strokes. 1 CSS pixel = pixel_ratio device pixels.
     let stroke_width = view.pixel_ratio / cam.zoom;
     let mut dash_budget = DASH_BUDGET;
-    for (ent, path) in cache.renderables(doc) {
+    for (key, ent, path) in cache.renderables(doc) {
         if matches!(&ent.shape, Shape::SolidFill { .. }) {
             continue;
         }
@@ -442,6 +475,7 @@ pub fn display_list<'a>(
 
         if let Some(path) = path {
             items.push(DrawItem {
+                key,
                 path,
                 color: Color {
                     r: c.r,
@@ -705,6 +739,38 @@ mod tests {
         // Each 300 000-unit line asks for 40 000 dashes; the budget of
         // 100 000 covers two of the three, the third draws solid.
         assert_eq!(dashes_at(1.0, 3, 300_000.0), 2);
+    }
+
+    #[test]
+    fn invalidate_picks_up_in_place_edits() {
+        let mut doc = Document::new();
+        let id = line(&mut doc, 0.0, 0.0, 10.0, 10.0, "0");
+        let view = View::new(200, 200, Camera::new());
+        let mut cache = SceneCache::new();
+        let start = |cache: &mut SceneCache, doc: &Document| {
+            let list = build_display_list(doc, cache, &view);
+            assert_eq!(list.items[0].key, PathKey::Entity(id));
+            list.items[0].path.elements()[0]
+        };
+        assert_eq!(
+            start(&mut cache, &doc),
+            kurbo::PathEl::MoveTo(Point::new(0.0, 0.0))
+        );
+
+        // Same entity count, so the cache cannot see the edit by itself.
+        doc.entity_mut(id).unwrap().shape = Shape::Line(kurbo::Line::new((5.0, 5.0), (10.0, 10.0)));
+        assert_eq!(
+            start(&mut cache, &doc),
+            kurbo::PathEl::MoveTo(Point::new(0.0, 0.0))
+        );
+
+        let generation = cache.generation();
+        cache.invalidate();
+        assert_eq!(
+            start(&mut cache, &doc),
+            kurbo::PathEl::MoveTo(Point::new(5.0, 5.0))
+        );
+        assert!(cache.generation() > generation);
     }
 
     #[test]

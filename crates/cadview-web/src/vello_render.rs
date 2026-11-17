@@ -35,6 +35,8 @@ struct VelloState {
     /// Expanded blocks/text and per-entity BezPaths (cadview-core).
     /// Cleared on entity count change.
     cache: SceneCache,
+    /// The session's `doc_rev` the cache was last brought up to date with.
+    doc_rev: u64,
 }
 
 impl VelloState {
@@ -110,6 +112,7 @@ pub fn start(canvas: HtmlCanvasElement, session_id: &str, renderer_key: &str) {
             renderer_key,
             canvas: canvas.clone(),
             cache: SceneCache::new(),
+            doc_rev: 0,
         }));
 
         // Input handlers
@@ -366,6 +369,12 @@ fn render_frame(state: &mut VelloState) {
     let sw = width as f64;
     let sh = height as f64;
     session.screen_size = (width as f32, height as f32);
+
+    // Entities edited in place keep the count, so the cache cannot tell.
+    if session.doc_rev != state.doc_rev {
+        state.cache.invalidate();
+        state.doc_rev = session.doc_rev;
+    }
 
     // Camera commands / auto-fit
     let entity_count = session.doc.entities.len();

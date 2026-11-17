@@ -105,6 +105,7 @@ pub fn session_load_dwg(session_id: &str, data: &[u8]) -> String {
             let count = doc.entities.len();
             session.sync.populate_from_document(&doc);
             session.doc = doc;
+            session.doc_rev += 1;
             session.cache = RenderCache::new();
             session.initialized = false; // trigger auto-fit
             session.camera_cmd = Some(CameraCmd::FitAll);
@@ -144,6 +145,7 @@ pub fn yrs_apply_update(session_id: &str, update: &[u8]) -> String {
     let new_doc = session.sync.to_document();
     let count = new_doc.entities.len();
     session.doc = new_doc;
+    session.doc_rev += 1;
 
     if was_empty && count > 0 {
         session.camera_cmd = Some(CameraCmd::FitAll);
@@ -340,7 +342,23 @@ pub fn cad_call(method: &str, args_json: &str) -> String {
         .sync
         .apply_mutation(&mut session.doc, method, args_json)
     {
-        Ok((result, _update)) => result, // update is coalesced at flush
+        // The update itself is coalesced at flush; here it only says
+        // whether the call changed the document.
+        Ok((result, update)) => {
+            if !update.is_empty() {
+                session.doc_rev += 1;
+                session.render_dirty = true;
+                for (cid, sid) in &reg.renderers {
+                    if sid.as_str() == target_id {
+                        if let Some(repaint) = reg.repaint_fns.get(cid) {
+                            repaint.call();
+                        }
+                        break;
+                    }
+                }
+            }
+            result
+        }
         Err(e) => format!(r#"{{"error":{}}}"#, serde_json::json!(e)),
     };
 

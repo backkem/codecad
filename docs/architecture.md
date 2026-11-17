@@ -245,3 +245,47 @@ cad.useSession("ground-floor.dwg")
 cad.useSession("first-floor.dwg")
 // ... add electrical layout ...
 ```
+
+## Semantics live in code
+
+CodeCAD is general because it does not know what a drawing means. The
+core stores exact geometry, layers, blocks and (soon) solids, and answers
+geometric questions. What the geometry stands for (a room, a wall
+socket, a copper track on a net, a shelf in a cut list) is knowledge that
+lives in the script that drew it, or in the data handed to that script.
+
+This is a deliberate split, and it shapes the API:
+
+- **The core gets mechanisms, the script gets meaning.** Before adding
+  something to the core, ask whether another domain would need the same
+  thing. A clearance rule between two nets is domain logic. "Which pairs
+  from set A and set B are closer than d" is a mechanism: a floor plan, a
+  circuit board and a sheet-metal layout all want it.
+- **The ABI must be high bandwidth.** If meaning lives in the script, the
+  script has to ask big questions cheaply. Queries work on whole sets,
+  filter at the source, and return everything in one call: all pairs
+  within a distance, all overlaps between two layers, the union or offset
+  of a selection. A rule that needs one call per entity pair does not
+  scale, so the expensive geometric primitive moves into the core while
+  the rule that uses it stays in the script. No domain query language:
+  results are plain arrays (see `docs/api-surface.md`, design principles).
+- **Entities carry attributes the core does not interpret.** A script
+  needs to mark geometry with its own facts (which net, which part
+  number, which room) and get them back from queries. The core's job is
+  to store such key and value pairs, keep them through save, sync and
+  undo, and filter on them. It never acts on their meaning. This is
+  planned, not built: today an entity has a layer, colour, linetype,
+  lineweight and transparency, and scripts encode meaning in layer names.
+- **Checks derive, then compare.** With meaning in one place and geometry
+  in another, a domain library can verify its own output independently:
+  recompute the fact from the finished geometry and compare it with what
+  the script intended. Connectivity extracted from the drawn copper
+  against the intended netlist is the example in
+  `docs/pcb-direction.md`. The 3D test harness
+  (`docs/3d-test-harness.md`) rests on the same idea.
+
+The limit of this split: it holds while code is the editor. A person who
+drags an entity in the viewer changes geometry without the script's
+knowledge, and nothing in the core can tell that a domain rule broke.
+Domain libraries therefore treat the drawing as an output to be
+re-checked, not as the place where meaning is kept.

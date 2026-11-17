@@ -136,6 +136,13 @@ render is available from the CLI:
 7. **Batch by design.** One script does a full batch of work. No
    round-trip overhead.
 
+8. **Meaning lives in the script, mechanisms in the core.** The core
+   does not know what a room, a net or a part number is. It answers
+   generic geometric questions, on whole sets and in one call, and the
+   script supplies the meaning. When a rule is too slow in script, move
+   the geometric primitive it needs into the core, not the rule. See
+   `docs/architecture.md`, "Semantics live in code".
+
 ---
 
 ## Core API: observe
@@ -1508,7 +1515,16 @@ design above.
 - **Block pin metadata**: Exercise B uses a `_PIN` layer convention.
   Works, but structured pin metadata (name, direction, electrical type)
   on block definitions would enable richer automation (auto-wiring,
-  ERC checks). Add a `pins` field to `cad.defineBlock()` options?
+  ERC checks). Add a `pins` field to `cad.defineBlock()` options? By
+  principle 8 the generic answer is preferred: free-form attributes on
+  entities and block definitions, which the core stores, syncs and
+  filters on without interpreting them. Pins, nets and part numbers then
+  need no API of their own.
+- **Set-level queries**: `cad.near()` and `cad.inBounds()` answer
+  questions about one point or one rectangle. Rules over whole drawings
+  (clearance between two groups, overlaps between two layers) need
+  queries that take two sets and return every matching pair in one call,
+  plus union and offset of a selection. Not designed yet.
 - **Multi-page**: DWGs can have multiple model spaces / layouts. API
   assumes one. Need `cad.pages()` / `cad.setPage()`?
 - **Coordinate system**: meters work for buildings. For schematics at

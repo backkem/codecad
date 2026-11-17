@@ -10,7 +10,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  WASM_BINDGEN_VERSION: "0.2.121"
+  WASM_BINDGEN_VERSION: "0.2.130"
 
 jobs:
   # Build the browser bundle once. It is baked into every platform binary,

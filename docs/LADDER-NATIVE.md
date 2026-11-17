@@ -62,6 +62,26 @@ Each rung is built by a **builder/tester pair** and sized at **≤ about 2 weeks
 | **N6** packaging | `release.yml` gains a `cadview-desktop` build per target (Windows x64, Linux x64/arm64, macOS x86_64/arm64), archived as `codecad-desktop-<tag>-<target>` next to `codecad`. macOS `.app` bundle (unsigned at first, notarization documented). Windows `.exe` with icon. Linux tarball. `just package-desktop`. | A `workflow_dispatch` run produces all five archives with `.sha256` files. Each job runs `codecad-desktop --version`. Linux x64 also runs `--screenshot` on `01-flange-plate.dwg` under lavapipe and matches within the pixel tolerance. A tag push attaches the archives to the release. |
 | **N🎯** vision | A desktop CodeCAD that opens a folder of DWGs in tabs, edits and saves offline, runs drawing scripts locally, connects to a shared server and syncs live with browser users, and shows the 3D model and renders of the same document. It ships from the same tag as the server. | A scripted end-to-end test on a release archive, with no repo checkout:<br>1. Open `examples/` offline, run `01-flange-plate.js`, save as DWG.<br>2. Connect to a server and sync an edit with a WT peer within the N3a latency bound.<br>3. Open the bookshelf in 3D and write a headless render PNG.<br><br>Separately, a review checklist confirms every non-UI change in this ladder landed in core, render, render3d or store. |
 
+### N0a: what landed (2026-11-17)
+
+Same work as LADDER-3D 3D2a (details there).
+
+- **Versions.** vello 0.12.0, wgpu 30.0.2, eframe/egui 0.37.0 (the
+  newest pair on wgpu ^30, instead of the planned 0.11/0.36). The wasm32
+  bundle has one wgpu (`cargo tree -d` lists none twice). wasm-bindgen
+  moved to 0.2.130, since wgpu 30 needs a newer web-sys.
+- **`GpuContext`** in `cadview-render` (wasm32 + native): instance,
+  adapter, device, queue and `vello::Renderer` (Msaa16 only) from one
+  constructor. Headless keeps one per process; the browser shares one per
+  page across all canvases via `shared_local()`, and each canvas owns
+  only its surface, config, intermediate texture and blitter. Device
+  creations log `[CodeCAD] GPU device created (#N)`. A desktop shell can
+  build its Vello path on the same type.
+- Native GPU and CPU renders of every example are pixel-identical to the
+  pre-bump ones. In headless Chromium the Vello viewer reproduces the
+  committed PNGs, four canvases on one page create one device, and the
+  egui fallback still works with WebGPU disabled.
+
 ### N0b: what landed (2026-11-17)
 
 N0b landed with one change to the split described above: the decisions

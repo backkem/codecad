@@ -1,17 +1,14 @@
-//! Headless GPU render (native): wgpu device + `vello::Renderer`, render to
-//! an Rgba8Unorm texture with Msaa16, read back to RGBA8.
+//! Headless GPU render (native): the shared [`GpuContext`] renders to an
+//! Rgba8Unorm texture with Msaa16, read back to RGBA8.
 
+use crate::context::GpuContext;
 use crate::scene::build_scene;
 use cadview_core::render::DisplayList;
 use std::sync::{Mutex, OnceLock};
-use vello::peniko;
 
-/// One wgpu device and Vello renderer, reused across renders.
+/// A GPU context plus a readback target, reused across renders.
 pub struct GpuRenderer {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    renderer: vello::Renderer,
-    adapter: String,
+    ctx: GpuContext,
     max_edge: u32,
     target: Option<Target>,
 }
@@ -30,59 +27,14 @@ impl GpuRenderer {
     /// Find an adapter, open a device and build the Vello pipelines.
     /// Slow (shader compilation); keep the result.
     pub fn new() -> Result<Self, String> {
-        pollster::block_on(Self::new_async())
-    }
-
-    async fn new_async() -> Result<Self, String> {
-        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
-        // Vello needs compute shaders; skip the GL backend.
-        desc.backends = wgpu::Backends::PRIMARY;
-        let instance = wgpu::Instance::new(desc);
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                force_fallback_adapter: false,
-                compatible_surface: None,
-            })
-            .await
-            .map_err(|e| format!("no GPU adapter: {e}"))?;
-        let info = adapter.get_info();
-        let adapter_name = format!("{} ({:?}, {:?})", info.name, info.backend, info.device_type);
-
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("cadview-render"),
-                required_features: wgpu::Features::empty(),
-                required_limits: adapter.limits(),
-                ..Default::default()
-            })
-            .await
-            .map_err(|e| format!("request_device on {adapter_name}: {e}"))?;
-        let max_edge = device
+        let ctx = pollster::block_on(GpuContext::new())?;
+        let max_edge = ctx
+            .device
             .limits()
             .max_texture_dimension_2d
             .min(crate::options::MAX_EDGE);
-
-        let renderer = vello::Renderer::new(
-            &device,
-            vello::RendererOptions {
-                use_cpu: false,
-                antialiasing_support: vello::AaSupport {
-                    area: false,
-                    msaa8: false,
-                    msaa16: true,
-                },
-                num_init_threads: None,
-                pipeline_cache: None,
-            },
-        )
-        .map_err(|e| format!("vello renderer on {adapter_name}: {e}"))?;
-
         Ok(Self {
-            device,
-            queue,
-            renderer,
-            adapter: adapter_name,
+            ctx,
             max_edge,
             target: None,
         })
@@ -90,7 +42,7 @@ impl GpuRenderer {
 
     /// Adapter name, backend and type, e.g. "NVIDIA ... (Vulkan, DiscreteGpu)".
     pub fn adapter(&self) -> &str {
-        &self.adapter
+        self.ctx.adapter_name()
     }
 
     fn target(&mut self, width: u32, height: u32) -> &Target {
@@ -99,24 +51,12 @@ impl GpuRenderer {
             .as_ref()
             .is_some_and(|t| t.width == width && t.height == height);
         if !reuse {
-            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("cadview_render_target"),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                view_formats: &[],
-            });
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let (texture, view) =
+                self.ctx
+                    .create_target(width, height, wgpu::TextureUsages::COPY_SRC);
             let padded_row = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
                 * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            let buffer = self.ctx.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("cadview_render_readback"),
                 size: padded_row as u64 * height as u64,
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
@@ -149,18 +89,11 @@ impl GpuRenderer {
         let scene = build_scene(list);
         self.target(width, height);
         let target = self.target.as_ref().unwrap();
-
-        let params = vello::RenderParams {
-            base_color: peniko::Color::BLACK,
-            width,
-            height,
-            antialiasing_method: vello::AaConfig::Msaa16,
-        };
-        self.renderer
-            .render_to_texture(&self.device, &self.queue, &scene, &target.view, &params)
-            .map_err(|e| format!("vello render: {e}"))?;
+        self.ctx
+            .render_to_texture(&scene, &target.view, width, height)?;
 
         let mut encoder = self
+            .ctx
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("cadview_render_readback"),
@@ -186,14 +119,15 @@ impl GpuRenderer {
                 depth_or_array_layers: 1,
             },
         );
-        self.queue.submit(Some(encoder.finish()));
+        self.ctx.queue.submit(Some(encoder.finish()));
 
         let slice = target.buffer.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
         });
-        self.device
+        self.ctx
+            .device
             .poll(wgpu::PollType::wait_indefinitely())
             .map_err(|e| format!("GPU poll: {e}"))?;
         rx.recv()
@@ -201,16 +135,16 @@ impl GpuRenderer {
             .map_err(|e| format!("readback map: {e}"))?;
 
         let row = (width * 4) as usize;
-        let mut rgba = Vec::with_capacity(row * height as usize);
-        {
-            let data = slice.get_mapped_range();
+        let rgba = slice.get_mapped_range().map(|data| {
+            let mut rgba = Vec::with_capacity(row * height as usize);
             for y in 0..height as usize {
                 let start = y * target.padded_row as usize;
                 rgba.extend_from_slice(&data[start..start + row]);
             }
-        }
+            rgba
+        });
         target.buffer.unmap();
-        Ok(rgba)
+        rgba.map_err(|e| format!("readback view: {e}"))
     }
 }
 

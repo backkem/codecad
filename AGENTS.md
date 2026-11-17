@@ -77,7 +77,10 @@ crates/
                               #   linetype, paint order) as a renderer-neutral list
     cadview-render/           # backends for the display list (no CAD logic)
       src/scene.rs            # display list -> vello::Scene (wasm32 + native)
-      src/gpu.rs              # headless wgpu + Vello render, one device per process
+      src/context.rs          # GpuContext: adapter, device, queue, vello::Renderer
+                              #   (Msaa16); one constructor for browser and
+                              #   headless, shared_local() = one per page
+      src/gpu.rs              # headless render on a process-wide GpuContext
       src/cpu.rs              # CPU rasterizer (vello_cpu), the fallback without a GPU
       src/options.rs          # RenderOptions (the cad.render JSON), Backend
       src/lib.rs              # render_png / render_rgba: Auto|Gpu|Cpu, PNG encode
@@ -90,7 +93,8 @@ crates/
                               #   start_renderer, export_*)
       src/egui_render.rs      # egui fallback renderer: draws core's display list,
                               #   flattening each path to polylines or triangles
-      src/vello_render.rs     # Vello renderer shell: wgpu surface, demand-driven
+      src/vello_render.rs     # Vello renderer shell: per-canvas wgpu surface on
+                              #   the page's shared GpuContext, demand-driven
                               #   rAF, pointer/wheel input; draws core's display
                               #   list through cadview-render's scene builder
     cadview-server/           # native Rust server
@@ -506,11 +510,25 @@ items, each an exact `BezPath` with a fill or stroke paint). Backends in
 builder (browser and headless GPU) and the CPU rasterizer. They never
 match on `Shape`.
 
+- **One GPU stack**: vello 0.12, wgpu 30 and eframe/egui 0.37 move
+  together, so the web bundle has exactly one wgpu (check with
+  `cargo tree -p cadview-web --target wasm32-unknown-unknown -d`).
+  Bump them together. The wasm-bindgen CLI version pinned in the
+  workflows must equal the `wasm-bindgen` version in `Cargo.lock`.
 - **Vello (default, WebGPU)**: GPU compute-based 2D renderer.
   `Shape::to_bezpath()` converts all entity types to kurbo BezPaths,
   Vello renders natively on GPU. No CPU tessellation. Intermediate
   Rgba8Unorm texture + `TextureBlitter` blit to Bgra8 surface
   (Windows). Demand-driven rAF: zero frames when idle.
+- **One GPU device per page**: `cadview_render::context::GpuContext`
+  owns the adapter, device, queue and `vello::Renderer` (Msaa16 only).
+  The browser gets it from `shared_local()`: the first canvas creates
+  it, canvases that start meanwhile wait for that result, and every
+  canvas keeps only its own surface, surface config, intermediate
+  texture and blitter. Each device creation logs
+  `[CodeCAD] GPU device created (#N)` (browser console, or `log::info!`
+  natively), so a headless browser can count devices. The egui
+  fallback's eframe WebRunner sets up its own wgpu, separately.
 - **egui (fallback)**: draws the same display list through the
   eframe/egui Painter. egui only draws polylines and triangles, so each
   path is flattened (fills triangulated) on the CPU and cached per path
@@ -537,8 +555,8 @@ The server renders natively, with no browser: GPU (wgpu + Vello, Msaa16,
 the same scene the browser draws) and a CPU fallback. `backend: "auto"`
 (the default) uses the GPU and falls back to the CPU with a logged
 warning; `"gpu"` or `"cpu"` force one and fail if it is unavailable.
-The GPU device is created once per process (the first render pays for
-shader compilation). Build without the `gpu` feature
+The GPU device (a `GpuContext`, the same setup the browser uses) is
+created once per process (the first render pays for shader compilation). Build without the `gpu` feature
 (`--no-default-features`) for a CPU-only server.
 
 ```bash

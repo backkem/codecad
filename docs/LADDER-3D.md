@@ -82,6 +82,41 @@ Each rung is built by a **builder/tester pair** and sized at **≤ about 2 weeks
 | **3D6b** headless renders | Server `render` RPC and sandbox `cad.render({out, size, spp})` through `cadview-render3d::headless` (native wgpu; lavapipe on GPU-less hosts). The example export pipeline gains 3D PNGs. | `curl /api/run` with `cad.render` writes a 960x640 PNG **on the GPU-less CI runner in ≤ 10 min** at the configured spp. On a GPU-A host the same scene renders in ≤ 30 s. The two PNGs differ by mean ꟻLIP ≤ 0.05. If lavapipe misses the time budget, the fallback named in design §9.4 is adopted, and its gate replaces this one. |
 | **3D🎯** vision | `examples/07-bookshelf.js` runs the full design §10.1 script: model, interference check, plant and chair, path-traced render, an A3 shop drawing at 1:10 with three views, section A-A, dimensions, a cut-list table and a title block. It runs from the browser console and from `/api/run`. A room variant drops the bookshelf into a floor-plan DWG and renders it in place. | One `just export 07-bookshelf` produces:<br>• `07-bookshelf.dwg`, which opens in a third-party DWG viewer with views, hatch, dimensions and table<br>• `07-bookshelf.png` (the drawing)<br>• `07-bookshelf-render.png` (path-traced)<br><br>The cut list printed by the script matches the drawing's table. Changing `W = 900` and re-running updates the parts, views, dimensions, cut list and render with no manual fix-ups. All goldens still pass. |
 
+### 3D2a: what landed (2026-11-17)
+
+Same work as LADDER-NATIVE N0a.
+
+- **Versions.** vello 0.12.0, wgpu 30.0.2 and eframe/egui 0.37.0, not
+  the 0.11/0.36 pair planned above: vello 0.11 and 0.12 and eframe 0.36
+  and 0.37 all need wgpu ^30, so the newest pair was taken. kurbo 0.13,
+  peniko 0.6.1 and vello_cpu 0.4.0 are unchanged.
+  `cargo tree -p cadview-web --target wasm32-unknown-unknown -d` lists
+  no duplicate wgpu: one wgpu 30.0.2 serves vello, eframe/egui-wgpu,
+  `cadview-render` and `cadview-web`. wgpu 30 needs web-sys 0.3.104 or
+  newer, so wasm-bindgen moved from 0.2.121 to 0.2.130, and the
+  wasm-bindgen CLI pin in the workflows with it.
+- **`GpuContext`** (`cadview-render`, feature `gpu`, wasm32 + native)
+  owns the instance, adapter, device, queue and `vello::Renderer`, built
+  by one constructor that asks for Msaa16 only (the browser used to
+  compile all three AA pipelines). Headless render keeps one per process.
+  The browser takes it from `shared_local()`: one device per page, the
+  first canvas creates it, canvases that start while it is pending wait
+  for the same result, and each canvas keeps only its surface, surface
+  config, intermediate texture and blitter. Every device creation logs
+  `[CodeCAD] GPU device created (#N)`.
+- **Pixels.** Native GPU and CPU renders of all 12 examples are identical
+  to the pre-bump renders (0 differing pixels). GPU against the committed
+  PNGs: at most 0.046 % of pixels differ by more than 8/255, as before.
+- **Browser.** In headless Chromium the Vello viewer reproduces all 12
+  committed PNGs (0 pixels over the threshold, through `render.mjs`), and
+  app screenshots are identical before and after the bump. Four canvases
+  started on one page log exactly one device creation. With WebGPU
+  disabled the app still falls back to egui and draws.
+- **The egui half of the gate was not measurable as written.** egui
+  anti-aliases differently from Vello, so it differs from the committed
+  (Vello) PNGs on 3 to 5 % of pixels at any version. Measured instead:
+  egui before against after the bump, at most 0.10 % of pixels.
+
 **Notes (2026-11-17).**
 
 - **3D6b builds on the 2D headless path.** `cad.render` already exists for
@@ -97,7 +132,8 @@ Each rung is built by a **builder/tester pair** and sized at **≤ about 2 weeks
   wgpu 30.0.2 and eframe 0.37.0. The "one wgpu, 30" result above was
   measured against vello 0.11 and eframe 0.36; before 3D2a, re-run the
   smoke crates and decide which vello/eframe pair actually shares one
-  wgpu.
+  wgpu. Done in 3D2a: vello 0.12 and eframe 0.37 share wgpu 30.0.2 (see
+  above). Kiss3d still has to be checked against that wgpu in 3D2b.
 
 ## Risks
 

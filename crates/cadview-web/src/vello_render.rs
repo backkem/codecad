@@ -3,12 +3,16 @@
 //! Renders the Document model using Vello's compute-based pipeline.
 //! Requires WebGPU; the JS host detects capability and falls back to
 //! the egui renderer on browsers without WebGPU support.
+//!
+//! Every canvas on the page shares one `GpuContext` (device, queue and
+//! Vello renderer, from cadview-render); each canvas owns only its
+//! surface, surface config, intermediate texture and blitter.
 
 use crate::session::{RepaintFn, SESSIONS};
 use cadview_core::render::{build_display_list, Camera, CameraCmd, SceneCache, View};
+use cadview_render::context::{shared_local, SharedGpu};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use vello::peniko;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::HtmlCanvasElement;
@@ -16,13 +20,11 @@ use web_sys::HtmlCanvasElement;
 /// The rAF callback, held in a cell so it can schedule itself.
 type FrameCb = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
 
-/// Per-renderer GPU state.
+/// Per-canvas GPU state on the page's shared context.
 struct VelloState {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    gpu: SharedGpu,
     surface: wgpu::Surface<'static>,
     surface_config: wgpu::SurfaceConfiguration,
-    renderer: vello::Renderer,
     /// Intermediate Rgba8Unorm texture for Vello's compute output.
     /// Required because Vello writes via storage binding (needs Rgba8Unorm)
     /// but surface textures on Windows are Bgra8Unorm.
@@ -46,34 +48,12 @@ impl VelloState {
         }
         self.surface_config.width = width;
         self.surface_config.height = height;
-        self.surface.configure(&self.device, &self.surface_config);
-        let (tex, view) = create_target_texture(&self.device, width, height);
+        let gpu = self.gpu.borrow();
+        self.surface.configure(&gpu.device, &self.surface_config);
+        let (tex, view) = gpu.create_target(width, height, wgpu::TextureUsages::TEXTURE_BINDING);
         self.target_texture = tex;
         self.target_view = view;
     }
-}
-
-fn create_target_texture(
-    device: &wgpu::Device,
-    width: u32,
-    height: u32,
-) -> (wgpu::Texture, wgpu::TextureView) {
-    let tex = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("vello_target"),
-        size: wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        view_formats: &[],
-    });
-    let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-    (tex, view)
 }
 
 /// Start a Vello renderer on the given canvas for the given session.
@@ -82,16 +62,14 @@ pub fn start(canvas: HtmlCanvasElement, session_id: &str, renderer_key: &str) {
     let renderer_key = renderer_key.to_string();
 
     wasm_bindgen_futures::spawn_local(async move {
-        let (
-            device,
-            queue,
+        let CanvasGpu {
+            gpu,
             surface,
             surface_config,
-            renderer,
             target_texture,
             target_view,
             blitter,
-        ) = match init_gpu(&canvas).await {
+        } = match init_canvas(&canvas).await {
             Ok(s) => s,
             Err(e) => {
                 web_sys::console::error_1(&format!("Vello init failed: {e}").into());
@@ -100,11 +78,9 @@ pub fn start(canvas: HtmlCanvasElement, session_id: &str, renderer_key: &str) {
         };
 
         let state = Rc::new(RefCell::new(VelloState {
-            device,
-            queue,
+            gpu,
             surface,
             surface_config,
-            renderer,
             target_texture,
             target_view,
             blitter,
@@ -264,53 +240,32 @@ pub fn start(canvas: HtmlCanvasElement, session_id: &str, renderer_key: &str) {
 
 // ── GPU init ──────────────────────────────────────────────────────────
 
-async fn init_gpu(
-    canvas: &HtmlCanvasElement,
-) -> Result<
-    (
-        wgpu::Device,
-        wgpu::Queue,
-        wgpu::Surface<'static>,
-        wgpu::SurfaceConfiguration,
-        vello::Renderer,
-        wgpu::Texture,
-        wgpu::TextureView,
-        wgpu::util::TextureBlitter,
-    ),
-    String,
-> {
-    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
-    desc.backends = wgpu::Backends::BROWSER_WEBGPU;
-    let instance = wgpu::Instance::new(desc);
+/// What one canvas owns on top of the page's shared GPU context.
+struct CanvasGpu {
+    gpu: SharedGpu,
+    surface: wgpu::Surface<'static>,
+    surface_config: wgpu::SurfaceConfiguration,
+    target_texture: wgpu::Texture,
+    target_view: wgpu::TextureView,
+    blitter: wgpu::util::TextureBlitter,
+}
 
-    let surface = instance
+/// Get the page's GPU context (created by the first canvas; later canvases
+/// wait for it) and set up this canvas's surface and render target.
+async fn init_canvas(canvas: &HtmlCanvasElement) -> Result<CanvasGpu, String> {
+    let gpu = shared_local().await?;
+    let ctx = gpu.borrow();
+
+    let surface = ctx
+        .instance
         .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
         .map_err(|e| format!("create_surface: {e}"))?;
-
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions {
-            compatible_surface: Some(&surface),
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            ..Default::default()
-        })
-        .await
-        .map_err(|e| format!("request_adapter: {e}"))?;
-
-    let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor {
-            label: Some("cadview-vello"),
-            required_features: adapter.features(),
-            required_limits: adapter.limits(),
-            ..Default::default()
-        })
-        .await
-        .map_err(|e| format!("request_device: {e}"))?;
 
     let dpr = web_sys::window().unwrap().device_pixel_ratio();
     let width = ((canvas.client_width() as f64 * dpr) as u32).max(1);
     let height = ((canvas.client_height() as f64 * dpr) as u32).max(1);
 
-    let caps = surface.get_capabilities(&adapter);
+    let caps = surface.get_capabilities(&ctx.adapter);
     let format = caps.formats.first().copied().ok_or("no surface format")?;
 
     let surface_config = wgpu::SurfaceConfiguration {
@@ -321,34 +276,24 @@ async fn init_gpu(
         present_mode: wgpu::PresentMode::AutoVsync,
         desired_maximum_frame_latency: 2,
         alpha_mode: wgpu::CompositeAlphaMode::Auto,
+        color_space: wgpu::SurfaceColorSpace::Auto,
         view_formats: vec![],
     };
-    surface.configure(&device, &surface_config);
+    surface.configure(&ctx.device, &surface_config);
 
-    let renderer = vello::Renderer::new(
-        &device,
-        vello::RendererOptions {
-            use_cpu: false,
-            antialiasing_support: vello::AaSupport::all(),
-            num_init_threads: std::num::NonZeroUsize::new(1),
-            pipeline_cache: None,
-        },
-    )
-    .map_err(|e| format!("vello Renderer: {e}"))?;
+    let (target_texture, target_view) =
+        ctx.create_target(width, height, wgpu::TextureUsages::TEXTURE_BINDING);
+    let blitter = wgpu::util::TextureBlitterBuilder::new(&ctx.device, format).build();
+    drop(ctx);
 
-    let (target_texture, target_view) = create_target_texture(&device, width, height);
-    let blitter = wgpu::util::TextureBlitterBuilder::new(&device, format).build();
-
-    Ok((
-        device,
-        queue,
+    Ok(CanvasGpu {
+        gpu,
         surface,
         surface_config,
-        renderer,
         target_texture,
         target_view,
         blitter,
-    ))
+    })
 }
 
 // ── Render ────────────────────────────────────────────────────────────
@@ -417,23 +362,9 @@ fn render_frame(state: &mut VelloState) {
 
     drop(reg);
 
-    // Render to intermediate Rgba8 texture, then blit to surface
-    let params = vello::RenderParams {
-        base_color: peniko::Color::BLACK,
-        width,
-        height,
-        antialiasing_method: vello::AaConfig::Msaa16,
-    };
-
-    state
-        .renderer
-        .render_to_texture(
-            &state.device,
-            &state.queue,
-            &scene,
-            &state.target_view,
-            &params,
-        )
+    // Render to intermediate Rgba8 texture (Msaa16), then blit to surface
+    let mut gpu = state.gpu.borrow_mut();
+    gpu.render_to_texture(&scene, &state.target_view, width, height)
         .expect("vello render failed");
 
     let surface_texture = match state.surface.get_current_texture() {
@@ -444,20 +375,17 @@ fn render_frame(state: &mut VelloState) {
         .texture
         .create_view(&wgpu::TextureViewDescriptor::default());
 
-    let mut encoder = state
+    let mut encoder = gpu
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("vello_blit"),
         });
-    state.blitter.copy(
-        &state.device,
-        &mut encoder,
-        &state.target_view,
-        &surface_view,
-    );
-    state.queue.submit(Some(encoder.finish()));
+    state
+        .blitter
+        .copy(&gpu.device, &mut encoder, &state.target_view, &surface_view);
+    gpu.queue.submit(Some(encoder.finish()));
 
-    surface_texture.present();
+    gpu.queue.present(surface_texture);
 }
 
 // ── Input handling ────────────────────────────────────────────────────

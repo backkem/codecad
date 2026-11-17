@@ -6,13 +6,19 @@
 //!
 //! - `scene` (feature `gpu`, wasm32 + native): display list -> `vello::Scene`.
 //!   The browser renderer draws through this.
-//! - `gpu` (feature `gpu`, native): headless wgpu + Vello render to RGBA8,
-//!   one device per process.
+//! - `context` (feature `gpu`, wasm32 + native): [`context::GpuContext`],
+//!   the one adapter/device/queue/`vello::Renderer` setup used by the
+//!   browser (one per page, shared by every canvas) and headless render.
+//! - `gpu` (feature `gpu`, native): headless render to RGBA8 on a
+//!   process-wide `GpuContext`.
 //! - CPU render (feature `cpu`, native).
 //! - [`render_png`] (native): options -> display list -> backend -> PNG.
 
 pub mod options;
 pub use options::{parse_size, Backend, Bounds, RenderOptions, MAX_EDGE};
+
+#[cfg(feature = "gpu")]
+pub mod context;
 
 #[cfg(feature = "gpu")]
 pub mod scene;

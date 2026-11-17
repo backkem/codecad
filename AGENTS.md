@@ -75,6 +75,16 @@ crates/
                               #   expansion + BezPath cache), build_display_list:
                               #   every 2D drawing decision (culling, LOD, colour,
                               #   linetype, paint order) as a renderer-neutral list
+      src/solid/              # 3D parts (docs/3d-design.md), no sync or API yet
+        types.rs              #   feature tree: PartDef, Feature, Profile2d (exact
+                              #   2D segments), EdgeSel, Plane3, Placement
+        kernel.rs             #   SolidKernel trait, EvalError, MassProps, Aabb3
+        select.rs             #   EdgeSel -> exact 3D target curves (kernel-neutral)
+        arris_kernel.rs       #   tests only: ArrisKernel (arris =0.11.1, a
+                              #   dev-dependency), the reference backend for the
+                              #   corpus. No shipped crate links a kernel yet
+        corpus/               #   reference parts with closed-form volume + bbox,
+                              #   generic over SolidKernel (prismatic.rs: 3D0a)
     cadview-render/           # backends for the display list (no CAD logic)
       src/scene.rs            # display list -> vello::Scene (wasm32 + native)
       src/context.rs          # GpuContext: adapter, device, queue, vello::Renderer
@@ -597,6 +607,11 @@ cadview-render's GPU tests print `SKIPPED` and pass when no GPU adapter
 is found.
 
 cadview-core: 35+ tests (entity CRUD, cad_call dispatch, geometry).
+The solid corpus runs with
+`cargo test -p cadview-core solid::corpus::prismatic -- --nocapture`:
+every entry must be a valid single solid whose volume matches its closed
+form to 1e-9 relative and its bounding box to 1e-9 mm, and the output
+prints a per-entry table with evaluation timings.
 cadview-web: 12 tests (session registry isolation, create/destroy/use).
 cadview-server: 8 tests (store backends, registry, broadcast isolation).
 

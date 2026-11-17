@@ -122,7 +122,7 @@ wasm was run in Node with stubbed imports.
  cadview-core (wasm32 + native, zero global state)
  ├── document.rs   Document { entities (2D), layers, blocks, ..., solids: SolidStore }
  ├── solid/        feature tree (PartDef, Feature, Profile2d, Placement, Material, AssetRef)
- │   ├── kernel.rs     trait SolidKernel  ── impl OgeomKernel (default) / TruckKernel (tests)
+ │   ├── kernel.rs     trait SolidKernel  ── impl ArrisKernel (default) / TruckKernel (tests)
  │   ├── eval.rs       content-hashed evaluation cache: PartDef -> Brep (never synced)
  │   ├── mesh.rs       tessellation cache: (Brep hash, tolerance bucket) -> Mesh (never synced)
  │   ├── project.rs    3D -> 2D: HLR, sections, analytic re-fit -> Shape entities in a block
@@ -267,8 +267,8 @@ against our own feature tree:
   small edits, and the API uses it when a script picks by coordinates.
 
 The kernel adapter resolves selectors after each feature, using operation
-history (ogeom returns a `History` on every op) to follow edges through
-later booleans. A selector that no longer resolves is an evaluation error
+history (arris returns a `Provenance` record on every op, naming extrude
+edges by profile segment) to follow edges through later booleans. A selector that no longer resolves is an evaluation error
 with a clear message. It never silently picks a different edge.
 
 ### 4.4 Placement, frames, units
@@ -282,9 +282,41 @@ stay honest.
 
 ## 5. Kernel choice and boundary
 
-### Decision
+### Decision update (2026-11-17): ogeom dropped, kernel choice open
 
-- **Primary backend: ogeom**, pinned to an exact version (`=0.10.x`). It was
+ogeom changed licence: releases up to 0.11.5 are `MIT OR Apache-2.0`, and
+from 0.12.0 on every ogeom crate is published as `LGPL-2.1-only`. CodeCAD
+is MIT and statically links its kernel into the server binary and the wasm
+bundle, so ogeom was dropped in 3D0a before anything with it landed.
+
+- **Which kernel ships is not decided.** Until a kernel-independent test
+  harness has run against the candidates, no shipped crate links a kernel:
+  the backend below is a dev-dependency of cadview-core, used by the corpus
+  tests only. The candidates are arris, another permissively licensed
+  kernel, or one of our own. The rest of this document describes the plan
+  with arris in the kernel's place; read it as provisional.
+- **Reference backend: [arris](https://github.com/arris-labs/arris)**, pinned
+  to `=0.11.1` (`MIT OR Apache-2.0`, pure Rust, no `unsafe`). Default
+  features are off: no serde and no rayon, so it starts no threads, and it
+  keeps no process-wide state. It passes the whole prismatic corpus (3D0a)
+  and builds the smoke part above, fully rounded (12-edge fillet, then the
+  hole and the dado), as a valid B-rep of 33 faces at volume
+  3 188 376.635, with volumes integrated on the exact faces.
+- **What arris does not have:** hidden-line removal and silhouettes. It
+  has the parts to build them on: exact planar sections
+  (`ops::section`), projection of edges to a plane as exact 2D curves
+  (`query::project_to_plane`), exact ray hits against the faces
+  (`query::ray_fire`), tessellation to a chord tolerance, and full access
+  to face surfaces and edge curves. §7 therefore uses the adapter path the
+  design already planned for Truck (our own oracle and closed-form
+  silhouettes) for every backend.
+- Everything below that names ogeom is the 2026-10-13 evaluation. The
+  evidence tables in §2 are kept as recorded.
+
+### Decision (2026-10-13)
+
+- **Primary backend: ogeom** (superseded by the update above). The smoke
+  tests used 0.10, and 3D0a first pinned `=0.18.1`. It was
   the only candidate that passed every smoke test: exact volume on booleans,
   a 12-edge fillet with corner blends followed by booleans that still yield
   a valid B-rep at the closed-form volume, built-in HLR (exact silhouettes
@@ -294,8 +326,8 @@ stay honest.
   behind a cargo feature. Every corpus part is evaluated on both, and the
   volumes, bounding boxes and projected outlines are compared. Disagreement
   is a test failure that points at one kernel or the other. Truck has no
-  usable fillets, so roundover corpus entries only check ogeom against
-  closed-form values.
+  usable fillets, so roundover corpus entries only check the primary
+  backend against closed-form values.
 - **Our own fast path for flat parts.** Cut lists, nominal dimensions and
   grain come straight from the feature tree (`PartKind::Flat`), with no
   kernel involved. The kernel's bounding box confirms them (and the check
@@ -312,20 +344,24 @@ brief suggested. It works and is the safe second backend, but its released
 API has no roundovers, its booleans were about 30x slower than ogeom's on
 the test part, and it has had no release for two years.
 
-### Mitigating ogeom's risk
+### Mitigating the kernel's risk
 
-ogeom is about ten weeks old (repo created 2026-08-04, first release
-2026-09-18), has one author and 4 stars, ships about 222 k
-lines, and its structure and naming suggest heavy machine generation. A
-competent dependency can still die. The plan:
+arris is about two months old (repo created 2026-09-17, first release
+0.1.0 the same day, 0.11.1 on 2026-11-16), has one author and 4 stars,
+ships about 195 k lines over eight crates, and is developed with heavy
+machine assistance. Pre-1.0, every minor release breaks the API (its
+changelog lists each break with a fix). ogeom, the previous choice, had
+the same profile and then changed its licence. A competent dependency can
+still die or change terms. The plan:
 
 1. **Trait boundary.** All kernel use goes through `SolidKernel` (below). No
-   ogeom type leaks into the feature tree, the sync format or the API.
-2. **Exact pin + vendoring right.** It is MIT/Apache-2.0, so if upstream
-   disappears we vendor the crate set and maintain the subset we use
-   (booleans, fillet, mesh, HLR). The maintainer is open to upstreaming
-   fixes, and ogeom tracks its gaps in a public parity table, so fixes have
-   a home.
+   kernel type leaks into the feature tree, the sync format or the API;
+   `solid/arris_kernel.rs` is the only file that names arris.
+2. **Exact pin + vendoring right.** arris 0.11.1 is `MIT OR Apache-2.0`,
+   and so is every crate it adds, so if upstream disappears or relicenses
+   we vendor the pinned crate set and maintain the subset we use
+   (booleans, blends, measure, mesh, section). A licence change upstream
+   only affects versions after the pin.
 3. **A differential corpus.** It runs in CI on both backends, natively and
    in wasm (rungs 3D0a/3D0b), so a regression from a version bump is caught before
    it reaches users.
@@ -357,10 +393,11 @@ kernel ids.
 
 ### Roundovers: exact first, visual fallback
 
-The evidence says exact fillets are feasible: ogeom rounds all 12 edges of a
-board and keeps booleans exact afterwards. So the default is
-`RoundFallback::Error`, a real fillet in the B-rep. ogeom refuses rather
-than guesses on interfering chains. For those, `fallback: "visual"` gives a
+The evidence says exact fillets are feasible: ogeom (smoke test) and arris
+(3D0a) both round all 12 edges of a board and keep booleans exact
+afterwards. So the default is `RoundFallback::Error`, a real fillet in the
+B-rep. arris refuses with a typed error rather than guesses on corners and
+chains its closed forms do not cover. For those, `fallback: "visual"` gives a
 render-only bevel: the renderer smooths the edge normals and the mesh gets a
 small bevel strip. `cad.project` then writes a 2D note ("R3 roundover, all
 outer edges") on the view instead of an arc, and cut lists ignore roundovers
@@ -372,7 +409,7 @@ by `cad.parts()`, so it is never silent.
 | Quantity | Source | Budget |
 |---|---|---|
 | Model geometry | feature tree, f64 mm | exact (analytic) |
-| Kernel tolerance | ogeom `Tolerances::millimetres()` | linear confusion ~1e-7 mm scale (ogeom default) |
+| Kernel tolerance | arris `Precision::DEFAULT` | default entity tolerance 1e-7 mm, maximum 1e-2 mm (arris defaults) |
 | Volume, centroid, distance, interference | kernel, exact surfaces | ≤ 1e-6 relative (corpus-checked against closed form) |
 | Cut-list L x W x T | feature tree (flat parts) | exact numbers as entered; the kernel bbox must agree to 1e-6 mm |
 | Projected 2D edges (lines, circles, ellipses) | analytic re-fit of the source edge (§7) | exact |
@@ -393,10 +430,14 @@ Rules:
 - **Flat faces are free.** Planar faces tessellate exactly at any tolerance.
   For DIY furniture most triangles come from holes, roundovers and turned
   parts, which is where the zoom-adaptive bucket pays off. Smoke data: the
-  rounded board is 3.5 k triangles at chord 0.1 mm and 65 k at 0.01 mm.
+  rounded board is 3.5 k triangles at chord 0.1 mm and 65 k at 0.01 mm
+  with ogeom; with arris (3D0a) it is 608, 3 672 and 32 592 triangles at
+  0.1, 0.01 and 0.001 mm, all watertight.
 - **Evaluation is cached by content hash**, and only edited defs
-  re-evaluate. Smoke timings: about 10 ms for a flat part with two cuts,
-  about 1 s natively and 3 s in wasm for a fully rounded board. Evaluation
+  re-evaluate. Smoke timings (ogeom): about 10 ms for a flat part with two
+  cuts, about 1 s natively and 3 s in wasm for a fully rounded board. arris
+  builds the fully rounded board in about 22 ms natively (release, 3D0a);
+  its wasm time is measured in 3D0b. Evaluation
   therefore runs off the input path: in the browser it is time-sliced
   between frames, and fully rounded parts show their previous B-rep until
   the new one is ready. Moving evaluation into a Web Worker is an open
@@ -431,9 +472,9 @@ entities sit on standard layers:
 
 ### 7.2 Exact paths for prismatic and turned parts
 
-The kernel's HLR returns runs of curves, each split into visible and hidden
-pieces and tagged with its **source edge** (`ogeom::hlr::Source::Edge`). The
-adapter re-fits each run analytically from the source edge's 3D curve and
+The HLR adapter (§7.3) returns runs of curves, each split into visible and
+hidden pieces and tagged with its **source edge** (a kernel edge of the
+B-rep). The adapter re-fits each run analytically from the source edge's 3D curve and
 the parameter interval of the run:
 
 - a 3D line becomes a `Shape::Line`.
@@ -459,31 +500,31 @@ come from two sources:
 
 - **Model edges.** These are lines, circles and B-splines from the B-rep.
 - **Silhouettes of curved faces.** These are computed in closed form by
-  ogeom's `exact` module (`hlr::exact::silhouettes`). For a cylinder or
+  our own code in `project.rs` (arris has no HLR, §5). For a cylinder or
   cone they are rulings (lines), and for a torus or a surface of
   revolution they are exact curves fitted as in §7.2.
 
-The ogeom polygonal output (`DrawnCurve.points`, a polyline) and
-silhouettes taken from mesh edges are **never written to the Document**.
+Polylines and silhouettes taken from mesh edges are **never written to
+the Document**.
 
 **The mesh is only a visibility oracle.** The question "is the point at
 parameter t of this edge hidden?" is answered by casting a ray toward the
 eye against a fine tessellation (0.01 mm chord) of the placed parts. That
-is fast and robust, and it is what ogeom's polygonal HLR does internally.
+is fast and robust, and it is what a polygonal HLR does internally.
 Each visibility change is located by bisection on the exact edge's
 parameter, to 1e-4 mm along the edge. The emitted run is the exact curve
 restricted to `[t0, t1]`. A mesh only ever decides *where* a line turns
 dashed, to a stated tolerance. It never decides *what* the line is.
 
-ogeom's `exact` visibility (asking the faces directly, no mesh) is the
+arris's `query::ray_fire` (a ray against the exact faces, no mesh) is the
 fallback for oracle edge cases (near-grazing faces) and the cross-check
-in the 3D3a corpus tests. Smoke test: the rounded board's front view gave
-55 visible and 46 hidden curves in 9 ms with the polygonal path. When the
-backend is Truck, the same oracle algorithm runs in our adapter
-(`project.rs`) on Truck's mesh, with silhouettes from our own closed-form
-code for planes, cylinders, cones and surfaces of revolution (enough for
-the target domain). The algorithm is small and is ours, so the backend
-never decides the look of a drawing.
+in the 3D3a corpus tests. (In the 2026-10-13 smoke test, ogeom's own
+polygonal HLR gave 55 visible and 46 hidden curves for the rounded
+board's front view in 9 ms.) The same oracle algorithm runs in our
+adapter (`project.rs`) on every backend's mesh, with silhouettes from our
+own closed-form code for planes, cylinders, cones and surfaces of
+revolution (enough for the target domain). The algorithm is small and is
+ours, so the backend never decides the look of a drawing.
 
 **What the rule allows.** AGENTS.md says "never flatten, tessellate, or
 triangulate at load time or in the API layer; flattening happens only
@@ -787,7 +828,7 @@ Expected cut list (checked by hand, and a golden test in rung 3D3b):
 
 | Crate | Kind | Change | Targets |
 |---|---|---|---|
-| `cadview-core` | core | new `solid/` module (types, eval, kernel trait + `OgeomKernel`, `TruckKernel` behind the `kernel-truck` feature for tests, mesh cache, project, section, cutlist, check); `dispatch_3d.rs`; sync maps | wasm32 + native |
+| `cadview-core` | core | new `solid/` module (types, eval, kernel trait + `ArrisKernel`, `TruckKernel` behind the `kernel-truck` feature for tests, mesh cache, project, section, cutlist, check); `dispatch_3d.rs`; sync maps | wasm32 + native |
 | `cadview-render` | shell-shared | new (LADDER-NATIVE N0b): the 2D Vello scene builder, camera, LOD and path cache, extracted from `cadview-web` | wasm32 + native |
 | `cadview-render3d` | shell-shared | new: `Renderer3d` trait, Kiss3d backend, scene sync, camera, headless | wasm32 + native |
 | `cadview-store` | shell-shared | new (LADDER-NATIVE N2b): `DocumentStore` trait, `SingleFileStore`, `FolderStore`, moved out of `cadview-server` | native |
@@ -814,7 +855,7 @@ except through `cad_call` or core's public query functions.
 
 ## 12. Risks
 
-- **ogeom maturity and bus factor.** Mitigations in §5: trait, pin,
+- **Kernel maturity and bus factor (arris).** Mitigations in §5: trait, pin,
   differential corpus, vendoring right, kernel-free documents.
 - **Evaluation latency in the browser.** Fully rounded parts took seconds
   in wasm in the smoke test. Caching, time-slicing and possibly a worker
@@ -828,8 +869,8 @@ except through `cad_call` or core's public query functions.
 - **Headless rendering without a GPU** (lavapipe) is unproven here. It could
   be too slow for 1024 spp. Fallbacks: fewer spp plus the denoiser, a
   GPU-enabled runner for releases, or the Chromium path.
-- **wasm size** grows by about 3.2 MB for the kernel and a few MB for
-  Kiss3d. That is acceptable against today's 24 MB, but rungs 3D0b and 3D2a record it.
+- **wasm size** grows by the kernel (ogeom measured 3.2 MB; arris is
+  measured in 3D0b) and a few MB for Kiss3d. That is acceptable against today's 24 MB, but rungs 3D0b and 3D2a record it.
 - **Floating-point divergence between peers** (wasm vs native) in kernel
   results. Nothing synced depends on it (§4.2). Projections are written
   once by one peer.
@@ -839,7 +880,7 @@ except through `cad_call` or core's public query functions.
 1. Should evaluation run in a Web Worker (a second wasm instance with its
    own `Document` replica fed by Yrs updates)? That would keep the UI fluid
    for heavy parts but doubles memory. Decide after rung 3D0b timings.
-2. STEP export of parts (ogeom and Truck both write STEP), for CNC shops.
+2. STEP export of parts (arris and Truck both write STEP), for CNC shops.
    It is cheap to expose. Should it be a rung or a one-liner later?
 3. Should a section's hatch respect wood grain direction per part
    (end grain vs long grain), as some furniture-drawing conventions do?

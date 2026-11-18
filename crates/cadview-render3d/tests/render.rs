@@ -486,17 +486,22 @@ fn size_and_pixel_ratio() {
     assert_ne!(px(&t, 50, 150), bg);
 }
 
+/// The presentation quality is the path tracer (its evidence is in
+/// `tests/present.rs`): the same scene and options give an image of the
+/// same size.
 #[test]
-fn presentation_quality_is_not_available_yet() {
+fn presentation_quality_is_available() {
     let s = one(&unit_box(), Material::default());
     let opts = RenderOptions3d {
         quality: Quality::Presentation,
+        size: [64, 48],
+        spp: 4,
         ..Default::default()
     };
-    assert_eq!(
-        render_rgba(&s, &opts).unwrap_err(),
-        Render3dError::NotAvailable(Quality::Presentation)
-    );
+    let Some(img) = render("presentation_quality_is_available", &s, &opts) else {
+        return;
+    };
+    assert_eq!((img.width, img.height), (64, 48));
 }
 
 // ── Outline, depth cues, cutaway, many parts, contact sheet ───────────

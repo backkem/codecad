@@ -96,9 +96,19 @@ fn render_3d(
     if opts.backend == cadview_render::Backend::Cpu {
         return Err("render: 3D renders need the GPU (backend \"auto\" or \"gpu\")".into());
     }
-    let quality = match a.get("quality").and_then(Value::as_str) {
-        None => Quality::Working,
-        Some(q) => q.parse::<Quality>().map_err(|e| format!("render: {e}"))?,
+    let quality = match a.get("quality") {
+        None | Some(Value::Null) => Quality::Working,
+        Some(Value::String(q)) => q.parse::<Quality>().map_err(|e| format!("render: {e}"))?,
+        Some(_) => return Err("render: quality is \"working\" or \"presentation\"".into()),
+    };
+    let count = |key: &str, default: u32| -> Result<u32, String> {
+        match a.get(key) {
+            None | Some(Value::Null) => Ok(default),
+            Some(v) => v
+                .as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| format!("render: {key} must be a whole number >= 0")),
+        }
     };
     let opts3 = RenderOptions3d {
         size: opts.size,
@@ -106,6 +116,8 @@ fn render_3d(
         background: None,
         quality,
         fit: true,
+        spp: count("spp", cadview_render3d::trace::DEFAULT_SPP)?,
+        seed: count("seed", 0)?,
     };
     opts3.validate().map_err(|e| format!("render: {e}"))?;
     let built = cadview_core::solid::scene::parts_scene(doc, a, opts3.pixel_size())
@@ -114,16 +126,35 @@ fn render_3d(
         cadview_render3d::render_png(&built.scene, &opts3).map_err(|e| format!("render: {e}"))?;
     let path = write_png(out, base, &rendered.png)?;
     let ms = (start.elapsed().as_secs_f64() * 1000.0 * 10.0).round() / 10.0;
+    let r1 = |v: f64| (v * 10.0).round() / 10.0;
+    let trace = rendered.trace.map(|t| {
+        json!({
+            "samples": t.samples,
+            "passes": t.passes,
+            "instances": t.instances,
+            "triangles": t.triangles,
+            "meshesBuilt": t.meshes_built,
+            "bvhMs": r1(t.bvh_ms),
+            "uploadMs": r1(t.upload_ms),
+            "traceMs": r1(t.trace_ms),
+            "pngMs": r1(rendered.png_ms),
+        })
+    });
     tracing::info!(
-        "Rendered {} parts in 3D, {}x{} PNG on {} to {} ({} bytes, {ms} ms)",
+        "Rendered {} parts in 3D ({}{}), {}x{} PNG on {} to {} ({} bytes, {ms} ms)",
         built.parts,
+        quality.as_str(),
+        rendered
+            .trace
+            .map(|t| format!(", {} spp in {:.0} ms", t.samples, t.trace_ms))
+            .unwrap_or_default(),
         rendered.width,
         rendered.height,
         rendered.adapter,
         path.display(),
         rendered.png.len(),
     );
-    Ok(json!({
+    let mut v = json!({
         "ok": true,
         "path": path.to_string_lossy(),
         "width": rendered.width,
@@ -132,11 +163,17 @@ fn render_3d(
         "bytes": rendered.png.len(),
         "ms": ms,
         "mode": "3d",
+        "quality": quality.as_str(),
         "parts": built.parts,
         "triangles": built.triangles,
         "chord": built.chord,
         "kernel": built.kernel,
-    }))
+    });
+    if let Some(t) = trace {
+        v["samples"] = t["samples"].clone();
+        v["trace"] = t;
+    }
+    Ok(v)
 }
 
 #[cfg(not(feature = "gpu"))]
@@ -184,5 +221,15 @@ mod tests {
         assert!(render_to_file(&doc, r#"{"size":[0,0]}"#, dir.path()).is_err());
         assert!(render_to_file(&doc, r#"{"out":5}"#, dir.path()).is_err());
         assert!(render_to_file(&doc, "not json", dir.path()).is_err());
+        // 3D options are checked before anything is drawn.
+        for bad in [
+            r#"{"mode":"3d","quality":"best"}"#,
+            r#"{"mode":"3d","quality":"presentation","spp":0}"#,
+            r#"{"mode":"3d","quality":"presentation","spp":-4}"#,
+            r#"{"mode":"3d","quality":"presentation","seed":1.5}"#,
+        ] {
+            let e = render_to_file(&doc, bad, dir.path()).unwrap_err();
+            assert!(e.starts_with("render: "), "{bad}: {e}");
+        }
     }
 }

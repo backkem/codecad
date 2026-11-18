@@ -12,6 +12,14 @@
 // every render elsewhere by setting globalThis.EXAMPLE_RENDER_DIR before
 // the script runs, or skip renders with globalThis.EXAMPLE_RENDER = false
 // (the server test does both).
+//
+// The isometric view, and any view with a `present` option, is also
+// rendered in presentation quality (path traced, with the material presets
+// of materials.js looked up by each part's `material` attribute) to
+// target/3d-views/NN-name-render.png (NN-name-VIEW-render.png for other
+// views). `present` holds options for that render only (more materials,
+// an environment, exposure). globalThis.EXAMPLE_PRESENT = false skips
+// these renders; globalThis.EXAMPLE_PRESENT_SPP sets their samples.
 
 const sum = (xs) => xs.reduce((a, b) => a + b, 0);
 
@@ -75,14 +83,38 @@ function start(name) {
     if (built === null) built = Date.now();
     if (globalThis.EXAMPLE_RENDER === false) return;
     const dir = globalThis.EXAMPLE_RENDER_DIR;
-    for (const { as, ...opts } of views) {
+    for (const { as, present, ...opts } of views) {
       const out = as === "iso"
         ? `${dir ?? "examples/3d"}/${name}.png`
         : `${dir ?? "target/3d-views"}/${name}-${as}.png`;
       const r = await cad.render({ size: [960, 640], ...opts, out });
       renderMs += r.ms;
       files.push({ view: as, path: out, ms: r.ms, triangles: r.triangles });
+      if ((as === "iso" || present) && globalThis.EXAMPLE_PRESENT !== false) {
+        await presentation(as, opts, present ?? {});
+      }
     }
+  }
+
+  // The presentation render of one view: the same options, path traced,
+  // with the material presets (plus the view's own `present` options).
+  async function presentation(as, opts, present) {
+    const mat = await cad.use("materials");
+    const { materials: extra, ...rest } = present;
+    const suffix = as === "iso" ? "render" : `${as}-render`;
+    const out = `${globalThis.EXAMPLE_RENDER_DIR ?? "target/3d-views"}/${name}-${suffix}.png`;
+    const spp = globalThis.EXAMPLE_PRESENT_SPP;
+    const r = await cad.render({
+      size: [960, 640],
+      ...opts,
+      quality: "presentation",
+      materials: mat.option(extra ?? {}),
+      ...(spp ? { spp } : {}),
+      ...rest,
+      out,
+    });
+    renderMs += r.ms;
+    files.push({ view: "render", path: out, ms: r.ms, samples: r.samples, trace: r.trace });
   }
 
   // What the script returns: parts, volume, box, checks, files, times.
@@ -101,6 +133,9 @@ function start(name) {
       checks: checks.length,
       ...extra,
       files: files.map((f) => f.path),
+      ...(files.some((f) => f.samples)
+        ? { presentation: files.filter((f) => f.samples).map(({ path, ms, samples, trace }) => ({ path, ms, samples, trace })) }
+        : {}),
       ms: {
         build: built - t0,
         render: Math.round(renderMs * 10) / 10,

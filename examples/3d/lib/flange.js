@@ -30,7 +30,7 @@ function weldNeck(dims = {}, opts = {}) {
   ];
   const part = cad.revolve(profile, {
     plane: "xz", axis: [[0, 0], [0, 1]], name: "weld-neck flange",
-    attrs: { part: "flange", material: "steel" }, ...opts,
+    attrs: { part: "flange", material: "turned steel" }, ...opts,
   });
   // Chamfer the disc's outside edges, picked at +y: a point at +x would
   // be as near to the revolve's seam, which lies in the sketch plane.

@@ -3,6 +3,9 @@
 use crate::Render3dError;
 use cadview_render::MAX_EDGE;
 
+/// Most samples per pixel a presentation render may ask for.
+pub const MAX_SPP: u32 = 1 << 16;
+
 /// Render quality. Both levels draw the same scene and camera.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Quality {
@@ -11,7 +14,7 @@ pub enum Quality {
     #[default]
     Working,
     /// Path traced with materials and environment light, for showing the
-    /// result. Not available yet (ladder rungs 3D5a and 3D5b).
+    /// result ([`crate::trace::PathTracer`]).
     Presentation,
 }
 
@@ -50,6 +53,11 @@ pub struct RenderOptions3d {
     /// Fit the camera to the whole scene before rendering (keeping its
     /// view direction and projection), with the 2D renderer's 10 % margin.
     pub fit: bool,
+    /// Presentation only: samples per pixel to accumulate.
+    pub spp: u32,
+    /// Presentation only: the seed of the random numbers. The same scene,
+    /// samples and seed give the same bytes.
+    pub seed: u32,
 }
 
 impl Default for RenderOptions3d {
@@ -60,6 +68,8 @@ impl Default for RenderOptions3d {
             background: None,
             quality: Quality::Working,
             fit: true,
+            spp: crate::trace::DEFAULT_SPP,
+            seed: 0,
         }
     }
 }
@@ -76,6 +86,9 @@ impl RenderOptions3d {
         }
         if w > MAX_EDGE || h > MAX_EDGE {
             return bad(format!("size {w}x{h} exceeds {MAX_EDGE} px per edge"));
+        }
+        if self.spp == 0 || self.spp > MAX_SPP {
+            return bad(format!("spp must be 1 to {MAX_SPP}, got {}", self.spp));
         }
         Ok(())
     }

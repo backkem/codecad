@@ -52,7 +52,7 @@ const pipe = cad.sweep(ring(), [
   { to: p2 },
   { via: [p2[0], R - R * s45, p2[2] + R * s45], to: e2 },
   { to: end },
-], { plane: { origin: [x0, 0, 0], x: [0, 1, 0], normal: [1, 0, 0] }, name: "pipe", attrs: { part: "pipe", size: "DN50" } });
+], { plane: { origin: [x0, 0, 0], x: [0, 1, 0], normal: [1, 0, 0] }, name: "pipe", attrs: { part: "pipe", size: "DN50", material: "steel" } });
 
 // The flanges: the second's hub on the pipe's end, raised face out along
 // +y; the third face to face with it; the first turned to face -x.
@@ -62,12 +62,12 @@ const f3 = cad.copy3d(f.part, { rotate: { angle: -90, axis: [1, 0, 0] }, move: f
 cad.rotate3d(f.part, { angle: 90, axis: [0, 1, 0] });
 const stub = cad.extrude(ring(), {
   plane: { origin: [face[0], face[1] + H, face[2]], x: [1, 0, 0], normal: [0, 1, 0] },
-  distance: STUB, name: "stub", attrs: { part: "pipe", size: "DN50" },
+  distance: STUB, name: "stub", attrs: { part: "pipe", size: "DN50", material: "steel" },
 });
 
 // ── Supports: a plate from the ground with a saddle cut to the pipe ──
 function support(min, max, cradle) {
-  const s = sh.box(min, max, { name: "support", attrs: { part: "support" } });
+  const s = sh.box(min, max, { name: "support", attrs: { part: "support", material: "red paint" } });
   cad.cut(s, cradle);
   return s;
 }

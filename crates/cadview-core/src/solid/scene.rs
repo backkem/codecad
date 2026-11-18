@@ -14,13 +14,21 @@
 //! values of that attribute one colour, and a value written `"#rrggbb"` is
 //! used as the colour itself. The core gives the attribute no meaning
 //! beyond this option.
+//!
+//! Materials work the same way: `materials: {attr, map, default}` maps the
+//! values of one attribute to physical parameters (colour, metallic,
+//! roughness, transmission, index of refraction, emission, clear coat, a
+//! procedural pattern). The names in the map are the script's; the core
+//! sees only numbers. `environment` (a studio or sky dome with a sun) and
+//! `exposure` (stops) light the presentation render.
 
 use serde_json::Value;
 
 use crate::document::Document;
 use crate::scene3d::{
-    palette_color, Background, Camera3d, ClipMode, ClipPlane, Ground, Material, NamedView,
-    Occlusion, Projection, Scene3d, VIEWER_BACKGROUND,
+    palette_color, srgb_to_linear, Background, Bands, Brushed, Camera3d, ClipMode, ClipPlane,
+    Environment, Ground, LightFrame, Material, NamedView, Occlusion, Pattern, PatternAxis,
+    Projection, Scene3d, VIEWER_BACKGROUND,
 };
 use crate::solid::kernel::Aabb3;
 use crate::solid::part::part_key;
@@ -140,6 +148,293 @@ fn clip_planes(o: &Value) -> Result<Vec<ClipPlane>, String> {
     }
 }
 
+fn num(v: &Value, key: &str, what: &str, lo: f64, hi: f64) -> Result<Option<f64>, String> {
+    match v.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(x) => x
+            .as_f64()
+            .filter(|f| f.is_finite() && (lo..=hi).contains(f))
+            .map(Some)
+            .ok_or_else(|| format!("{what}.{key} is a number from {lo} to {hi}")),
+    }
+}
+
+fn linear(c: [u8; 3]) -> [f64; 3] {
+    c.map(srgb_to_linear)
+}
+
+fn pattern_axis(v: Option<&Value>, what: &str) -> Result<PatternAxis, String> {
+    match v {
+        None | Some(Value::Null) => Ok(PatternAxis::Longest),
+        Some(Value::String(s)) if s == "long" || s == "longest" => Ok(PatternAxis::Longest),
+        Some(Value::String(s)) if s == "short" || s == "shortest" => Ok(PatternAxis::Shortest),
+        Some(Value::String(s)) if s == "symmetry" => Ok(PatternAxis::Symmetry),
+        Some(a) => {
+            let p = p3(a, &format!("{what}.axis"))?;
+            Vec3::new(p.x, p.y, p.z)
+                .normalized()
+                .map(PatternAxis::Vector)
+                .ok_or_else(|| format!("{what}.axis must be a non-zero vector"))
+        }
+    }
+}
+
+fn pattern(v: &Value, base: &Material, what: &str) -> Result<Pattern, String> {
+    let what = format!("{what}.pattern");
+    let kind = v.get("kind").and_then(Value::as_str).unwrap_or("flat");
+    match kind {
+        "flat" => Ok(Pattern::Flat),
+        "bands" => {
+            let spacing = num(v, "spacing", &what, 1e-3, 1e6)?.unwrap_or(4.0);
+            let color = match v.get("color") {
+                None | Some(Value::Null) => base.base_color.map(|c| c * 0.45),
+                Some(c) => linear(rgb(c, &format!("{what}.color"))?),
+            };
+            Ok(Pattern::Bands(Bands {
+                axis: pattern_axis(v.get("axis"), &what)?,
+                spacing,
+                color,
+                strength: num(v, "strength", &what, 0.0, 1.0)?.unwrap_or(0.6),
+                warp: num(v, "warp", &what, 0.0, 1e6)?.unwrap_or(0.6 * spacing),
+                distance: num(v, "distance", &what, -1e7, 1e7)?.unwrap_or(40.0 * spacing),
+            }))
+        }
+        "brushed" => Ok(Pattern::Brushed(Brushed {
+            axis: pattern_axis(v.get("axis"), &what)?,
+            anisotropy: num(v, "anisotropy", &what, 0.0, 1.0)?.unwrap_or(0.7),
+            streaks: num(v, "streaks", &what, 0.0, 1.0)?.unwrap_or(0.5),
+            scale: num(v, "scale", &what, 1e-4, 1e4)?.unwrap_or(0.15),
+            circular: match v.get("circular") {
+                None | Some(Value::Null) => false,
+                Some(Value::Bool(b)) => *b,
+                Some(_) => return Err(format!("{what}.circular is true or false")),
+            },
+        })),
+        other => Err(format!(
+            "{what}.kind is \"flat\", \"bands\" or \"brushed\", got '{other}'"
+        )),
+    }
+}
+
+/// One material of the `materials` option over `base` (the part's colour
+/// from `colorBy`): `color` (sRGB), `metallic`, `roughness`,
+/// `transmission`, `ior`, `emission` (a strength, or `{color, strength}`),
+/// `clearcoat`, `clearcoatRoughness`, `pattern`.
+fn material(v: &Value, base: Material, what: &str) -> Result<Material, String> {
+    if !v.is_object() {
+        return Err(format!("{what} is an object of material parameters"));
+    }
+    let mut m = base;
+    if let Some(c) = v.get("color").filter(|c| !c.is_null()) {
+        m.base_color = linear(rgb(c, &format!("{what}.color"))?);
+    }
+    let set = |field: &mut f64, key: &str, lo: f64, hi: f64| -> Result<(), String> {
+        if let Some(x) = num(v, key, what, lo, hi)? {
+            *field = x;
+        }
+        Ok(())
+    };
+    set(&mut m.metallic, "metallic", 0.0, 1.0)?;
+    set(&mut m.roughness, "roughness", 0.0, 1.0)?;
+    set(&mut m.transmission, "transmission", 0.0, 1.0)?;
+    set(&mut m.ior, "ior", 1.0, 3.0)?;
+    set(&mut m.clearcoat, "clearcoat", 0.0, 1.0)?;
+    set(&mut m.clearcoat_roughness, "clearcoatRoughness", 0.0, 1.0)?;
+    match v.get("emission") {
+        None | Some(Value::Null) => {}
+        Some(Value::Number(n)) => {
+            let s = n
+                .as_f64()
+                .filter(|s| s.is_finite() && *s >= 0.0)
+                .ok_or_else(|| format!("{what}.emission is a strength >= 0"))?;
+            m.emission = [s; 3];
+        }
+        Some(e @ Value::Object(_)) => {
+            let s = num(e, "strength", &format!("{what}.emission"), 0.0, 1e6)?.unwrap_or(1.0);
+            let c = match e.get("color") {
+                None | Some(Value::Null) => [1.0; 3],
+                Some(c) => linear(rgb(c, &format!("{what}.emission.color"))?),
+            };
+            m.emission = c.map(|c| c * s);
+        }
+        Some(_) => {
+            return Err(format!(
+                "{what}.emission is a strength or {{color, strength}}"
+            ))
+        }
+    }
+    if let Some(p) = v.get("pattern").filter(|p| !p.is_null()) {
+        m.pattern = pattern(p, &m, what)?;
+    }
+    Ok(m)
+}
+
+/// The `materials` render option: `{attr, map: {value: material}, default?}`.
+/// A part whose attribute value is a key of `map` gets that material over
+/// its `colorBy` colour; other parts get `default`, or keep the colour as a
+/// plain material. The core gives the attribute no other meaning.
+struct MaterialMap {
+    attr: Option<String>,
+    map: Vec<(String, Value)>,
+    default: Option<Value>,
+}
+
+impl MaterialMap {
+    fn from_options(o: &Value) -> Result<MaterialMap, String> {
+        let none = MaterialMap {
+            attr: None,
+            map: Vec::new(),
+            default: None,
+        };
+        let Some(v) = o.get("materials").filter(|v| !v.is_null()) else {
+            return Ok(none);
+        };
+        let shape = "materials is {attr: \"key\", map: {value: {color, roughness, ...}}, default?}";
+        if !v.is_object() {
+            return Err(shape.into());
+        }
+        let attr = match v.get("attr") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(s)) => Some(s.clone()),
+            Some(_) => return Err(shape.into()),
+        };
+        let map = match v.get("map") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(Value::Object(m)) => m.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            Some(_) => return Err(shape.into()),
+        };
+        if attr.is_none() && !map.is_empty() {
+            return Err("materials.map needs materials.attr (the attribute to look up)".into());
+        }
+        let m = MaterialMap {
+            attr,
+            map,
+            default: v.get("default").filter(|d| !d.is_null()).cloned(),
+        };
+        // Check every entry now, so a mistake shows even when no part uses it.
+        for (k, entry) in &m.map {
+            material(entry, Material::default(), &format!("materials.map.{k}"))?;
+        }
+        if let Some(d) = &m.default {
+            material(d, Material::default(), "materials.default")?;
+        }
+        Ok(m)
+    }
+
+    fn material_of(&self, p: &crate::solid::Part, base: Material) -> Material {
+        let value = self
+            .attr
+            .as_ref()
+            .and_then(|k| p.attrs.get(k))
+            .map(|v| match v {
+                crate::attrs::AttrValue::Str(s) => s.clone(),
+                crate::attrs::AttrValue::Num(n) => n.to_string(),
+                crate::attrs::AttrValue::Bool(b) => b.to_string(),
+            });
+        let entry = value
+            .and_then(|v| self.map.iter().find(|(k, _)| *k == v))
+            .map(|(k, e)| (format!("materials.map.{k}"), e))
+            .or_else(|| {
+                self.default
+                    .as_ref()
+                    .map(|d| ("materials.default".into(), d))
+            });
+        match entry {
+            // Checked in from_options.
+            Some((what, e)) => material(e, base, &what).unwrap_or(base),
+            None => base,
+        }
+    }
+}
+
+/// The `environment` render option: `"studio"`, `"sky"`, or `{preset?,
+/// zenith?, horizon?, ground?, intensity?, sun?}` with sRGB colours and `sun`
+/// false or `{direction, angle, irradiance, color, frame: "camera" |
+/// "world"}`.
+fn environment(v: &Value) -> Result<Environment, String> {
+    let preset = |name: &str| match name {
+        "studio" => Ok(Environment::studio()),
+        "sky" => Ok(Environment::sky()),
+        other => Err(format!(
+            "environment is \"studio\", \"sky\" or an object, got '{other}'"
+        )),
+    };
+    let obj = match v {
+        Value::String(s) => return preset(s),
+        Value::Object(_) => v,
+        _ => return Err("environment is \"studio\", \"sky\" or an object".into()),
+    };
+    let mut env = match obj.get("preset").and_then(Value::as_str) {
+        None => Environment::studio(),
+        Some(p) => preset(p)?,
+    };
+    for (key, field) in [
+        ("zenith", &mut env.zenith),
+        ("horizon", &mut env.horizon),
+        ("ground", &mut env.ground),
+    ] {
+        if let Some(c) = obj.get(key).filter(|c| !c.is_null()) {
+            *field = linear(rgb(c, &format!("environment.{key}"))?);
+        }
+    }
+    if let Some(k) = num(obj, "intensity", "environment", 0.0, 1e6)? {
+        env.intensity = k;
+    }
+    match obj.get("sun") {
+        None | Some(Value::Null) => {}
+        Some(Value::Bool(false)) => env.sun = None,
+        Some(s @ Value::Object(_)) => {
+            let mut sun = env.sun.unwrap_or(crate::scene3d::Sun {
+                direction: Vec3::new(-0.45, -0.45, 0.766),
+                frame: LightFrame::World,
+                angle_deg: 0.53,
+                irradiance: 2.0,
+                color: [1.0; 3],
+            });
+            if let Some(d) = s.get("direction").filter(|d| !d.is_null()) {
+                let p = p3(d, "environment.sun.direction")?;
+                sun.direction = Vec3::new(p.x, p.y, p.z)
+                    .normalized()
+                    .ok_or("environment.sun.direction must be a non-zero vector")?;
+                // A direction given without a frame is a world direction.
+                sun.frame = LightFrame::World;
+            }
+            match s.get("frame").and_then(Value::as_str) {
+                None => {}
+                Some("camera") => sun.frame = LightFrame::Camera,
+                Some("world") => sun.frame = LightFrame::World,
+                Some(f) => {
+                    return Err(format!(
+                        "environment.sun.frame is \"camera\" or \"world\", got '{f}'"
+                    ))
+                }
+            }
+            if let Some(a) = num(
+                s,
+                "angle",
+                "environment.sun",
+                crate::scene3d::MIN_SUN_ANGLE_DEG,
+                90.0,
+            )? {
+                sun.angle_deg = a;
+            }
+            if let Some(e) = num(s, "irradiance", "environment.sun", 0.0, 1e6)? {
+                sun.irradiance = e;
+            }
+            if let Some(c) = s.get("color").filter(|c| !c.is_null()) {
+                sun.color = linear(rgb(c, "environment.sun.color")?);
+            }
+            env.sun = Some(sun);
+        }
+        Some(_) => {
+            return Err(
+                "environment.sun is false or {direction, angle, irradiance, color, frame}".into(),
+            )
+        }
+    }
+    Ok(env)
+}
+
 /// Builds the scene `cad.render` draws for the document's parts, for an
 /// image of `pixels` (width, height in device pixels).
 pub fn parts_scene(doc: &Document, o: &Value, pixels: (u32, u32)) -> Result<PartsScene, String> {
@@ -245,6 +540,7 @@ pub fn parts_scene(doc: &Document, o: &Value, pixels: (u32, u32)) -> Result<Part
     for (i, p) in doc.parts.iter().enumerate() {
         colors.insert(p.id, color_of(p, i));
     }
+    let materials = MaterialMap::from_options(o)?;
     let mut triangles = 0;
     for p in &parts {
         let def = &doc.part_defs[&p.def];
@@ -253,7 +549,20 @@ pub fn parts_scene(doc: &Document, o: &Value, pixels: (u32, u32)) -> Result<Part
             .map_err(|e| format!("part {}: {e}", part_key(p.id)))?;
         triangles += mesh.triangles.len();
         let [r, g, b] = colors[&p.id];
-        scene.add_shared(mesh, p.placement, Material::from_srgb8(r, g, b));
+        let base = Material::from_srgb8(r, g, b);
+        scene.add_shared(mesh, p.placement, materials.material_of(p, base));
+    }
+    if let Some(env) = o.get("environment").filter(|v| !v.is_null()) {
+        scene.environment = environment(env)?;
+    }
+    match o.get("exposure") {
+        None | Some(Value::Null) => {}
+        Some(v) => {
+            scene.exposure = v
+                .as_f64()
+                .filter(|e| e.is_finite() && e.abs() <= 20.0)
+                .ok_or("exposure is a number of stops from -20 to 20")?
+        }
     }
 
     match o.get("background") {
@@ -339,4 +648,121 @@ pub fn parts_scene(doc: &Document, o: &Value, pixels: (u32, u32)) -> Result<Part
         chord,
         kernel: solids.kernel_name(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn materials_option_maps_attribute_values_to_parameters() {
+        let o = json!({"materials": {
+            "attr": "material",
+            "map": {
+                "oak": {"color": "#b08a5a", "roughness": 0.6, "clearcoat": 0.3,
+                        "pattern": {"kind": "bands", "spacing": 3, "axis": "long"}},
+                "glass": {"transmission": 1, "ior": 1.52, "roughness": 0},
+                "lamp": {"emission": {"color": [255, 128, 0], "strength": 4}},
+                "turned": {"metallic": 1, "pattern": {"kind": "brushed", "axis": "symmetry", "circular": true}}
+            },
+            "default": {"roughness": 0.9}
+        }});
+        let m = MaterialMap::from_options(&o).unwrap();
+        assert_eq!(m.attr.as_deref(), Some("material"));
+        let base = Material::from_srgb8(10, 20, 30);
+        let oak = material(
+            &m.map.iter().find(|(k, _)| k == "oak").unwrap().1,
+            base,
+            "t",
+        )
+        .unwrap();
+        assert_eq!(oak.base_color, [0xb0, 0x8a, 0x5a].map(srgb_to_linear));
+        assert_eq!((oak.roughness, oak.clearcoat), (0.6, 0.3));
+        match oak.pattern {
+            Pattern::Bands(b) => {
+                assert_eq!((b.spacing, b.axis), (3.0, PatternAxis::Longest));
+                // The ring colour defaults to a darker base colour.
+                assert!(b.color[0] < oak.base_color[0]);
+            }
+            other => panic!("{other:?}"),
+        }
+        let glass = material(
+            &m.map.iter().find(|(k, _)| k == "glass").unwrap().1,
+            base,
+            "t",
+        )
+        .unwrap();
+        assert_eq!((glass.transmission, glass.ior), (1.0, 1.52));
+        // No colour given: the part's colour stays.
+        assert_eq!(glass.base_color, base.base_color);
+        let lamp = material(
+            &m.map.iter().find(|(k, _)| k == "lamp").unwrap().1,
+            base,
+            "t",
+        )
+        .unwrap();
+        assert_eq!(lamp.emission, [4.0, 4.0 * srgb_to_linear(128), 0.0]);
+        let turned = material(
+            &m.map.iter().find(|(k, _)| k == "turned").unwrap().1,
+            base,
+            "t",
+        )
+        .unwrap();
+        assert!(matches!(
+            turned.pattern,
+            Pattern::Brushed(Brushed {
+                axis: PatternAxis::Symmetry,
+                circular: true,
+                ..
+            })
+        ));
+
+        for bad in [
+            json!({"materials": 5}),
+            json!({"materials": {"map": {"oak": {}}}}),
+            json!({"materials": {"attr": "m", "map": {"oak": {"roughness": 2}}}}),
+            json!({"materials": {"attr": "m", "map": {"oak": {"pattern": {"kind": "marble"}}}}}),
+            json!({"materials": {"attr": "m", "map": {"oak": {"ior": 0.5}}}}),
+            json!({"materials": {"attr": "m", "default": {"emission": "bright"}}}),
+        ] {
+            assert!(MaterialMap::from_options(&bad).is_err(), "{bad}");
+        }
+        assert!(MaterialMap::from_options(&json!({}))
+            .unwrap()
+            .map
+            .is_empty());
+    }
+
+    #[test]
+    fn environment_option_presets_and_overrides() {
+        assert_eq!(environment(&json!("sky")).unwrap(), Environment::sky());
+        assert_eq!(
+            environment(&json!("studio")).unwrap(),
+            Environment::studio()
+        );
+        let e = environment(&json!({
+            "preset": "sky", "intensity": 2, "zenith": "#000000",
+            "sun": {"direction": [0, 0, 1], "angle": 5, "irradiance": 3}
+        }))
+        .unwrap();
+        assert_eq!((e.intensity, e.zenith), (2.0, [0.0; 3]));
+        let sun = e.sun.unwrap();
+        assert_eq!(
+            (sun.angle_deg, sun.irradiance, sun.frame),
+            (5.0, 3.0, LightFrame::World)
+        );
+        assert_eq!(sun.direction, Vec3::Z);
+        assert!(environment(&json!({"sun": false})).unwrap().sun.is_none());
+        for bad in [
+            json!("night"),
+            json!(3),
+            json!({"sun": {"angle": 0}}),
+            json!({"sun": {"direction": [0, 0, 0]}}),
+            json!({"sun": {"frame": "eye"}}),
+            json!({"intensity": -1}),
+        ] {
+            assert!(environment(&bad).is_err(), "{bad}");
+        }
+    }
 }

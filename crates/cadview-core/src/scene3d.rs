@@ -354,6 +354,12 @@ pub fn encode_srgb(c: f64) -> u8 {
 }
 
 /// A simple physically based material.
+///
+/// The first three fields are what every backend draws. The rest are
+/// physical parameters for the presentation render (a path tracer); the
+/// working render ignores them and shades `base_color`, `metallic` and
+/// `roughness` only. None of them names a material: "oak" or "steel" is a
+/// script's word, mapped to these numbers by a render option.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Material {
     /// Linear-light base colour (albedo for dielectrics, reflectance for
@@ -363,6 +369,24 @@ pub struct Material {
     pub metallic: f64,
     /// Perceptual roughness, 0 = mirror, 1 = fully rough.
     pub roughness: f64,
+    /// Share of light that passes through the surface as through a
+    /// dielectric (glass), 0..1. Light that enters is tinted by
+    /// `base_color` once.
+    pub transmission: f64,
+    /// Index of refraction of the dielectric: it sets the reflectance at
+    /// normal incidence of dielectric surfaces, `((ior - 1) / (ior + 1))^2`
+    /// (0.04 at 1.5), and the bending of transmitted light. 1 gives a
+    /// surface with no specular reflection at all (pure Lambert).
+    pub ior: f64,
+    /// Emitted radiance, linear light (0 for none).
+    pub emission: [f64; 3],
+    /// A clear dielectric coat over the surface (lacquer, varnish, gloss
+    /// paint), 0..1; reflectance 0.04 at normal incidence.
+    pub clearcoat: f64,
+    /// Perceptual roughness of the coat.
+    pub clearcoat_roughness: f64,
+    /// A procedural surface pattern that needs no texture coordinates.
+    pub pattern: Pattern,
 }
 
 impl Material {
@@ -372,12 +396,415 @@ impl Material {
             base_color: [r, g, b].map(srgb_to_linear),
             metallic: 0.0,
             roughness: 0.5,
+            transmission: 0.0,
+            ior: DEFAULT_IOR,
+            emission: [0.0; 3],
+            clearcoat: 0.0,
+            clearcoat_roughness: 0.1,
+            pattern: Pattern::Flat,
+        }
+    }
+
+    /// Reflectance at normal incidence of a dielectric with this
+    /// material's index of refraction.
+    pub fn dielectric_f0(&self) -> f64 {
+        let n = self.ior.max(1.0);
+        ((n - 1.0) / (n + 1.0)).powi(2)
+    }
+}
+
+/// Default index of refraction (common glass, lacquer, plastics).
+pub const DEFAULT_IOR: f64 = 1.5;
+
+/// A direction a pattern runs along, in a mesh's own frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PatternAxis {
+    /// The mesh's longest direction: the principal axis of its surface
+    /// with the largest spread (the length of a board or a bar, whatever
+    /// way it was modelled).
+    Longest,
+    /// The principal axis with the smallest spread (through the thickness
+    /// of a board).
+    Shortest,
+    /// The principal axis whose spread differs most from the other two,
+    /// which are about equal: the axis of a turned part (a disc, a shaft,
+    /// a ring).
+    Symmetry,
+    /// A direction in the mesh's own frame (need not be unit).
+    Vector(Vec3),
+}
+
+/// A procedural pattern on a surface, evaluated at the surface point in the
+/// mesh's own frame, so it moves with the part. Patterns need no texture
+/// coordinates. Only the presentation render draws them.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum Pattern {
+    /// One colour.
+    #[default]
+    Flat,
+    /// Rings about an axis, with noise ([`Bands`]): on a face that runs
+    /// along the axis they show as bands along it (wood grain).
+    Bands(Bands),
+    /// Fine streaks along an axis and highlights stretched across it
+    /// ([`Brushed`]): brushed or ground metal.
+    Brushed(Brushed),
+}
+
+/// Rings about an axis: see [`Pattern::Bands`] and [`pattern_albedo`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Bands {
+    /// The direction the rings run along.
+    pub axis: PatternAxis,
+    /// Distance between neighbouring rings (mm).
+    pub spacing: f64,
+    /// Linear colour at the dark edge of each ring.
+    pub color: [f64; 3],
+    /// How far toward `color` the dark edge goes, 0..1.
+    pub strength: f64,
+    /// How far the rings wander (mm, amplitude of the noise).
+    pub warp: f64,
+    /// Distance of the ring axis from the centre of the mesh's box, toward
+    /// its thinnest side (mm). 0 puts the axis through the middle.
+    pub distance: f64,
+}
+
+/// Streaks along an axis: see [`Pattern::Brushed`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Brushed {
+    /// The direction of the streaks.
+    pub axis: PatternAxis,
+    /// 0 = round highlights, 1 = highlights stretched far across the
+    /// streaks (roughness along the streaks falls to a fifth).
+    pub anisotropy: f64,
+    /// Contrast of the visible streaks, 0..1.
+    pub streaks: f64,
+    /// Width of a streak (mm).
+    pub scale: f64,
+    /// Streaks run in circles about the axis (a turned or faced part)
+    /// instead of along it.
+    pub circular: bool,
+}
+
+/// Where a pattern sits on one drawn item: its axis and origin in the
+/// mesh's own frame, and a seed so copies of one mesh do not look alike.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PatternFrame {
+    /// Unit axis, mesh frame.
+    pub axis: Vec3,
+    /// A point on the axis, mesh frame.
+    pub origin: Point3,
+    /// Varies the noise per item.
+    pub seed: u32,
+}
+
+/// The PCG hash (Jarzynski and Olano, "Hash Functions for GPU Rendering",
+/// 2020), the integer hash the patterns and the path tracer's random
+/// numbers are built on. Backends reproduce it bit for bit.
+pub fn pcg_hash(x: u32) -> u32 {
+    let state = x.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
+    let word = ((state >> ((state >> 28).wrapping_add(4))) ^ state).wrapping_mul(277_803_737);
+    (word >> 22) ^ word
+}
+
+fn lattice(ix: i32, iy: i32, iz: i32, seed: u32) -> f64 {
+    let h = pcg_hash(ix as u32 ^ pcg_hash(iy as u32 ^ pcg_hash(iz as u32 ^ pcg_hash(seed))));
+    h as f64 / 4_294_967_296.0
+}
+
+/// Smooth value noise in [0, 1): random values on the integer lattice,
+/// blended with the quintic fade `6t^5 - 15t^4 + 10t^3`.
+pub fn value_noise(p: [f64; 3], seed: u32) -> f64 {
+    let f = p.map(f64::floor);
+    let i = f.map(|v| v as i32);
+    let t = [p[0] - f[0], p[1] - f[1], p[2] - f[2]];
+    let s = t.map(|t| t * t * t * (t * (t * 6.0 - 15.0) + 10.0));
+    let lerp = |a: f64, b: f64, t: f64| a + (b - a) * t;
+    let c = |dx: i32, dy: i32, dz: i32| lattice(i[0] + dx, i[1] + dy, i[2] + dz, seed);
+    let x00 = lerp(c(0, 0, 0), c(1, 0, 0), s[0]);
+    let x10 = lerp(c(0, 1, 0), c(1, 1, 0), s[0]);
+    let x01 = lerp(c(0, 0, 1), c(1, 0, 1), s[0]);
+    let x11 = lerp(c(0, 1, 1), c(1, 1, 1), s[0]);
+    lerp(lerp(x00, x10, s[1]), lerp(x01, x11, s[1]), s[2])
+}
+
+/// Coordinates of `p` (mesh frame) relative to a pattern frame: distance
+/// along the axis, and the offset across it.
+fn pattern_coords(pf: &PatternFrame, p: Point3) -> (f64, Vec3) {
+    let q = p - pf.origin;
+    let along = q.dot(pf.axis);
+    (along, q - pf.axis.scale(along))
+}
+
+/// The ring weight of [`Bands`] at `p` (mesh frame), in [0, 1]: 0 in the
+/// light part of a ring, rising to 1 at its dark edge, then dropping
+/// sharply to 0 (light early wood, a thin dark late-wood edge).
+pub fn bands_weight(b: &Bands, pf: &PatternFrame, p: Point3) -> f64 {
+    let (along, across) = pattern_coords(pf, p);
+    let spacing = b.spacing.max(1e-6);
+    // Noise in a frame stretched along the axis, so the rings wander
+    // slowly along the grain.
+    let k = 1.0 / (4.0 * spacing);
+    let n = value_noise(
+        [across.x * k, across.y * k, across.z * k + along * k * 0.125],
+        pf.seed,
+    );
+    let r = across.length() + b.warp * (2.0 * n - 1.0);
+    let f = (r / spacing).rem_euclid(1.0);
+    f * f * f
+}
+
+/// Fine streak noise of a pattern at `p`, in [0, 1): long thin streaks
+/// along the axis, `scale` mm wide; or, `circular`, circles about the axis
+/// (noise of the radius and the height along the axis only).
+fn streak_noise(pf: &PatternFrame, p: Point3, scale: f64, circular: bool) -> f64 {
+    let (along, across) = pattern_coords(pf, p);
+    let k = 1.0 / scale.max(1e-6);
+    let q = if circular {
+        [across.length() * k, along * k, 0.0]
+    } else {
+        [across.x * k, across.y * k, across.z * k + along * k * 0.02]
+    };
+    value_noise(q, pf.seed ^ 0x9e37_79b9)
+}
+
+/// The direction of the streaks at `p` (mesh frame, unit): the pattern's
+/// axis, or for circular brushing the tangent of the circle about it (the
+/// axis itself on the axis).
+pub fn streak_direction(m: &Material, pf: &PatternFrame, p: Point3) -> Vec3 {
+    match m.pattern {
+        Pattern::Brushed(b) if b.circular => {
+            pf.axis.cross(p - pf.origin).normalized().unwrap_or(pf.axis)
+        }
+        _ => pf.axis,
+    }
+}
+
+/// The base colour of material `m` at `p` (mesh frame) after its pattern:
+/// what the presentation render uses as albedo there. Backends reproduce
+/// it (the noise to float precision).
+///
+/// - Bands: `mix(base, color, strength w) (1 - 0.12 strength g)` with the
+///   ring weight `w` ([`bands_weight`]) and fine pores `g` (streak noise
+///   at a fifth of the ring spacing).
+/// - Brushed: `base (1 - 0.25 streaks s)` with streak noise `s`.
+pub fn pattern_albedo(m: &Material, pf: &PatternFrame, p: Point3) -> [f64; 3] {
+    let base = m.base_color.map(|c| c.clamp(0.0, 1.0));
+    match m.pattern {
+        Pattern::Flat => base,
+        Pattern::Bands(b) => {
+            let s = b.strength.clamp(0.0, 1.0);
+            let w = s * bands_weight(&b, pf, p);
+            let g = streak_noise(pf, p, 0.2 * b.spacing, false);
+            let dim = 1.0 - 0.12 * s * g;
+            std::array::from_fn(|i| (base[i] + (b.color[i].clamp(0.0, 1.0) - base[i]) * w) * dim)
+        }
+        Pattern::Brushed(br) => {
+            let s = streak_noise(pf, p, br.scale, br.circular);
+            let dim = 1.0 - 0.25 * br.streaks.clamp(0.0, 1.0) * s;
+            base.map(|c| c * dim)
         }
     }
 }
 
+/// The roughness of material `m` at `p` after its pattern, as `(along,
+/// across)` the streaks ([`streak_direction`]): equal for no pattern and for bands; a
+/// brushed surface is smoother along its streaks (by `1 - 0.8
+/// anisotropy`) and its roughness varies with the streaks by up to 30 %.
+pub fn pattern_roughness(m: &Material, pf: &PatternFrame, p: Point3) -> (f64, f64) {
+    let r = m.roughness.clamp(0.0, 1.0);
+    match m.pattern {
+        Pattern::Brushed(br) => {
+            let s = streak_noise(pf, p, br.scale, br.circular);
+            let r = (r * (1.0 + 0.6 * br.streaks.clamp(0.0, 1.0) * (s - 0.5))).clamp(0.0, 1.0);
+            (r * (1.0 - 0.8 * br.anisotropy.clamp(0.0, 1.0)), r)
+        }
+        _ => (r, r),
+    }
+}
+
+/// The principal axes of a mesh's surface ([`principal_axes`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PrincipalAxes {
+    /// Unit axes, the largest spread first.
+    pub axes: [Vec3; 3],
+    /// The variance of the surface along each axis (mm^2).
+    pub spreads: [f64; 3],
+    /// The area-weighted centroid of the surface.
+    pub centroid: Point3,
+}
+
+impl PrincipalAxes {
+    /// The axis whose spread differs most from the other two, which are
+    /// closer to each other: the axis of a turned part.
+    pub fn symmetry_axis(&self) -> Vec3 {
+        let [a, b, c] = self.spreads.map(|s| s.max(1e-300));
+        if (a / b).ln() < (b / c).ln() {
+            self.axes[2]
+        } else {
+            self.axes[0]
+        }
+    }
+}
+
+/// Principal axes of a mesh's surface: unit eigenvectors of the
+/// area-weighted covariance of its triangles, the largest spread first.
+/// Deterministic (Jacobi rotations); a degenerate mesh gives X, Y, Z.
+pub fn principal_axes(mesh: &RenderMesh) -> PrincipalAxes {
+    let mut area = 0.0;
+    let mut mean = [0.0f64; 3];
+    let mut tris = Vec::with_capacity(mesh.triangles.len());
+    for t in &mesh.triangles {
+        let [a, b, c] = t.map(|i| mesh.positions[i as usize]);
+        let w = (b - a).cross(c - a).length() * 0.5;
+        if !(w.is_finite() && w > 0.0) {
+            continue;
+        }
+        let cen = [
+            (a.x + b.x + c.x) / 3.0,
+            (a.y + b.y + c.y) / 3.0,
+            (a.z + b.z + c.z) / 3.0,
+        ];
+        for k in 0..3 {
+            mean[k] += w * cen[k];
+        }
+        area += w;
+        tris.push((w, [a, b, c]));
+    }
+    if area <= 0.0 {
+        return PrincipalAxes {
+            axes: [Vec3::X, Vec3::Y, Vec3::Z],
+            spreads: [0.0; 3],
+            centroid: Point3::ORIGIN,
+        };
+    }
+    let mean = mean.map(|v| v / area);
+    // Covariance of a uniform density over each triangle about `mean`:
+    // (sum of outer products of the three corners plus nine times the
+    // centroid's) / 12, weighted by area.
+    let mut cov = [[0.0f64; 3]; 3];
+    for (w, corners) in &tris {
+        let d: Vec<[f64; 3]> = corners
+            .iter()
+            .map(|p| [p.x - mean[0], p.y - mean[1], p.z - mean[2]])
+            .collect();
+        let g: [f64; 3] = std::array::from_fn(|k| (d[0][k] + d[1][k] + d[2][k]) / 3.0);
+        for i in 0..3 {
+            for j in 0..3 {
+                let s: f64 = d.iter().map(|v| v[i] * v[j]).sum::<f64>() + 9.0 * g[i] * g[j];
+                cov[i][j] += w * s / 12.0;
+            }
+        }
+    }
+    let (values, vectors) = jacobi_eigen(cov);
+    let mut order = [0usize, 1, 2];
+    order.sort_by(|&a, &b| values[b].total_cmp(&values[a]));
+    let axes = order.map(|k| {
+        let v = Vec3::new(vectors[0][k], vectors[1][k], vectors[2][k]);
+        // A fixed sign: the largest component positive.
+        let big = [v.x, v.y, v.z]
+            .into_iter()
+            .max_by(|a, b| a.abs().total_cmp(&b.abs()))
+            .unwrap_or(1.0);
+        let v = if big < 0.0 { -v } else { v };
+        v.normalized().unwrap_or(Vec3::X)
+    });
+    PrincipalAxes {
+        axes,
+        spreads: order.map(|k| values[k].max(0.0) / area),
+        centroid: Point3::new(mean[0], mean[1], mean[2]),
+    }
+}
+
+/// Eigenvalues and eigenvectors (columns) of a symmetric 3x3 matrix.
+fn jacobi_eigen(mut a: [[f64; 3]; 3]) -> ([f64; 3], [[f64; 3]; 3]) {
+    let mut v = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    for _ in 0..50 {
+        let off = a[0][1].abs() + a[0][2].abs() + a[1][2].abs();
+        let scale = a[0][0].abs() + a[1][1].abs() + a[2][2].abs();
+        if off <= 1e-15 * scale.max(1e-300) {
+            break;
+        }
+        for (p, q) in [(0, 1), (0, 2), (1, 2)] {
+            if a[p][q].abs() <= 1e-300 {
+                continue;
+            }
+            let theta = (a[q][q] - a[p][p]) / (2.0 * a[p][q]);
+            let t = theta.signum() / (theta.abs() + (theta * theta + 1.0).sqrt());
+            let t = if theta == 0.0 { 1.0 } else { t };
+            let c = 1.0 / (t * t + 1.0).sqrt();
+            let s = t * c;
+            for row in a.iter_mut() {
+                let (akp, akq) = (row[p], row[q]);
+                row[p] = c * akp - s * akq;
+                row[q] = s * akp + c * akq;
+            }
+            let (row_p, row_q) = (a[p], a[q]);
+            for (k, (apk, aqk)) in row_p.into_iter().zip(row_q).enumerate() {
+                a[p][k] = c * apk - s * aqk;
+                a[q][k] = s * apk + c * aqk;
+            }
+            for row in v.iter_mut() {
+                let (vp, vq) = (row[p], row[q]);
+                row[p] = c * vp - s * vq;
+                row[q] = s * vp + c * vq;
+            }
+        }
+    }
+    ([a[0][0], a[1][1], a[2][2]], v)
+}
+
+/// The pattern frame of an item: its pattern's axis resolved against the
+/// mesh, the origin (the centre of the mesh's box, moved `distance` toward
+/// the thinnest side for bands), and a seed from the item's place in the
+/// scene.
+pub fn pattern_frame(m: &Material, mesh: &RenderMesh, index: usize) -> PatternFrame {
+    let seed = pcg_hash(index as u32 ^ 0x5bd1_e995);
+    let centre = mesh.bounds.map_or(Point3::ORIGIN, |b| box_center(&b));
+    let (axis, distance) = match m.pattern {
+        Pattern::Flat => {
+            return PatternFrame {
+                axis: Vec3::Z,
+                origin: centre,
+                seed,
+            }
+        }
+        Pattern::Bands(b) => (b.axis, b.distance),
+        Pattern::Brushed(b) => (b.axis, 0.0),
+    };
+    let pa = principal_axes(mesh);
+    let axes = pa.axes;
+    let axis = match axis {
+        PatternAxis::Longest => axes[0],
+        PatternAxis::Shortest => axes[2],
+        PatternAxis::Symmetry => pa.symmetry_axis(),
+        PatternAxis::Vector(v) => v.normalized().unwrap_or(axes[0]),
+    };
+    // Circles about the axis centre on the surface's centroid, which lies
+    // on the axis of a turned part.
+    let centre = match m.pattern {
+        Pattern::Brushed(b) if b.circular => pa.centroid,
+        _ => centre,
+    };
+    // Move off-centre across the axis, toward the thinnest side that is
+    // not the axis itself.
+    let thin = if axes[2].dot(axis).abs() < 0.9 {
+        axes[2]
+    } else {
+        axes[1]
+    };
+    let thin = (thin - axis.scale(thin.dot(axis)))
+        .normalized()
+        .unwrap_or(thin);
+    PatternFrame {
+        axis,
+        origin: centre + thin.scale(distance),
+        seed,
+    }
+}
+
 impl Default for Material {
-    /// Light grey, sRGB (200, 200, 200), dielectric, roughness 0.5.
+    /// Light grey, sRGB (200, 200, 200), dielectric, roughness 0.5, opaque,
+    /// index of refraction 1.5, no emission, coat or pattern.
     fn default() -> Self {
         Material::from_srgb8(200, 200, 200)
     }
@@ -465,8 +892,8 @@ pub enum LightFrame {
 }
 
 /// Abstract lighting: a directional key light, a weaker directional fill
-/// light (diffuse only) and a uniform ambient term. Image-based lighting
-/// and area lights come with the presentation renderer.
+/// light (diffuse only) and a uniform ambient term: the working render's
+/// light. The presentation render is lit by an [`Environment`] instead.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Lighting {
     /// Direction from the scene toward the key light (need not be unit).
@@ -498,6 +925,184 @@ impl Default for Lighting {
             fill_intensity: 0.15,
             ambient: 0.2,
         }
+    }
+}
+
+/// A distant disc light: the sun outdoors, a soft box in a studio. Its
+/// size sets how soft the shadows are.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Sun {
+    /// Direction from the scene toward the light (need not be unit).
+    pub direction: Vec3,
+    /// The frame `direction` is given in: [`LightFrame::Camera`] turns the
+    /// light with the camera (every view lit alike), [`LightFrame::World`]
+    /// keeps it put.
+    pub frame: LightFrame,
+    /// Angular diameter in degrees, greater than 0: 0.53 is the real sun
+    /// (crisp shadows), 10 to 30 a soft box (soft shadows).
+    pub angle_deg: f64,
+    /// Irradiance on a surface facing the light, linear and relative to
+    /// the environment (it is multiplied by [`Environment::intensity`] too).
+    pub irradiance: f64,
+    /// Linear colour; multiplies the irradiance.
+    pub color: [f64; 3],
+}
+
+/// What lights a presentation render and what it shows where nothing is
+/// hit: a sky dome of three colours and an optional [`Sun`]. All of it is
+/// procedural, so there is no image to ship. The working render ignores it.
+///
+/// The dome's radiance for a unit direction `d` (world, Z up) is
+/// `horizon + (zenith - horizon) sqrt(d.z)` above the horizon and `ground`
+/// below it ([`Environment::radiance`]), times `intensity`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Environment {
+    /// Linear radiance straight up.
+    pub zenith: [f64; 3],
+    /// Linear radiance at the horizon, seen from above it.
+    pub horizon: [f64; 3],
+    /// Linear radiance of everything below the horizon (a scene's ground
+    /// plane, when it has one, covers it).
+    pub ground: [f64; 3],
+    pub sun: Option<Sun>,
+    /// Scales the dome and the sun together.
+    pub intensity: f64,
+}
+
+impl Environment {
+    /// A neutral photo studio: a grey dome, bright overhead and dark toward
+    /// the horizon (so metal has something to reflect), and a soft key
+    /// light (16 degrees) from above and to the left of the camera, which
+    /// turns with the camera like the working render's headlight. A
+    /// horizontal surface in the open receives about `pi` in the isometric
+    /// views (so a white floor comes out near 1 before tone mapping).
+    pub fn studio() -> Environment {
+        Environment {
+            zenith: [0.70; 3],
+            horizon: [0.20; 3],
+            ground: [0.12; 3],
+            sun: Some(Sun {
+                direction: Vec3::new(-0.7, 0.6, 0.4),
+                frame: LightFrame::Camera,
+                angle_deg: 16.0,
+                irradiance: 1.9,
+                color: [1.0, 0.98, 0.95],
+            }),
+            intensity: 1.0,
+        }
+    }
+
+    /// Daylight: a blue sky, a pale horizon and the sun, 0.53 degrees, at 50
+    /// degrees elevation from the south-west (world frame).
+    pub fn sky() -> Environment {
+        Environment {
+            zenith: [0.08, 0.17, 0.40],
+            horizon: [0.45, 0.52, 0.62],
+            ground: [0.25, 0.23, 0.21],
+            sun: Some(Sun {
+                direction: Vec3::new(-0.45, -0.45, 0.766),
+                frame: LightFrame::World,
+                angle_deg: 0.53,
+                irradiance: 3.2,
+                color: [1.0, 0.94, 0.86],
+            }),
+            intensity: 1.0,
+        }
+    }
+
+    /// The same radiance `l` from every direction, no sun: the furnace.
+    pub fn uniform(l: [f64; 3]) -> Environment {
+        Environment {
+            zenith: l,
+            horizon: l,
+            ground: l,
+            sun: None,
+            intensity: 1.0,
+        }
+    }
+
+    /// The dome's linear radiance toward unit direction `d` (world), the
+    /// sun left out, `intensity` included.
+    pub fn radiance(&self, d: Vec3) -> [f64; 3] {
+        let k = self.intensity.max(0.0);
+        if d.z >= 0.0 {
+            let t = d.z.min(1.0).sqrt();
+            std::array::from_fn(|i| k * (self.horizon[i] + (self.zenith[i] - self.horizon[i]) * t))
+        } else {
+            self.ground.map(|g| k * g)
+        }
+    }
+
+    /// The dome's irradiance on a horizontal surface facing up, closed
+    /// form: `pi (horizon + 0.8 (zenith - horizon))`, times `intensity`.
+    pub fn dome_horizontal_irradiance(&self) -> [f64; 3] {
+        let k = self.intensity.max(0.0) * std::f64::consts::PI;
+        std::array::from_fn(|i| k * (self.horizon[i] + 0.8 * (self.zenith[i] - self.horizon[i])))
+    }
+}
+
+impl Default for Environment {
+    /// [`Environment::studio`].
+    fn default() -> Self {
+        Environment::studio()
+    }
+}
+
+/// The sun as a backend uses it, in world space.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FrameSun {
+    /// Unit direction toward the sun's centre, world frame.
+    pub direction: Vec3,
+    /// Cosine of the sun's angular radius.
+    pub cos_radius: f64,
+    /// Linear radiance inside the disc: `irradiance color / (pi sin^2
+    /// radius)`, so a surface facing it receives exactly `irradiance color`
+    /// (times the environment's intensity).
+    pub radiance: [f64; 3],
+}
+
+impl FrameSun {
+    /// Solid angle of the disc (sr).
+    pub fn solid_angle(&self) -> f64 {
+        std::f64::consts::TAU * (1.0 - self.cos_radius)
+    }
+}
+
+/// The environment of a frame: the dome colours with the intensity
+/// applied, and the sun resolved into world space.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FrameEnvironment {
+    /// The scene's environment, intensity applied to the dome colours
+    /// (so `intensity` here is 1).
+    pub dome: Environment,
+    pub sun: Option<FrameSun>,
+}
+
+impl FrameEnvironment {
+    /// The radiance seen toward unit direction `d`: dome plus sun.
+    pub fn radiance(&self, d: Vec3) -> [f64; 3] {
+        let mut l = self.dome.radiance(d);
+        if let Some(s) = self.sun {
+            if d.dot(s.direction) >= s.cos_radius {
+                for (li, si) in l.iter_mut().zip(s.radiance) {
+                    *li += si;
+                }
+            }
+        }
+        l
+    }
+}
+
+/// Smallest sun the tracer accepts, degrees of angular diameter.
+pub const MIN_SUN_ANGLE_DEG: f64 = 0.05;
+
+/// Exposure in stops: the linear colour is multiplied by `2^ev` before the
+/// tone curve.
+pub fn exposure_scale(ev: f64) -> f64 {
+    if ev.is_finite() {
+        2f64.powf(ev.clamp(-20.0, 20.0))
+    } else {
+        1.0
     }
 }
 
@@ -1155,11 +1760,17 @@ pub struct Scene3d {
     /// far side of any of them or of all of them as `clip_mode` says.
     pub clip_planes: Vec<ClipPlane>,
     pub clip_mode: ClipMode,
+    /// What lights the presentation render (the working render uses
+    /// `lighting` instead).
+    pub environment: Environment,
+    /// Exposure of the presentation render in stops ([`exposure_scale`]);
+    /// the working render ignores it.
+    pub exposure: f64,
 }
 
 impl Default for Scene3d {
     /// Light background, default lighting and edges, ambient occlusion on,
-    /// no ground, no clip planes.
+    /// no ground, no clip planes, the studio environment at exposure 0.
     fn default() -> Self {
         Scene3d {
             items: Vec::new(),
@@ -1171,6 +1782,8 @@ impl Default for Scene3d {
             ground: None,
             clip_planes: Vec::new(),
             clip_mode: ClipMode::Any,
+            environment: Environment::default(),
+            exposure: 0.0,
         }
     }
 }
@@ -1360,6 +1973,8 @@ pub struct FrameItem<'a> {
     /// eye. Empty when the scene draws no edges. Hidden ones are left to
     /// the depth test.
     pub edges: Vec<[u32; 2]>,
+    /// Where the material's pattern sits on this item ([`pattern_frame`]).
+    pub pattern: PatternFrame,
 }
 
 /// The ground as a backend draws it: a square of side `2 half_size` about
@@ -1468,6 +2083,10 @@ pub struct Frame3d<'a> {
     /// pull edge lines this far toward the eye so the faces they lie on do
     /// not hide them.
     pub pixel_world: f64,
+    /// The presentation render's light ([`Scene3d::environment`]).
+    pub environment: FrameEnvironment,
+    /// The presentation render's exposure as a factor ([`exposure_scale`]).
+    pub exposure: f64,
     pub items: Vec<FrameItem<'a>>,
 }
 
@@ -1545,6 +2164,39 @@ pub fn build_frame(scene: &Scene3d, width: u32, height: u32) -> Frame3d<'_> {
         };
         w.normalized().unwrap_or(cam.back())
     };
+    let env = scene.environment;
+    let k = env.intensity.max(0.0);
+    let environment = FrameEnvironment {
+        dome: Environment {
+            zenith: env.zenith.map(|v| v.max(0.0) * k),
+            horizon: env.horizon.map(|v| v.max(0.0) * k),
+            ground: env.ground.map(|v| v.max(0.0) * k),
+            sun: None,
+            intensity: 1.0,
+        },
+        sun: env.sun.and_then(|s| {
+            let d = match s.frame {
+                LightFrame::World => s.direction,
+                LightFrame::Camera => {
+                    cam.right().scale(s.direction.x)
+                        + cam.up().scale(s.direction.y)
+                        + cam.back().scale(s.direction.z)
+                }
+            }
+            .normalized()?;
+            if !(s.irradiance.is_finite() && s.irradiance > 0.0 && k > 0.0) {
+                return None;
+            }
+            let radius = (0.5 * s.angle_deg.clamp(MIN_SUN_ANGLE_DEG, 90.0)).to_radians();
+            let sin2 = radius.sin().powi(2);
+            let scale = k * s.irradiance / (std::f64::consts::PI * sin2);
+            Some(FrameSun {
+                direction: d,
+                cos_radius: radius.cos(),
+                radiance: s.color.map(|c| c.max(0.0) * scale),
+            })
+        }),
+    };
     Frame3d {
         width,
         height,
@@ -1565,11 +2217,14 @@ pub fn build_frame(scene: &Scene3d, width: u32, height: u32) -> Frame3d<'_> {
         near_far,
         pixel_ratio: 1.0,
         pixel_world: 2.0 * cam.half_height() / height.max(1) as f64,
+        environment,
+        exposure: exposure_scale(scene.exposure),
         items: scene
             .items
             .iter()
-            .filter(|it| !it.mesh.triangles.is_empty())
-            .map(|it| {
+            .enumerate()
+            .filter(|(_, it)| !it.mesh.triangles.is_empty())
+            .map(|(index, it)| {
                 let model = placement_matrix(&it.placement);
                 let edges = if scene.edges.is_some() {
                     visible_edges(&it.mesh, &model, eye)
@@ -1585,6 +2240,7 @@ pub fn build_frame(scene: &Scene3d, width: u32, height: u32) -> Frame3d<'_> {
                         |c| c.map(srgb_to_linear),
                     ),
                     edges,
+                    pattern: pattern_frame(&it.material, &it.mesh, index),
                 }
             })
             .collect(),
@@ -2451,5 +3107,154 @@ mod tests {
             &scene.lighting,
         ));
         assert_eq!(c, lin.map(encode_srgb));
+    }
+
+    /// The dome's horizontal irradiance closed form against a numeric
+    /// integral, and the sun's radiance normalisation: a surface facing a
+    /// sun of any size receives its stated irradiance.
+    #[test]
+    fn environment_irradiance_closed_forms() {
+        let env = Environment::studio();
+        let e = env.dome_horizontal_irradiance();
+        // Midpoint rule over mu = cos(theta): E = 2 pi int L(mu) mu dmu.
+        let n = 200_000;
+        let mut num = [0.0; 3];
+        for k in 0..n {
+            let mu = (k as f64 + 0.5) / n as f64;
+            let l = env.radiance(Vec3::new((1.0 - mu * mu).sqrt(), 0.0, mu));
+            for c in 0..3 {
+                num[c] += std::f64::consts::TAU * l[c] * mu / n as f64;
+            }
+        }
+        for c in 0..3 {
+            assert!(close(num[c], e[c], 1e-6), "{num:?} vs {e:?}");
+        }
+        for angle in [0.53, 10.0, 40.0] {
+            let mut scene = Scene3d::default();
+            scene.environment.sun = Some(Sun {
+                direction: Vec3::Z,
+                frame: LightFrame::World,
+                angle_deg: angle,
+                irradiance: 2.0,
+                color: [1.0, 0.5, 0.25],
+            });
+            let f = build_frame(&scene, 10, 10);
+            let s = f.environment.sun.unwrap();
+            assert!(vclose(s.direction, Vec3::Z, 1e-12));
+            // Irradiance of a uniform cap about the normal: L pi sin^2 r.
+            let sin2 = 1.0 - s.cos_radius * s.cos_radius;
+            for (c, want) in [2.0, 1.0, 0.5].into_iter().enumerate() {
+                assert!(close(s.radiance[c] * PI * sin2, want, 1e-9));
+            }
+            assert!(f.environment.radiance(Vec3::Z)[0] > s.radiance[0]);
+        }
+        assert_eq!(exposure_scale(1.0), 2.0);
+        assert_eq!(exposure_scale(-2.0), 0.25);
+        assert_eq!(exposure_scale(f64::NAN), 1.0);
+    }
+
+    #[test]
+    fn noise_and_patterns_are_deterministic_and_bounded() {
+        assert_eq!(pcg_hash(0), 129_708_002);
+        let mut lo: f64 = 1.0;
+        let mut hi: f64 = 0.0;
+        for i in 0..2000 {
+            let p = [i as f64 * 0.37 - 300.0, i as f64 * 0.11, -(i as f64) * 0.05];
+            let v = value_noise(p, 7);
+            assert_eq!(v, value_noise(p, 7));
+            lo = lo.min(v);
+            hi = hi.max(v);
+        }
+        assert!(lo >= 0.0 && hi < 1.0 && hi - lo > 0.5, "{lo} {hi}");
+        // At lattice points the noise is the lattice value itself.
+        assert_eq!(value_noise([3.0, -2.0, 5.0], 1), lattice(3, -2, 5, 1));
+
+        // A board 1000 x 200 x 20: its longest axis is X, shortest Z.
+        let board = RenderMesh::from_trimesh(
+            &cuboid(Point3::ORIGIN, Point3::new(1000.0, 200.0, 20.0)),
+            DEFAULT_CREASE_DEG,
+        );
+        let axes = principal_axes(&board).axes;
+        assert!(vclose(axes[0], Vec3::X, 1e-9), "{axes:?}");
+        assert!(vclose(axes[2], Vec3::Z, 1e-9), "{axes:?}");
+        let bands = Bands {
+            axis: PatternAxis::Longest,
+            spacing: 6.0,
+            color: [0.2, 0.1, 0.05],
+            strength: 0.8,
+            warp: 2.0,
+            distance: 100.0,
+        };
+        let m = Material {
+            pattern: Pattern::Bands(bands),
+            ..Material::from_srgb8(180, 140, 90)
+        };
+        let pf = pattern_frame(&m, &board, 3);
+        assert!(vclose(pf.axis, Vec3::X, 1e-9));
+        // The axis sits 100 mm off the centre through the thickness.
+        assert!(close((pf.origin.z - 10.0).abs(), 100.0, 1e-9));
+        assert_ne!(pf.seed, pattern_frame(&m, &board, 4).seed);
+        let mut darkest: f64 = 1.0;
+        for i in 0..500 {
+            let p = Point3::new(i as f64 * 1.7, 100.0 + (i % 37) as f64, 20.0);
+            let w = bands_weight(&bands, &pf, p);
+            assert!((0.0..1.0).contains(&w));
+            let a = pattern_albedo(&m, &pf, p);
+            for c in 0..3 {
+                assert!(a[c] >= 0.0 && a[c] <= m.base_color[c] + 1e-12);
+            }
+            darkest = darkest.min(a[0] / m.base_color[0]);
+        }
+        assert!(darkest < 0.6, "rings show: {darkest}");
+        // Brushed: smoother along the streaks.
+        let steel = Material {
+            metallic: 1.0,
+            roughness: 0.4,
+            pattern: Pattern::Brushed(Brushed {
+                axis: PatternAxis::Vector(Vec3::Y),
+                anisotropy: 1.0,
+                streaks: 0.0,
+                scale: 0.1,
+                circular: false,
+            }),
+            ..Material::default()
+        };
+        let pf = pattern_frame(&steel, &board, 0);
+        assert!(vclose(pf.axis, Vec3::Y, 1e-12));
+        let (along, across) = pattern_roughness(&steel, &pf, Point3::new(1.0, 2.0, 3.0));
+        assert!(close(across, 0.4, 1e-12) && close(along, 0.08, 1e-12));
+        assert_eq!(
+            pattern_albedo(&Material::default(), &pf, Point3::ORIGIN),
+            Material::default().base_color
+        );
+        assert!(close(Material::default().dielectric_f0(), 0.04, 1e-12));
+
+        // Turned parts: a disc and a rod both turn about Z, whichever
+        // spread is the odd one out.
+        for (r, h) in [(50.0, 10.0), (5.0, 100.0)] {
+            let m = RenderMesh::from_trimesh(&cylinder(r, h, 64), DEFAULT_CREASE_DEG);
+            let pa = principal_axes(&m);
+            assert!(vclose(pa.symmetry_axis(), Vec3::Z, 1e-9), "{pa:?}");
+            assert!(pa.centroid.max_abs_diff(Point3::new(0.0, 0.0, h / 2.0)) < 1e-9);
+            let turned = Material {
+                metallic: 1.0,
+                pattern: Pattern::Brushed(Brushed {
+                    axis: PatternAxis::Symmetry,
+                    anisotropy: 0.5,
+                    streaks: 1.0,
+                    scale: 0.2,
+                    circular: true,
+                }),
+                ..Material::default()
+            };
+            let pf = pattern_frame(&turned, &m, 0);
+            // Streaks run around the axis: the tangent at +X is +-Y.
+            let d = streak_direction(&turned, &pf, Point3::new(r, 0.0, h / 2.0));
+            assert!(close(d.y.abs(), 1.0, 1e-9), "{d:?}");
+            // Circles: the albedo is the same all the way round.
+            let at =
+                |a: f64| pattern_albedo(&turned, &pf, Point3::new(r * a.cos(), r * a.sin(), 1.0));
+            assert!(close(at(0.3)[0], at(2.0)[0], 1e-12));
+        }
     }
 }

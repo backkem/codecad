@@ -16,15 +16,22 @@
 //!   that contrasts with the background, screen-space ambient occlusion,
 //!   a ground plane, clip planes with filled cut faces, and a cache of
 //!   prepared meshes (repeated parts drawn instanced).
+//! - [`trace::PathTracer`] (wasm32 + native): the presentation-quality
+//!   backend: a progressive path tracer in a compute shader (no ray-tracing
+//!   extensions), over a two-level bounding volume hierarchy built on the
+//!   CPU ([`bvh`]), lit by the core's environment and sun, with the core's
+//!   physical materials and patterns, deterministic for a seed.
 //! - [`options::RenderOptions3d`]: size, pixel ratio, background override,
-//!   quality level.
+//!   quality level, samples and seed.
 //! - `render_rgba` / `render_png` (native): headless render on the
 //!   process-wide `cadview_render` GPU context, the same device the 2D
 //!   renderer uses. `contact_sheet` lays several renders out as one
 //!   labelled grid.
 
+pub mod bvh;
 pub mod options;
 pub mod raster;
+pub mod trace;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod headless;

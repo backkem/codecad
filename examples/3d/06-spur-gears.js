@@ -70,7 +70,7 @@ function keyedBore([cx, cy], d, [b, t]) {
 function gear(name, g, center, t0) {
   const prof = gearLoop(center, g.z, t0);
   const part = cad.extrude(prof.loop, {
-    plane: "xz", at: [0, WIDTH, 0], distance: WIDTH, name, attrs: { part: name, teeth: g.z, module: M },
+    plane: "xz", at: [0, WIDTH, 0], distance: WIDTH, name, attrs: { part: name, teeth: g.z, module: M, material: "turned steel" },
   });
   const [hd, hl] = g.hub;
   // Hub on the back, sunk 1 mm into the gear body.

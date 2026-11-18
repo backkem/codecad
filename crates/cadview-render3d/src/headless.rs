@@ -3,6 +3,7 @@
 //! renderer uses; never a second one).
 
 use crate::raster::RasterRenderer;
+use crate::trace::{PathTracer, TraceSettings, TraceStats};
 use crate::{
     Gpu, Progress, Quality, Render3dError, RenderOptions3d, Renderer3d, Target, TARGET_FORMAT,
 };
@@ -37,6 +38,10 @@ pub struct Rendered3d {
     pub adapter: String,
     /// Wall time for frame building, render, readback and PNG encoding.
     pub ms: f64,
+    /// Of that, PNG encoding.
+    pub png_ms: f64,
+    /// For a presentation render: samples, passes and where the time went.
+    pub trace: Option<TraceStats>,
 }
 
 /// Most calls a progressive renderer gets before the image is taken as is.
@@ -158,49 +163,131 @@ pub fn prepare_scene(scene: &Scene3d, opts: &RenderOptions3d) -> Scene3d {
 
 /// Pipelines for the shared device, built on first use.
 static RASTER: Mutex<Option<RasterRenderer>> = Mutex::new(None);
+/// The path tracer on the shared device, built on first use; it keeps its
+/// cache of mesh hierarchies between renders.
+static TRACER: Mutex<Option<PathTracer>> = Mutex::new(None);
+
+/// Lock a renderer slot; a panic mid-render may have left the one inside
+/// half used, so it is dropped and built again.
+fn lock<T>(slot: &'static Mutex<Option<T>>) -> std::sync::MutexGuard<'static, Option<T>> {
+    slot.lock().unwrap_or_else(|poisoned| {
+        let mut g = poisoned.into_inner();
+        *g = None;
+        g
+    })
+}
+
+/// Run `f` on the shared device with its adapter name, turning a panic (a
+/// wgpu validation error) into an error.
+fn on_shared<R>(
+    f: impl FnOnce(Gpu<'_>) -> Result<R, Render3dError>,
+) -> Result<(R, String), Render3dError> {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        cadview_render::gpu::with_shared(|r| {
+            let ctx = r.context();
+            let gpu = Gpu {
+                device: &ctx.device,
+                queue: &ctx.queue,
+            };
+            f(gpu).map(|v| (v, r.adapter().to_string()))
+        })
+    }));
+    match result {
+        Ok(Ok(inner)) => inner,
+        Ok(Err(init)) => Err(Render3dError::Gpu(init)),
+        Err(_) => Err(Render3dError::Gpu("3D render panicked".to_string())),
+    }
+}
+
+/// The path tracer's settings for `opts`.
+fn trace_settings(opts: &RenderOptions3d) -> TraceSettings {
+    TraceSettings {
+        spp: opts.spp,
+        seed: opts.seed,
+        ..TraceSettings::default()
+    }
+}
 
 /// Render `scene` to RGBA8 on the shared GPU device.
 pub fn render_rgba(
     scene: &Scene3d,
     opts: &RenderOptions3d,
 ) -> Result<RenderedRgba3d, Render3dError> {
+    render_rgba_stats(scene, opts).map(|(r, _)| r)
+}
+
+/// [`render_rgba`], and for a presentation render the path tracer's
+/// statistics (samples, passes, where the time went).
+pub fn render_rgba_stats(
+    scene: &Scene3d,
+    opts: &RenderOptions3d,
+) -> Result<(RenderedRgba3d, Option<TraceStats>), Render3dError> {
     opts.validate()?;
-    if opts.quality != Quality::Working {
-        return Err(Render3dError::NotAvailable(opts.quality));
-    }
     let (width, height) = opts.pixel_size();
     let scene = prepare_scene(scene, opts);
     let mut frame = build_frame(&scene, width, height);
     frame.pixel_ratio = opts.pixel_ratio;
-
-    // A wgpu validation error panics; keep it from taking the caller down.
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        cadview_render::gpu::with_shared(|r| {
-            let ctx = r.context();
-            let mut guard = RASTER.lock().unwrap_or_else(|poisoned| {
-                // A panic mid-render may have left the pipelines half used.
-                let mut g = poisoned.into_inner();
-                *g = None;
-                g
-            });
-            let renderer = guard.get_or_insert_with(|| RasterRenderer::new(&ctx.device));
-            let gpu = Gpu {
-                device: &ctx.device,
-                queue: &ctx.queue,
-            };
-            render_frame_rgba(gpu, renderer, &frame).map(|px| (px, r.adapter().to_string()))
-        })
-    }));
-    let (rgba, adapter) = match result {
-        Ok(Ok(inner)) => inner?,
-        Ok(Err(init)) => return Err(Render3dError::Gpu(init)),
-        Err(_) => return Err(Render3dError::Gpu("3D render panicked".to_string())),
+    let ((rgba, stats), adapter) = match opts.quality {
+        Quality::Working => on_shared(|gpu| {
+            let mut guard = lock(&RASTER);
+            let renderer = guard.get_or_insert_with(|| RasterRenderer::new(gpu.device));
+            render_frame_rgba(gpu, renderer, &frame).map(|px| (px, None))
+        })?,
+        Quality::Presentation => on_shared(|gpu| {
+            let mut guard = lock(&TRACER);
+            let tracer = guard.get_or_insert_with(|| PathTracer::new(gpu.device));
+            tracer.set_settings(trace_settings(opts));
+            tracer.reset();
+            let px = render_frame_rgba(gpu, tracer, &frame)?;
+            Ok((px, Some(tracer.stats())))
+        })?,
     };
-    Ok(RenderedRgba3d {
-        rgba,
+    Ok((
+        RenderedRgba3d {
+            rgba,
+            width,
+            height,
+            adapter,
+        },
+        stats,
+    ))
+}
+
+/// Linear radiance from a presentation render of `scene`.
+#[derive(Debug, Clone)]
+pub struct Radiance3d {
+    /// Mean linear radiance per pixel before exposure and tone curve,
+    /// row-major from the top-left.
+    pub pixels: Vec<[f32; 3]>,
+    pub width: u32,
+    pub height: u32,
+    pub stats: TraceStats,
+}
+
+/// Path trace `scene` (whatever `opts.quality` says) and return the mean
+/// linear radiance per pixel: what tests compare with closed forms.
+pub fn render_radiance(
+    scene: &Scene3d,
+    opts: &RenderOptions3d,
+) -> Result<Radiance3d, Render3dError> {
+    opts.validate()?;
+    let (width, height) = opts.pixel_size();
+    let scene = prepare_scene(scene, opts);
+    let mut frame = build_frame(&scene, width, height);
+    frame.pixel_ratio = opts.pixel_ratio;
+    let ((pixels, stats), _) = on_shared(|gpu| {
+        let mut guard = lock(&TRACER);
+        let tracer = guard.get_or_insert_with(|| PathTracer::new(gpu.device));
+        tracer.set_settings(trace_settings(opts));
+        tracer.reset();
+        render_frame_rgba(gpu, tracer, &frame)?;
+        Ok((tracer.radiance(gpu)?, tracer.stats()))
+    })?;
+    Ok(Radiance3d {
+        pixels,
         width,
         height,
-        adapter,
+        stats,
     })
 }
 
@@ -349,7 +436,8 @@ fn caption_bar(label: &str, w: u32, h: u32) -> Result<cadview_render::RenderedRg
 /// Render `scene` to a PNG on the shared GPU device.
 pub fn render_png(scene: &Scene3d, opts: &RenderOptions3d) -> Result<Rendered3d, Render3dError> {
     let start = Instant::now();
-    let r = render_rgba(scene, opts)?;
+    let (r, trace) = render_rgba_stats(scene, opts)?;
+    let encode = Instant::now();
     let png = cadview_render::encode_png(&r.rgba, r.width, r.height).map_err(Render3dError::Gpu)?;
     Ok(Rendered3d {
         png,
@@ -357,5 +445,7 @@ pub fn render_png(scene: &Scene3d, opts: &RenderOptions3d) -> Result<Rendered3d,
         height: r.height,
         adapter: r.adapter,
         ms: start.elapsed().as_secs_f64() * 1000.0,
+        png_ms: encode.elapsed().as_secs_f64() * 1000.0,
+        trace,
     })
 }

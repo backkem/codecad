@@ -53,7 +53,7 @@ const profile = [
   [0, HEIGHT - CROWN], [BELT_ID / 2, HEIGHT - CROWN], [BELT_ID / 2, BELT_FROM], [SKIRT_ID / 2, BELT_FROM],
 ];
 const piston = cad.revolve(profile, {
-  plane: "xz", axis: [[0, 0], [0, 1]], name: "piston", attrs: { part: "piston", material: "aluminium" },
+  plane: "xz", axis: [[0, 0], [0, 1]], name: "piston", attrs: { part: "piston", material: "turned aluminium" },
 });
 // Crown edge rounded (picked at +y, away from the revolve's seam at +x).
 cad.fillet3d(piston, { edges: { near: [[0, ro, HEIGHT]] }, radius: R_CROWN });
@@ -70,7 +70,7 @@ for (const s of [1, -1]) {
 // ── Pin ──────────────────────────────────────────────────────────────
 const pin = cad.extrude(
   { outer: { center: [0, PIN_Z], radius: PIN_D / 2 }, holes: [{ center: [0, PIN_Z], radius: PIN_ID / 2 }] },
-  { plane: "yz", at: [-PIN_L / 2, 0, 0], distance: PIN_L, name: "pin", attrs: { part: "pin", material: "steel" } },
+  { plane: "yz", at: [-PIN_L / 2, 0, 0], distance: PIN_L, name: "pin", attrs: { part: "pin", material: "turned steel" } },
 );
 
 // ── Connecting rod: two circles and their outer tangents ─────────────

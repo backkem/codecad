@@ -731,6 +731,88 @@ BSD-3 tracer kernel forked into the crate (§9.5). That choice is made at
 (a plane test in the fragment shader). A soft ground contact shadow needs
 a shadow or ambient-occlusion pass of our own, which Kiss3d already has.
 
+### Decision update (2026-11-18, 3D5a): our own path tracer for the presentation render
+
+The presentation render is a path tracer of our own, `PathTracer` in
+`cadview-render3d` (`trace.rs`, `trace.wgsl`, `resolve.wgsl`, `bvh.rs`).
+No code is taken from Kiss3d; there is no notices file because nothing
+needs one. Kiss3d stays out of `Cargo.lock`.
+
+Kiss3d's tracer was read in full (0.47.0: `rt_preamble.wgsl`,
+`rt_intersect_bvh.wgsl`, `rt_kernel.wgsl`, 1.4k lines of WGSL, and the
+Rust around it) as the candidate to fork. What decided against it:
+
+- **It loses energy under an environment.** The environment is never
+  sampled directly, yet a bounce ray that escapes is weighted by the power
+  heuristic against a uniform-sphere pdf of `1/4pi` that no strategy
+  draws from. Light from the sky is lost, the more so at grazing angles:
+  a furnace test cannot pass. That is likely part of the "dry" look.
+- **Its diffuse sampling and evaluation disagree.** The evaluated diffuse
+  lobe carries a `(1 - F)` factor; the sampled one does not.
+- **Smaller faults:** one non-finite sample zeroes the pixel's whole
+  running mean; a full traversal stack drops nodes silently; ray offsets
+  are a fixed 1e-4 in world units (our parts span 10 mm to 3 m); Y is up
+  and the environment turns about Y; the modules are joined by WESL
+  imports, which need the `wesl` crate or a rewrite to plain WGSL.
+- **What it has that we lack:** an a-trous denoiser (127 lines), texture
+  arrays, point and spot lights, alpha cut-outs, fog, depth of field,
+  subsurface, and a hardware ray-query path.
+
+Fixing the first two means rewriting the sampling core, and the rest is
+features this slice does not want, so a fork would have kept little more
+than the triangle and box tests. Our own tracer is about 1000 lines of
+WGSL and 1400 of Rust with its unit tests, written against the core's scene from the start,
+and checked against closed forms (below). What we gave up: the denoiser
+(at 1024 samples the examples need none except inside polished bores), image
+textures, lights other than the sun, depth of field and hardware ray
+queries.
+
+How it works. Every distinct mesh gets a bounding volume hierarchy over
+its triangles in its own frame (binned surface-area heuristic, built once
+on the CPU and cached while the mesh is in use); a second hierarchy over
+the items' world boxes points at them, so repeated parts are instances.
+One compute invocation per pixel traces one path per sample: a camera ray
+from the core's camera (both projections, the same pixel grid as the
+raster, so silhouettes agree), the closest hit in both levels (ordered
+traversal, re-tested pops), the core's material and pattern at the hit,
+then next-event estimation of the sun (uniform in its cone, power-heuristic
+weighted against the BSDF), and a BSDF sample for the next ray (Lambert
+under GGX with exact dielectric Fresnel, visible-normal sampling,
+anisotropic for brushed patterns, a clear coat, smooth or rough glass as a
+delta event). The dome is reached by BSDF sampling only (it is smooth).
+The ground is an analytic plane. Paths stop on escape, after 16 events, or
+by Russian roulette from the fourth. Ray origins are moved off the surface
+by a few units in the last place (Wächter and Binder, Ray Tracing Gems
+2019), so the offset scales with the coordinates. Cut-away views are
+traced too: hits beyond the clip planes are skipped, and a ray that meets
+the inside of a part through a cut is shaded flat in the section colour on
+the plane it crossed.
+
+Determinism and progress. Each pixel keeps a running sum, and a pass adds
+its samples to it one at a time in sample order; sample `s` of pixel `p`
+draws its random numbers from PCG hashes of `(p, s, seed)`. The image is
+therefore the same however samples are split into passes (passes are sized
+to about 60 ms on native, so no pass trips a GPU watchdog). A full-screen
+pass divides by the sample count, applies the exposure and the core's tone
+curve, and writes the sRGB target, so a viewport can show every pass.
+
+Firefly control: indirect contributions (after two or more scattering
+events) are clamped in luminance at 10 times that of a white surface lit by
+the open environment. Direct light and what the camera sees are never
+clamped. In a studio scene with polished and brushed metal it moved the mean
+by 0.08 % (inside the noise); a glass sphere in sunlight loses its caustic,
+6.6 % of the image's mean (a known bias: caustics from a small sun reach a
+path tracer only through rare paths).
+
+What a second backend must agree on lives in `scene3d.rs`: the physical
+`Material` (transmission, index of refraction, emission, clear coat, a
+procedural `Pattern`), `pattern_albedo`, `pattern_roughness`,
+`streak_direction`, the `Environment` (dome and `Sun`, with the sun's
+radiance normalised so a surface facing it receives its stated
+irradiance), `exposure_scale` and `tone_map`. The working render ignores
+transmission, emission, the coat, the pattern, the environment and the
+exposure.
+
 ### 9.1 Layers
 
 ```
@@ -751,12 +833,13 @@ a shadow or ambient-occlusion pass of our own, which Kiss3d already has.
   2D renderer: zero frames when idle.
 - **Lines**: exact part edges (tessellated to screen tolerance) over flat
   shading, hidden edges dashed. It is the on-screen twin of `cad.project`.
-- **Render**: kiss3d `RayTracer` (compute BVH on WebGPU, HW ray query on
-  native when available). It is progressive, accumulating `samples_per_frame`
-  per frame while idle, and stops at the target spp (default 256 in the
-  browser, 1024 headless). The denoiser runs on the final accumulation, and
-  any camera move resets the accumulation. Rendering stops as soon as the
-  target is reached, which keeps the zero-idle-frames property.
+- **Render**: our `PathTracer` (compute BVH on plain WebGPU; see the 3D5a
+  decision update above). It is progressive, accumulating a pass of
+  samples per call while idle, and stops at the target spp (default 1024
+  headless; 256 is the browser's aim). Any camera move resets the
+  accumulation (`Renderer3d::reset`, or a changed frame). Rendering stops
+  as soon as the target is reached, which keeps the zero-idle-frames
+  property. No denoiser yet.
 
 Tone mapping is AgX by default for renders and Khronos PBR Neutral for
 Shaded mode (more faithful colours for checking materials). Exposure is an
@@ -795,12 +878,11 @@ The maintainer found Kiss3d renders "dry". Most of that look usually comes
 from content, not the integrator: no HDRI, a lone point light, low-albedo
 default materials, a clamped tone map. Rung 3D5b sets up a reference scene
 (bookshelf, Poly Haven HDRI, oak and plaster PBR textures) and compares it
-against Blender Cycles with the same assets, using ꟻLIP as the metric. If
-Kiss3d's tracer cannot reach the threshold, we fork its tracer kernel (WGSL,
-BSD-3, about 1.7 k lines: BVH, BSDF, MIS, IBL, denoiser) into
-`cadview-render3d/tracer/` and own it. We fix the BSDF and sampling there,
-and keep Kiss3d (or a thin raster pass of our own) for Shaded mode. Either
-way we do not write a tracer from scratch.
+against Blender Cycles with the same assets, using ꟻLIP as the metric.
+Superseded in part by the 3D5a decision update: the tracer is our own
+(`cadview-render3d/src/trace.wgsl`), so a failed gate means fixing its BSDF,
+sampling or environment there. The gate also needs what this slice left
+out: image environments (HDRI) and texture sets.
 
 ## 10. Scripting API sketch
 

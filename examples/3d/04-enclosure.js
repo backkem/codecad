@@ -46,7 +46,7 @@ const corners = [[BOSS_AT, BOSS_AT], [L - BOSS_AT, BOSS_AT], [BOSS_AT, W - BOSS_
 const named = (part, extra = {}) => ({ name: part, attrs: { part, ...extra } });
 
 // ── Base ─────────────────────────────────────────────────────────────
-const base = cad.extrude(roundedRect(0, 0, L, W, R_OUT), { distance: SPLIT, ...named("base") });
+const base = cad.extrude(roundedRect(0, 0, L, W, R_OUT), { distance: SPLIT, ...named("base", { material: "grey plastic" }) });
 // The pocket, from the floor up and out through the open top.
 cad.cut(base, { extrude: roundedRect(WALL, WALL, L - 2 * WALL, W - 2 * WALL, R_IN), at: [0, 0, WALL], distance: SPLIT });
 // Corner bosses, from inside the floor up to the split, with pilot holes.
@@ -73,7 +73,7 @@ cad.hole(base, { at: [L, JACK.y, jackZ], dir: [-1, 0, 0], dia: JACK.hole, depth:
 
 // ── Lid ──────────────────────────────────────────────────────────────
 const LID = H - SPLIT;
-const lid = cad.extrude(roundedRect(0, 0, L, W, R_OUT), { at: [0, 0, SPLIT], distance: LID, ...named("lid") });
+const lid = cad.extrude(roundedRect(0, 0, L, W, R_OUT), { at: [0, 0, SPLIT], distance: LID, ...named("lid", { material: "grey plastic" }) });
 cad.cut(lid, { extrude: roundedRect(WALL, WALL, L - 2 * WALL, W - 2 * WALL, R_IN), at: [0, 0, SPLIT - 1], distance: LID - WALL + 1 });
 for (const [x, y] of corners) {
   cad.union(lid, { extrude: { center: [x, y], radius: BOSS_R }, at: [0, 0, SPLIT], distance: LID - WALL + 0.5 });
@@ -82,19 +82,19 @@ for (const [x, y] of corners) {
 
 // ── Board ────────────────────────────────────────────────────────────
 const [bx, by, bz] = BOARD_AT;
-const board = box(BOARD_AT, [bx + BOARD[0], by + BOARD[1], boardTop], named("board"));
+const board = box(BOARD_AT, [bx + BOARD[0], by + BOARD[1], boardTop], named("board", { material: "pcb" }));
 for (const [x, y] of [[bx, by], [bx + BOARD[0] - NOTCH, by], [bx, by + BOARD[1] - NOTCH], [bx + BOARD[0] - NOTCH, by + BOARD[1] - NOTCH]]) {
   cad.cut(board, sh.boxTool([x, y, bz - 1], [x + NOTCH, y + NOTCH, boardTop + 1]));
 }
 for (const [x, y] of STANDOFFS) cad.hole(board, { at: [x, y, boardTop], dia: CLEAR });
 
 // ── Components on the board (as blocks) ──────────────────────────────
-const comp = (kind) => named(kind, { component: true });
+const comp = (kind, material = "black plastic") => named(kind, { component: true, material });
 box([43, 23, boardTop], [57, 37, boardTop + 1.6], comp("chip"));
-const cap = cad.extrude({ center: [25, 40], radius: 3 }, { at: [0, 0, boardTop], distance: 9, ...comp("capacitor") });
+const cap = cad.extrude({ center: [25, 40], radius: 3 }, { at: [0, 0, boardTop], distance: 9, ...comp("capacitor", "aluminium") });
 cad.copy3d(cap, { move: [8, 0, 0] });
 box([75, 20, boardTop], [77.5, 40, boardTop + 8.5], comp("header"));
-box([PLUG.x - PLUG.w / 2, WALL + 0.5, boardTop], [PLUG.x + PLUG.w / 2, 10, boardTop + PLUG.h], comp("connector"));
+box([PLUG.x - PLUG.w / 2, WALL + 0.5, boardTop], [PLUG.x + PLUG.w / 2, 10, boardTop + PLUG.h], comp("connector", "steel"));
 const jack = box([84, JACK.y - 4.5, boardTop], [L - WALL - 1, JACK.y + 4.5, boardTop + JACK.dia], comp("jack"));
 cad.union(jack, { extrude: { center: [JACK.y, jackZ], radius: JACK.dia / 2 }, plane: "yz", at: [L - WALL - 1, 0, 0], distance: 2.5 });
 
@@ -130,7 +130,7 @@ const lift = 30;
 const notLid = cad.parts().filter((p) => p.id !== lid.id).map((p) => p.id);
 await run.render([{ as: "iso", view: "iso", ground: true }]);
 cad.move3d(lid, [0, 0, lift]);
-await run.render([{ as: "lid-lifted", view: "iso", ground: true }]);
+await run.render([{ as: "lid-lifted", view: "iso", ground: true, present: {} }]);
 cad.move3d(lid, [0, 0, -lift]);
 await run.render([{ as: "top", view: "top", select: notLid }]);
 

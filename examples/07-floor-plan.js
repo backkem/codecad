@@ -14,7 +14,7 @@
 // holes, defineBlock + place (rotation, mirrored scale), measure chains,
 // addFill, table, title block.
 
-new Function(cad.readFile("lib/drafting.js"))();
+const draft = await cad.use("drafting");
 const { P, dim, text } = draft;
 const { ACI } = draft;
 draft.setup({

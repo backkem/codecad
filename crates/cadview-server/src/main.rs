@@ -8,6 +8,7 @@
 
 pub mod assets;
 mod http;
+mod library;
 pub mod registry;
 mod render;
 pub mod script;

@@ -12,7 +12,7 @@
 // (motor entries), addFill (junction dots), dashed mechanical linkage
 // via ByLayer linetype, table, title block.
 
-new Function(cad.readFile("lib/drafting.js"))();
+const draft = await cad.use("drafting");
 const { P, text } = draft;
 draft.setup({
   scale: 1,

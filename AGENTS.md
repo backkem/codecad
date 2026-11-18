@@ -150,6 +150,8 @@ crates/
                               #   regression cases found by the fuzzer
       src/kernels/arris.rs    # ArrisKernel (arris =0.11.1), the only file naming arris
       src/kernels/cad_kernel.rs # CadKernel (cad-kernel =0.15.0), the only file
+      src/library.rs          # cad.use: library name -> file (path-sandboxed),
+                              #   ES module -> async function transform
                               #   naming cad-kernel
       src/kernels/broken.rs   # broken adapters (mutants) that test the harness
       src/fuzz.rs             # fuzzer library: seeded recipe generator, judge
@@ -502,13 +504,16 @@ Scripts get `cad` on globalThis with the same API as the browser
        └── vite.sandbox.config.ts -> cad-api-setup.js (IIFE)
               │
               └── codelib prelude, after the bridge prelude in script.rs
-                  (__cadCall/__rpcCall/__readFile -> host.call)
+                  (__cadCall/__rpcCall/__readFile/__loadLibrary -> host.call)
                      │
                      └── codelib sandbox, host calls answered by script.rs
+| `cad.use(name)` | Load a script library (an ES module, `lib/<name>.js` under the script dir) once per run; resolves to its exports. Also in the browser console. See `docs/api-surface.md`, "Script libraries" |
                             │
                             ├── cad.<method> -> cadview_core::cad_call()
                             ├── rpc.<method> -> save/saveDwg/loadDwg/exec handlers
-                            └── readFile     -> fs::read (path-sandboxed)
+                            ├── readFile     -> fs::read (path-sandboxed)
+                            └── lib.load     -> library.rs (cad.use: resolve +
+                                                ES module transform)
 ```
 
 `cad.exec(path)` runs the file as a nested codelib run on the same
@@ -531,6 +536,10 @@ within what is left of the caller's time budget.
   channel. Multiple sync streams coexist on one WebTransport connection.
 - **Handshake**: client sends sync header + SV, server replies with
   update + SV, client sends its update. Then continuous bidi.
+The engine cannot load ES modules (`import()` traps the instance), so
+`library.rs` turns a library's `import`/`export` declarations into an
+async function that the loader in `cad-api.ts` evaluates.
+
 - **RPC**: per-call bidi streams. Request JSON includes `doc_id` for
   routing to the correct server-side document.
 

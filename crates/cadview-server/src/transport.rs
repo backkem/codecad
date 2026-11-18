@@ -400,6 +400,14 @@ async fn handle_rpc_call(
                 Err(e) => format!(r#"{{"error":{}}}"#, serde_json::json!(e)),
             }
         }
+        // `cad.use` in the browser: the same resolution and transform as in
+        // the sandbox, rooted where inline scripts read files (the working
+        // directory).
+        "loadLibrary" => {
+            let base = std::env::current_dir().unwrap_or_default();
+            crate::library::load_json(&base, &args)
+                .unwrap_or_else(|e| serde_json::json!({ "error": e }).to_string())
+        }
         "exec" => {
             let path = req["args"]["path"].as_str().unwrap_or("");
             match crate::script::exec_file(sandbox, &registry, doc_key, path, None).await {

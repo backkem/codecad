@@ -13,7 +13,7 @@
 // addSpline (fit), array (rect) + rotate, addText rotation, addHatch,
 // measure (aligned), table, title block.
 
-new Function(cad.readFile("lib/drafting.js"))();
+const draft = await cad.use("drafting");
 const { P, dim, text, polar, add, sub, mul, unit, perp } = draft;
 const { ACI } = draft;
 draft.setup({

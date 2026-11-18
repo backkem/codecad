@@ -10,7 +10,7 @@
 // lineCircleIntersection, lineLineIntersection, procedural subdivision, ISO dimensions,
 // PHANTOM/THIN layers, text sized to each square.
 
-new Function(cad.readFile("lib/drafting.js"))();
+const draft = await cad.use("drafting");
 const { P, dim, text } = draft;
 draft.setup({
   scale: 1,

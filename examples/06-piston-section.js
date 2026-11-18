@@ -13,7 +13,7 @@
 // Exercises: addHatch, regionClip, fillet (line-circle), trimTo (circle + lines), mirror,
 // dimDiameter, measure, detail view clipped with trimTo, table.
 
-new Function(cad.readFile("lib/drafting.js"))();
+const draft = await cad.use("drafting");
 const { P, dim, text, leader, hatch, add, sub, mul } = draft;
 draft.setup({ scale: 1, layers: { ROD: { color: draft.ACI.white, lineweight: 0.5 } } });
 

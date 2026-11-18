@@ -12,7 +12,7 @@
 // addHatch, measure (chained + overall), dimAngle, mirror, custom
 // scaled linetypes, shared title block.
 
-new Function(cad.readFile("lib/drafting.js"))();
+const draft = await cad.use("drafting");
 const { P, dim, text, offsetLine, add, sub, mul, unit, perp } = draft;
 draft.setup({
   scale: 50,

@@ -12,7 +12,7 @@
 // Exercises: addSpline (closed fit), dimAngle, trimTo (keyway), addHatch
 // (follower guide), measure, table.
 
-new Function(cad.readFile("lib/drafting.js"))();
+const draft = await cad.use("drafting");
 const { P, dim, text, polar, add, sub, mul, unit, perp } = draft;
 const { ACI } = draft;
 draft.setup({

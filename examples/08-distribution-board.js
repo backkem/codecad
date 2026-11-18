@@ -11,7 +11,7 @@
 // rotation), addText rotation, ByLayer dashed linkage, enclosure in
 // PHANTOM linetype, title block.
 
-new Function(cad.readFile("lib/drafting.js"))();
+const draft = await cad.use("drafting");
 const { text } = draft;
 const { ACI } = draft;
 draft.setup({

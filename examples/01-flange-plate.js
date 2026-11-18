@@ -4,12 +4,12 @@
 // A-A (holes revolved into the cutting plane, as ISO 128 allows).
 // Scale 1:2 on a 297 x 189 sheet.
 //
-// Exercises: shared drafting lib (cad.readFile), layers with ByLayer ACI
+// Exercises: shared drafting lib (cad.use), layers with ByLayer ACI
 // colours / linetypes / lineweights, array (polar), regionClip (union /
 // subtract) for the section profile, addHatch, measure with Ø labels,
 // addFill arrowheads, leaders, title block.
 
-new Function(cad.readFile("lib/drafting.js"))();
+const draft = await cad.use("drafting");
 const { P, dim, leader, text, hatch, centerMark, arrow, polar } = draft;
 draft.setup({ scale: 2 });
 

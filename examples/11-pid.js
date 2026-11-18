@@ -13,7 +13,7 @@
 // Exercises: defineBlock (text placeholders), clone + replaceText, place
 // (rotation), addFill arrows, ByLayer linetypes, legend, title block.
 
-new Function(cad.readFile("lib/drafting.js"))();
+const draft = await cad.use("drafting");
 const { text, arrow } = draft;
 const { ACI } = draft;
 draft.setup({

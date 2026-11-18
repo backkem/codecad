@@ -13,7 +13,7 @@
 // (union), addSpline (saddle, drop bar), dimAngle, measure (h / v /
 // aligned), table, title block.
 
-new Function(cad.readFile("lib/drafting.js"))();
+const draft = await cad.use("drafting");
 const { P, dim, text, polar, add, sub, mul, unit, perp, offsetLine } = draft;
 draft.setup({
   scale: 8,

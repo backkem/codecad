@@ -4,7 +4,9 @@
 // prepends to user scripts. It reads __cadCall / __rpcCall / __readFile
 // bridge functions from globalThis (set by runtime-wrapper.js) and
 // builds globalThis.cad using the shared buildCadApi factory.
+// __loadLibrary (cad.use) is set by the bridge prelude in script.rs.
 
+import type { LibraryBackend } from "./cad-api";
 import { buildCadApi } from "./cad-api";
 
 const g = globalThis as Record<string, unknown>;
@@ -13,4 +15,5 @@ g.cad = buildCadApi({
   call: g.__cadCall as (method: string, argsJson: string) => string,
   rpc: g.__rpcCall as (method: string, argsJson: string) => string,
   readFile: g.__readFile as ((path: string) => string) | null,
+  library: (g.__loadLibrary as LibraryBackend | undefined) ?? null,
 });

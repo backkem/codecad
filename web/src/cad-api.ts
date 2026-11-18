@@ -163,12 +163,202 @@ export interface CadApiBackends {
   rpc: (method: string, argsJson: string) => string | Promise<string>;
   /** Read file contents. Null if unavailable. */
   readFile: ((path: string) => string) | null;
+  /**
+   * Resolve and load a script library for `cad.use`: `spec` as asked for by
+   * the library `from` (null: the script). Returns the JSON text
+   * `{id, code}` (or `{error}`) made by the server's `library.rs`.
+   * Null or absent if unavailable.
+   */
+  library?: LibraryBackend | null;
+}
+
+export type LibraryBackend = (
+  spec: string,
+  from: string | null,
+) => string | Promise<string>;
+
+/** The server's reply for one library. */
+interface LibraryReply {
+  id: string;
+  code: string;
+  error?: string;
+}
+
+/** What a library's code returns: a getter per export, `export *` sources. */
+interface ModuleExports {
+  names: Record<string, () => unknown>;
+  stars: Record<string, unknown>[];
+}
+
+/** `cad.use`: a promise of the library's exports. */
+export type CadUse = <T = Record<string, any>>(name: string) => Promise<T>;
+
+/** A library's code, evaluated: runs the module body. */
+type ModuleBody = (
+  cadImport: (spec: unknown, line: number) => Promise<unknown>,
+) => Promise<ModuleExports>;
+
+/**
+ * `cad.use(name)`: load a script library (an ES module) once and return its
+ * exports as a frozen namespace object. The server resolves the name and
+ * turns the module's import and export declarations into an async function
+ * (`crates/cadview-server/src/library.rs`); this evaluates it.
+ */
+export function createLibraryLoader(load: LibraryBackend): CadUse {
+  // Indirect eval: the library sees the global scope, never this one.
+  // biome-ignore lint/security/noGlobalEval: evaluating library code is the point of cad.use
+  const indirectEval = eval;
+  const ids = new Map<string, string>(); // "from\nspec" -> library id
+  const modules = new Map<string, Promise<unknown>>(); // id -> its namespace
+  const waiting = new Map<string, string>(); // id -> the id it waits for
+  const reported = new WeakSet<object>();
+
+  const fail = (message: string, cause?: unknown) => {
+    const error =
+      cause === undefined ? new Error(message) : new Error(message, { cause });
+    reported.add(error);
+    return error;
+  };
+  const describe = (e: unknown) =>
+    e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+  // Where in library `id` an error happened, as " at id:line:col".
+  const where = (e: unknown, id: string, parsing: boolean) => {
+    const pos = e as { lineNumber?: unknown; columnNumber?: unknown };
+    if (
+      parsing &&
+      e instanceof SyntaxError &&
+      typeof pos.lineNumber === "number"
+    ) {
+      return ` at ${id}:${pos.lineNumber}:${pos.columnNumber}`;
+    }
+    const stack =
+      e instanceof Error && typeof e.stack === "string" ? e.stack : "";
+    const name = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = `(?:^|[@(\\s])${name}:(\\d+):(\\d+)`;
+    const m = new RegExp(pattern, "m").exec(stack);
+    return m ? ` at ${id}:${m[1]}:${m[2]}` : "";
+  };
+
+  async function importFrom(
+    spec: unknown,
+    from: string | null,
+    line: number,
+  ): Promise<unknown> {
+    const site = from === null ? "" : ` (imported at ${from}:${line})`;
+    if (typeof spec !== "string" || spec === "") {
+      throw fail(`cad.use: a library name must be a non-empty string${site}`);
+    }
+    const key = `${from ?? ""}\n${spec}`;
+    let id = ids.get(key);
+    let found: LibraryReply | null = null;
+    if (id === undefined) {
+      let reply: LibraryReply;
+      try {
+        // Synchronous in the sandbox: no await, so errors keep the caller's line.
+        const raw = load(spec, from);
+        reply = JSON.parse(typeof raw === "string" ? raw : await raw);
+      } catch (e) {
+        const why = e instanceof Error ? e.message : String(e);
+        throw fail(`cad.use: ${why}${site}`);
+      }
+      if (reply.error) throw fail(`cad.use: ${reply.error}${site}`);
+      found = reply;
+      id = reply.id;
+      ids.set(key, id);
+    }
+    if (from !== null) {
+      // A cycle: the library asked for is (through others) waiting for the asker.
+      const path = [from, id];
+      let at: string | undefined = id;
+      while (at !== undefined && at !== from) {
+        at = waiting.get(at);
+        if (at !== undefined) path.push(at);
+      }
+      if (at === from) {
+        throw fail(`cad.use: library cycle: ${path.join(" -> ")}${site}`);
+      }
+    }
+    let module = modules.get(id);
+    let run: (() => void) | null = null;
+    if (module === undefined) {
+      if (found === null) {
+        ids.delete(key);
+        return importFrom(spec, from, line);
+      }
+      // Recorded before the library runs, so its own imports see it.
+      const source = found;
+      let settle!: (value: Promise<unknown>) => void;
+      module = new Promise<unknown>((resolve) => {
+        settle = resolve;
+      });
+      modules.set(id, module);
+      run = () => settle(evaluate(source));
+    }
+    if (from !== null) waiting.set(from, id);
+    if (run !== null) run();
+    if (from === null) return module;
+    try {
+      return await module;
+    } finally {
+      waiting.delete(from);
+    }
+  }
+
+  async function evaluate({ id, code }: LibraryReply) {
+    let body: ModuleBody;
+    try {
+      body = indirectEval(code);
+    } catch (e) {
+      const at = where(e, id, true);
+      throw fail(
+        `cad.use: library ${id} does not parse${at}: ${describe(e)}`,
+        e,
+      );
+    }
+    let exported: ModuleExports;
+    try {
+      exported = await body((spec, line) => importFrom(spec, id, line));
+    } catch (e) {
+      if (e instanceof Object && reported.has(e)) throw e;
+      const at = where(e, id, false);
+      throw fail(
+        `cad.use: library ${id} threw while loading${at}: ${describe(e)}`,
+        e,
+      );
+    }
+    return namespace(exported);
+  }
+
+  // The module namespace: a frozen object whose getters read the exports live.
+  function namespace({ names, stars }: ModuleExports) {
+    const ns = Object.create(null) as Record<string, unknown>;
+    const define = (key: string, get: () => unknown) =>
+      Object.defineProperty(ns, key, { get, enumerable: true });
+    for (const key of Object.keys(names)) define(key, names[key]);
+    for (const star of stars) {
+      for (const key of Object.keys(star)) {
+        if (key !== "default" && !Object.hasOwn(ns, key)) {
+          define(key, () => star[key]);
+        }
+      }
+    }
+    Object.defineProperty(ns, Symbol.toStringTag, { value: "Module" });
+    return Object.freeze(ns);
+  }
+
+  return <T = Record<string, any>>(name: string): Promise<T> =>
+    importFrom(name, null, 0) as Promise<T>;
+}
+
+function unavailableUse<T = Record<string, any>>(_name: string): Promise<T> {
+  return Promise.reject(new Error("cad.use needs the CodeCAD server"));
 }
 
 export function buildCadApi({
   call: rawCall,
   rpc: rawRpc,
   readFile: rawReadFile,
+  library,
 }: CadApiBackends) {
   function call(method: string, args: Record<string, unknown> = {}): unknown {
     return parseResult(rawCall(method, JSON.stringify(args)));
@@ -179,6 +369,8 @@ export function buildCadApi({
     if (typeof raw === "string") return parseResult(raw);
     return (raw as Promise<string>).then(parseResult);
   }
+
+  const use: CadUse = library ? createLibraryLoader(library) : unavailableUse;
 
   return {
     // ── Observe ───────────────────────────────────────────────────────
@@ -602,6 +794,14 @@ export function buildCadApi({
       : () => {
           throw new Error("readFile not available in this environment");
         },
+
+    // ── Script libraries ──────────────────────────────────────────────
+    /**
+     * Load a script library once and return its exports:
+     * `const draft = await cad.use("drafting")` loads `lib/drafting.js`.
+     * A relative path (`"./parts.js"`) is relative to the script's folder.
+     */
+    use,
   };
 }
 

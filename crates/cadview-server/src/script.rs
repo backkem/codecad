@@ -54,6 +54,8 @@ const call = (method, text) => {
 globalThis.__cadCall = (method, argsJson) => call("cad." + method, argsJson);
 globalThis.__rpcCall = (method, argsJson) => call("rpc." + method, argsJson);
 globalThis.__readFile = (path) => call("readFile", path);
+globalThis.__loadLibrary = (spec, from) =>
+  call("lib.load", JSON.stringify({ spec, from }));
 "#;
 
 /// Output from a successful run.
@@ -278,6 +280,7 @@ impl HostCalls<RunState> for CadHost {
                 }
                 Some(("rpc", "exec")) => exec(state, args).await,
                 Some(("rpc", m)) => guarded(|| rpc_call(state, m, args)),
+                Some(("lib", "load")) => crate::library::load_json(&state.read_base, args),
                 None if method == "readFile" => read_file(&state.read_base, args),
                 _ => return Err(Failure::unknown_method(method)),
             };
@@ -653,5 +656,394 @@ mod tests {
             "{output:?}"
         );
         assert_eq!(entity_count(&registry).await, 9);
+    }
+
+    // ── cad.use: script libraries ───────────────────────────────────
+
+    fn write(dir: &Path, rel: &str, text: &str) {
+        let path = dir.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    /// Run `program` as the file `main.js` in `dir`, the way `/api/run`
+    /// runs `{"exec": ...}`.
+    async fn exec_main(
+        dir: &Path,
+        registry: &Arc<Mutex<DocumentRegistry>>,
+        program: &str,
+    ) -> Result<RunOutput, String> {
+        write(dir, "main.js", program);
+        let path = dir.join("main.js");
+        exec_file(
+            &SANDBOX,
+            registry,
+            "doc",
+            path.to_str().unwrap(),
+            Some(Duration::from_secs(10)),
+        )
+        .await
+    }
+
+    fn value(output: &RunOutput) -> Value {
+        serde_json::from_str(output.value.as_deref().unwrap()).unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_library_is_evaluated_once_and_returns_its_exports() {
+        let (dir, registry) = registry();
+        write(
+            dir.path(),
+            "lib/geom.js",
+            "// Each evaluation draws one line, so the entity count shows how often it ran.\n\
+             cad.addLine([0, 0], [1, 0]);\n\
+             export const TAU = Math.PI * 2;\n\
+             export let count = 0;\n\
+             export function bump() { count += 1; return count; }\n\
+             export function circle(c, r) { return cad.addCircle(c, r); }\n\
+             export default { kind: \"geom\" };\n",
+        );
+        write(
+            dir.path(),
+            "lib/shapes.js",
+            "import geom, { circle } from \"geom\";\n\
+             import * as g from \"./geom.js\";\n\
+             export function ring(c) { circle(c, 1); circle(c, 2); return g.TAU; }\n\
+             export const kind = geom.kind;\n\
+             export * from \"./geom.js\";\n",
+        );
+        let output = exec_main(
+            dir.path(),
+            &registry,
+            "const a = await cad.use(\"geom\");\n\
+             const b = await cad.use(\"./lib/geom.js\");\n\
+             const s = await cad.use(\"shapes\");\n\
+             const tau = s.ring([0, 0]);\n\
+             a.bump(); a.bump();\n\
+             return {\n\
+               same: a === b,\n\
+               keys: Object.keys(a),\n\
+               tag: Object.prototype.toString.call(a),\n\
+               frozen: Object.isFrozen(a),\n\
+               kind: s.kind,\n\
+               starred: s.circle === a.circle && !(\"default\" in s),\n\
+               live: [a.count, s.count],\n\
+               tau,\n\
+               leaked: [\"geom\", \"shapes\", \"circle\", \"TAU\", \"ring\", \"g\", \"__cadImport\"]\n\
+                 .filter((k) => k in globalThis),\n\
+               entities: cad.describe().entities,\n\
+             };",
+        )
+        .await
+        .unwrap();
+        let v = value(&output);
+        assert_eq!(v["same"], true, "{v}");
+        assert_eq!(
+            v["keys"],
+            serde_json::json!(["TAU", "count", "bump", "circle", "default"])
+        );
+        assert_eq!(v["tag"], "[object Module]");
+        assert_eq!(v["frozen"], true);
+        assert_eq!(v["kind"], "geom");
+        assert_eq!(v["starred"], true, "{v}");
+        assert_eq!(
+            v["live"],
+            serde_json::json!([2, 2]),
+            "exports are read live"
+        );
+        assert!((v["tau"].as_f64().unwrap() - std::f64::consts::TAU).abs() < 1e-12);
+        assert_eq!(v["leaked"], serde_json::json!([]), "no globals leak");
+        // One line (geom ran once, though asked for four times) and two circles.
+        assert_eq!(v["entities"], 3, "{v}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_library_runs_in_strict_mode_and_cannot_create_globals_by_accident() {
+        let (dir, registry) = registry();
+        write(
+            dir.path(),
+            "lib/sloppy.js",
+            "export const a = 1;\nleak = 5;\n",
+        );
+        let error = exec_main(dir.path(), &registry, "await cad.use(\"sloppy\");")
+            .await
+            .unwrap_err();
+        assert!(
+            error.contains("library lib/sloppy.js threw while loading at lib/sloppy.js:2:"),
+            "{error}"
+        );
+        assert!(error.contains("ReferenceError"), "{error}");
+        let output = exec_main(dir.path(), &registry, "return typeof leak;")
+            .await
+            .unwrap();
+        assert_eq!(output.value.as_deref(), Some("undefined"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn each_run_evaluates_its_libraries_afresh() {
+        let (dir, registry) = registry();
+        write(
+            dir.path(),
+            "lib/mark.js",
+            "cad.addLine([0, 0], [1, 1]);\nexport const ok = true;\n",
+        );
+        write(dir.path(), "other.js", "await cad.use(\"mark\");");
+        let output = exec_main(
+            dir.path(),
+            &registry,
+            "await cad.use(\"mark\");\nawait cad.use(\"mark\");\ncad.exec(\"other.js\");\n\
+             return cad.describe().entities;",
+        )
+        .await
+        .unwrap();
+        // Once in this run, once in the nested `exec` run.
+        assert_eq!(output.value.as_deref(), Some("2"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stack_traces_name_the_library() {
+        let (dir, registry) = registry();
+        write(
+            dir.path(),
+            "lib/tools.js",
+            "// tools\n\nexport function boom() {\n  return null.x;\n}\n",
+        );
+        let error = exec_main(
+            dir.path(),
+            &registry,
+            "const t = await cad.use(\"tools\");\nt.boom();",
+        )
+        .await
+        .unwrap_err();
+        assert!(error.starts_with("program error: TypeError"), "{error}");
+        assert!(error.contains("(at lib/tools.js:4:"), "{error}");
+
+        // The same in a stack the script reads itself.
+        let output = exec_main(
+            dir.path(),
+            &registry,
+            "const t = await cad.use(\"tools\");\ntry { t.boom(); } catch (e) { return e.stack; }",
+        )
+        .await
+        .unwrap();
+        let stack = output.value.unwrap();
+        assert!(stack.starts_with("boom@lib/tools.js:4:"), "{stack}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_missing_library_names_itself_and_the_line() {
+        let (dir, registry) = registry();
+        let error = run_script(
+            &SANDBOX,
+            &registry,
+            "doc",
+            "const a = 1;\nawait cad.use(\"nope\");\n",
+            dir.path(),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.contains("cad.use: library \"nope\" not found (no file lib/nope.js)"),
+            "{error}"
+        );
+        assert!(error.contains("(at script.js:2:"), "{error}");
+
+        // Asked for by another library: that library's line.
+        write(
+            dir.path(),
+            "lib/needy.js",
+            "// needs a library that is not there\nimport { x } from \"./gone.js\";\n",
+        );
+        let error = exec_main(dir.path(), &registry, "await cad.use(\"needy\");")
+            .await
+            .unwrap_err();
+        assert!(
+            error.contains(
+                "library \"./gone.js\" not found (no file lib/gone.js) (imported at lib/needy.js:2)"
+            ),
+            "{error}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_library_that_fails_while_loading_names_itself_and_the_line() {
+        let (dir, registry) = registry();
+        write(
+            dir.path(),
+            "lib/bad.js",
+            "export const a = 1;\n\nthrow new RangeError(\"bad setup\");\n",
+        );
+        write(
+            dir.path(),
+            "lib/outer.js",
+            "import \"bad\";\nexport const b = 2;\n",
+        );
+        write(
+            dir.path(),
+            "lib/syntax.js",
+            "export const a = 1;\nconst b = ;\n",
+        );
+        write(
+            dir.path(),
+            "lib/dynamic.js",
+            "export const a = 1;\nconst m = await import(\"x\");\n",
+        );
+        let thrown: &[&str] = &[
+            "cad.use: library lib/bad.js threw while loading at lib/bad.js:3:",
+            ": RangeError: bad setup",
+        ];
+        let cases: [(&str, &[&str]); 4] = [
+            ("bad", thrown),
+            // Not wrapped again by the library that imported it.
+            ("outer", thrown),
+            (
+                "syntax",
+                &[
+                    "cad.use: library lib/syntax.js does not parse at lib/syntax.js:2:",
+                    ": SyntaxError: ",
+                ],
+            ),
+            (
+                "dynamic",
+                &[
+                    "cad.use: library lib/dynamic.js: import() is not supported in a library: \
+                   use an import declaration at the top of the file at lib/dynamic.js:2:17",
+                ],
+            ),
+        ];
+        for (name, expected) in cases {
+            let error = exec_main(
+                dir.path(),
+                &registry,
+                &format!("const x = 1;\nawait cad.use(\"{name}\");"),
+            )
+            .await
+            .unwrap_err();
+            for part in expected {
+                assert!(error.contains(part), "{name}: {error}");
+            }
+            // A script can catch it, too.
+            let output = exec_main(
+                dir.path(),
+                &registry,
+                &format!("try {{ await cad.use(\"{name}\"); }} catch (e) {{ return e.message; }}"),
+            )
+            .await
+            .unwrap();
+            let message = output.value.unwrap();
+            assert!(message.starts_with(expected[0]), "{name}: {message}");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_cycle_is_reported_not_hung() {
+        let (dir, registry) = registry();
+        write(
+            dir.path(),
+            "lib/c1.js",
+            "import \"./c2.js\";\nexport const a = 1;\n",
+        );
+        write(
+            dir.path(),
+            "lib/c2.js",
+            "// c2\nimport { a } from \"c1\";\nexport const b = a;\n",
+        );
+        write(dir.path(), "lib/self.js", "import \"self\";\n");
+        let started = Instant::now();
+        let error = exec_main(dir.path(), &registry, "await cad.use(\"c1\");")
+            .await
+            .unwrap_err();
+        assert!(
+            error.contains(
+                "cad.use: library cycle: lib/c2.js -> lib/c1.js -> lib/c2.js \
+                 (imported at lib/c2.js:2)"
+            ),
+            "{error}"
+        );
+        let error = exec_main(dir.path(), &registry, "await cad.use(\"self\");")
+            .await
+            .unwrap_err();
+        assert!(
+            error.contains("library cycle: lib/self.js -> lib/self.js"),
+            "{error}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn libraries_stay_inside_the_script_folder() {
+        let (dir, registry) = registry();
+        // The script runs in sub/; secret.js is next to sub/, outside it.
+        write(dir.path(), "secret.js", "export const key = 42;\n");
+        write(
+            dir.path(),
+            "sub/lib/escape.js",
+            "import { key } from \"../../secret.js\";\nexport { key };\n",
+        );
+        let secret = dir.path().join("secret.js").canonicalize().unwrap();
+        let secret_js = serde_json::to_string(&secret.to_string_lossy()).unwrap();
+        let cases = [
+            ("\"../secret.js\"", "is outside the script's folder"),
+            ("\"./../secret.js\"", "is outside the script's folder"),
+            ("\"lib/../../secret\"", "is not a library name"),
+            (secret_js.as_str(), "is not a library name"),
+            ("\"https://example.com/lib.js\"", "is not a library name"),
+            (
+                "\"escape\"",
+                "is outside the script's folder (imported at lib/escape.js:1)",
+            ),
+        ];
+        for (spec, expected) in cases {
+            write(
+                &dir.path().join("sub"),
+                "main.js",
+                &format!("try {{ await cad.use({spec}); return \"loaded\"; }} catch (e) {{ return e.message; }}"),
+            );
+            let output = exec_file(
+                &SANDBOX,
+                &registry,
+                "doc",
+                dir.path().join("sub/main.js").to_str().unwrap(),
+                None,
+            )
+            .await
+            .unwrap();
+            let message = output.value.unwrap();
+            assert!(message.contains(expected), "{spec}: {message}");
+        }
+    }
+
+    /// Every example loads `lib/drafting.js` through `cad.use` and runs.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_examples_run_with_their_library() {
+        let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+        let mut names: Vec<PathBuf> = std::fs::read_dir(&examples)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| {
+                p.extension().is_some_and(|x| x == "js")
+                    && p.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with(|c: char| c.is_ascii_digit())
+            })
+            .collect();
+        names.sort();
+        assert_eq!(names.len(), 12, "{names:?}");
+        for path in names {
+            let source = std::fs::read_to_string(&path).unwrap();
+            assert!(!source.contains("new Function("), "{}", path.display());
+            assert!(
+                source.contains("await cad.use(\"drafting\")"),
+                "{}",
+                path.display()
+            );
+            let (_dir, registry) = registry();
+            exec_file(&SANDBOX, &registry, "doc", path.to_str().unwrap(), None)
+                .await
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            assert!(entity_count(&registry).await > 50, "{}", path.display());
+        }
     }
 }

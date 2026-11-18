@@ -13,7 +13,7 @@
 // Exercises: addSpline (fit), fillet (line-arc), array (polar),
 // tangentLines, trimTo, dimDiameter, measure, table.
 
-new Function(cad.readFile("lib/drafting.js"))();
+const draft = await cad.use("drafting");
 const { P, dim, text, polar } = draft;
 const { ACI } = draft;
 draft.setup({

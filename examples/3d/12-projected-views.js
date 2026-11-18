@@ -131,6 +131,9 @@ if (globalThis.EXAMPLE_RENDER !== false) {
   files.push(out);
   pdf = `${dir ?? "target/3d-views"}/12-projected-views.pdf`;
   await cad.savePdf(pdf, { colors: "paper", lineweights: true });
+  // For the site: the sheet as a DWG and the part as a prebaked scene.
+  await run.drawing();
+  await run.bake({ view: "iso", ground: true });
 }
 
 const summary = run.summary({

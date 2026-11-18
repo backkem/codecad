@@ -4,11 +4,19 @@
   <img src="brand/architecture-hero.png" alt="CodeCAD architecture" width="100%">
 </p>
 
-Browser-based CAD viewer and editor for .dwg drawings with a Rust
-server backend. Reads DWG via acadrust, dual GPU renderer (Vello
-compute-based + egui fallback), syncs bidirectionally between server
-and browser(s) via Yrs CRDT over WebTransport. Multi-document tabs
-with per-session isolation.
+CodeCAD is CAD you can program: exact 2D drawings and 3D solid models
+from one script. 2D is still the base: plans and documentation are what
+you hand over. 3D is the thinking space: where you model and check, and
+later the input to fabrication (printing, CNC), which is a direction and
+not a feature today.
+
+It is a browser viewer and editor with a Rust server backend. Reads DWG
+via acadrust, dual GPU renderer (Vello compute-based + egui fallback),
+syncs bidirectionally between server and browser(s) via Yrs CRDT over
+WebTransport. Multi-document tabs with per-session isolation. Solid
+parts live in the same document; the server's kernel builds them, and
+the browser shows them from prebaked scenes or an optional kernel module
+(`docs/3d-design.md`).
 
 ## Why this exists
 
@@ -21,6 +29,8 @@ heavyweight desktop software. We want to:
 4. Edit via conversation with an AI agent, see changes in real time
 5. Edit from multiple browser tabs or from server-side automation
 6. Drag-and-drop new DWG files to view instantly
+7. Model what a drawing documents as solid parts, check them by rules in
+   script, and draw them again from the model
 
 ## Stack
 

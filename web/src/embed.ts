@@ -9,6 +9,10 @@
 // `cad.bake3d` on a server with a kernel) in 3D, with a switch between the
 // working render and the path-traced presentation render. No kernel is
 // downloaded: the scene holds the meshes, boxes and render options.
+// `background` (a `cad.render` background: "viewer", "#rrggbb", ...) sets
+// the working render's background; the presentation render keeps the
+// scene's own look. The mode control's accent is the page's
+// `--codecad-model` colour when it sets one.
 //
 // Shadow DOM for full style encapsulation. Canvas element is passed
 // directly to start_renderer (no getElementById), so Shadow DOM works.
@@ -168,7 +172,7 @@ canvas {
 .modes button[aria-checked="true"] {
   color: #e8e8e8;
   background: rgba(255, 255, 255, 0.06);
-  box-shadow: inset 0 -2px 0 #ffb000;
+  box-shadow: inset 0 -2px 0 var(--codecad-model, #5ea2ff);
 }
 .samples {
   position: absolute;
@@ -382,7 +386,7 @@ class CodecadViewer extends HTMLElement {
           start_view3d(
             this.canvas,
             this.sessionId,
-            JSON.stringify({ quality }),
+            JSON.stringify({ quality, ...this.modeOptions(quality) }),
           ),
         );
         if (s.error) throw new Error(s.error);
@@ -399,8 +403,21 @@ class CodecadViewer extends HTMLElement {
 
   private setQuality(q: string) {
     if (!this.rendererKey) return;
-    view3d_command(this.rendererKey, JSON.stringify({ quality: q }));
+    const options = this.modeOptions(q);
+    view3d_command(
+      this.rendererKey,
+      JSON.stringify(
+        Object.keys(options).length ? { quality: q, options } : { quality: q },
+      ),
+    );
     this.markQuality(q);
+  }
+
+  /** Render options per mode: the `background` attribute is the working render's only. */
+  private modeOptions(q: string): Record<string, unknown> {
+    const bg = this.getAttribute("background");
+    if (!bg) return {};
+    return { background: q === "working" ? bg : null };
   }
 
   private markQuality(q: string) {

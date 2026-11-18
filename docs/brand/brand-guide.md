@@ -1,6 +1,13 @@
 # CodeCAD Brand Guide
 
-Agent-first 2D CAD. State intent, generate precise geometry.
+CodeCAD: CAD you can program. Exact 2D drawings and 3D solid models
+from one script. Drawings are what you hand over. Models are where you
+think.
+
+One product, one brand. 2D and 3D are two kinds of view of the same
+work, not two products: the mark, palette, type and voice below cover
+both, and only the kind-of-view accent (see "Kind of view") tells a
+drawing from a model.
 
 ## Brand Story
 
@@ -37,9 +44,35 @@ Secondary tones (use sparingly):
 | Success | `#34D399` | Status indicators only |
 | Error | `#EF4444` | Status indicators only |
 
-**Rule: amber appears ONLY on the crosshair element.** Buttons, links,
-highlights, selections all use white or gray. The crosshair owns the
-color exclusively. This is what makes it the brand's signature.
+**Rule: amber appears ONLY on the crosshair element**, and on the marks
+of a Drawing (below). Buttons, links, highlights, selections all use
+white or gray. This is what makes it the brand's signature.
+
+### Kind of view
+
+The site and the viewers say which kind of view a thing is with one
+accent each. They mark the kind, not a second product.
+
+| Kind | Color | Hex | Used on |
+|------|-------|-----|---------|
+| Drawing (2D: sheets, DWG) | Amber | `#FFB000` | Drawing badges, the Drawing tab and shelf filter |
+| Model (3D: solid parts) | Blue | `#5EA2FF` | Model badges, the Model tab and shelf filter, the 3D viewer's Working/Presentation control |
+
+- **Only on badges, tabs and the 3D viewer's mode control.** Never on
+  buttons, links, text, geometry or backgrounds.
+- **One variable.** The site defines the model accent once,
+  `--codecad-model` in `site/site.css`; the embed viewer reads the same
+  variable (its fallback carries the same value for other pages).
+- **Why blue.** It is amber's complement (hue 216 against 41), so the two
+  never read as one; it stays apart from amber for red-green colour
+  blindness (the blue-yellow axis is kept); it is clear of the green and
+  red status colours; contrast on the void is 7.5:1. Cyan and violet were
+  the other candidates (cyan sits close to the success green, violet has
+  the lowest contrast).
+- **Working views use the dark background.** A 3D view in working
+  quality on the site sits on the viewer's dark background, next to the
+  2D viewer. Presentation renders (path traced) keep their own look:
+  their environment, ground and light.
 
 ### The Crosshair
 
@@ -69,6 +102,9 @@ The hero element. Usage rules:
 - Code: JetBrains Mono everywhere code appears (command line, entity
   IDs, coordinates, API examples).
 - Never use serif fonts anywhere in the brand.
+- The site loads nothing from other hosts, fonts included: its CSS names
+  Jost and JetBrains Mono and falls back to the system's sans and mono
+  where they are not installed.
 
 ### Logo Variants
 
@@ -121,8 +157,10 @@ Pick one per context:
 
 | Tagline | Best for |
 |---------|----------|
-| Code compiled to live geometry. | Technical docs, README |
-| State intent. Generate precise CAD. | Marketing, landing page |
+| CAD you can program. | Product line: title, landing page, README |
+| Drawings are what you hand over. Models are where you think. | Next to the product line |
+| Code compiled to live geometry. | Technical docs |
+| State intent. Generate precise CAD. | Marketing |
 | The programmable canvas. | Shorthand, social |
 
 ## Assets

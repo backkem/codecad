@@ -72,8 +72,8 @@ scoreboard cases yet.
 | 8 | `08-turned-stool.js` | 7 | Beads are half circles (a flatter bead's circle crosses the leg axis: refused as a spindle torus). Joints are not cut: tenons overlap the seat and legs; feet and shoulders stay square to the 8° leg. |
 | 9 | `09-room.js` | 25 | 07's living room (5000 x 3200, walls 300 and 100, two windows, a door), typed in: a script under `examples/3d` cannot read `examples/07-floor-plan.js` or its DWG (the sandbox reads below the script's folder only). Heights are the script's. Windows are open, no glass. The bookshelf and stool come from `lib/bookshelf.js` and `lib/stool.js`; the stool's untrimmed feet are lifted so their lowest edges touch the floor. Checks: wall volumes with openings, nothing of the room overlaps the furniture, the bookshelf's back on the wall, the stool in the sun patch the script computes. |
 | 10 | `10-still-life.js` | 11 | A wine glass, a glazed bowl, a steel flask and cap, a walnut pepper mill and its finial on an oak table. The kernel refuses an arc whose circle crosses the axis, so the glass bowl has a flat floor and a straight tapered wall, the bowl a flat inside floor, the flask a quarter-circle shoulder, and the mill no convex swell (a cove between beads); the script checks every arc against the rule. No knurled band. |
-| 11 | `11-play-tower.js`, `11-play-tower-partlist.js` | 142 | The whole set, built once by `lib/playtower.js`: the frame and roof, a cabin, a railing, stairs with risers and handrails, a sandbox, a wave slide and two swings. Rules over set queries (`lib/rules.js`) and a part list with a cutting plan (`lib/partlist.js`). Simplified: roof boards butted, not lapped (every contact is then a face the overlap check reads as a touch); bought parts are plausible solids, not a maker's; fixings are counted, not modelled; no construction guide yet. See "Example 11" below. |
-| 12 | `12-projected-views.js` | 1 | A pillow block drawn on an A3 sheet: front, top and left views in first angle and an isometric view from `cad.project` (rung 3D3a), dimensions through `toSheet`, PNG and PDF. The oil hole is 8 mm off the bore's axis: on it, arris 0.11.1 refuses the cut. The play tower's construction guide can now be drawn from such views (`lib/views.js`); it is not written yet. |
+| 11 | `11-play-tower.js`, `11-play-tower-partlist.js`, `11-play-tower-guide.js` | 142 | The whole set, built once by `lib/playtower.js`: the frame and roof, a cabin, a railing, stairs with risers and handrails, a sandbox, a wave slide and two swings. Rules over set queries (`lib/rules.js`), a part list with a cutting plan (`lib/partlist.js`) and a construction guide of twelve steps on six sheets (`lib/guide.js`). Simplified: roof boards butted, not lapped (every contact is then a face the overlap check reads as a touch); bought parts are plausible solids, not a maker's; fixings are counted, not modelled (the guide marks where they go). See "Example 11" below. |
+| 12 | `12-projected-views.js` | 1 | A pillow block drawn on an A3 sheet: front, top and left views in first angle and an isometric view from `cad.project` (rung 3D3a), dimensions through `toSheet`, PNG and PDF. The oil hole is 8 mm off the bore's axis: on it, arris 0.11.1 refuses the cut. The play tower's construction guide is drawn from such views (`11-play-tower-guide.js`). |
 
 ### Presentation renders (2026-11-18, rung 3D5a first slice)
 
@@ -179,8 +179,115 @@ m of rope, 0.32 m³ of sand. Fixings from rules of thumb per joint (39
 rules, from "2 coach bolts per post to rim" to "2 screws per roof board
 per rafter") and per part (a ground anchor per post): 926 for 436 joints;
 a joint no rule names fails the part list script. The data also holds an
-assembly order (12 steps, each with its parts and the fixings it uses)
-for the construction guide, which waits for projected views.
+assembly order (12 steps, each with its parts and the fixings it uses),
+which the construction guide draws.
+
+**The construction guide** (`11-play-tower-guide.js`, generic code in
+`lib/guide.js`). Twelve steps, two per sheet, six sheets, each a PDF page
+and a 2D PNG; the first sheet is the example's picture. A step is drawn
+like this:
+
+- The view: `cad.project` of every part built so far, in the isometric
+  corner that leaves the new parts least covered. Nine points in each new
+  part's box count as covered when the ray from them toward the eye passes
+  through another built part's box; the previous step's corner is kept
+  unless another is better by more than 8 points. Steps 1 to 3 are seen
+  from the front right, 4 to 6 from the front left, 7 (the cabin walls)
+  from the back left, then front left and front right again.
+- The block is read back with `cad.children` and redrawn as plain
+  entities: the new parts' visible edges in a strong orange line (0.5 mm in
+  the PDF), the earlier parts' visible edges thin and grey, hidden edges
+  only for a new part that is less than 40 % visible (the studs behind the
+  wall boards, the sand). The parts are told apart by `partId`.
+- Labels: each new member once, with its count, section and cut length
+  from the part list ("8 RAFTERS / 45x95, 1111 long"), or what to buy, and
+  a leader to the middle of one of its parts' visible edges. The label is
+  placed on a 1.5 mm grid inside the panel: the cost is the leader's
+  length, plus 40 per mask cell under the label (the mask is the outline
+  of every part on the sheet, the fixing markers and the detail boxes),
+  plus penalties for crossing another leader or label. Positions are
+  tried cheapest lower bound first, so most are never costed. Each label
+  is placed once, then again with the others fixed. On all six sheets no
+  label covers a mask cell or another label (a check).
+- Fixings: a marker at each joint of the step (the middle of the face the
+  two parts' boxes share; a ground anchor at the part's foot), one shape
+  per kind of joint, a table of the step's fixings, and a line of
+  instruction. The words of the instructions are the script's; every count
+  and fixing in them comes from the data.
+- Details, where a step needs one: the stringer's foot and head (cut
+  angles, a dimension of the pitch), the rafter's birdsmouth seat on the
+  wall plate seen along the ridge, one swing's two hangers with the rope
+  spacing. Each is a projection of a few parts cut to a window in script,
+  in a corner of the panel the main view leaves free (found from the parts'
+  boxes before projecting; the main view's scale steps down until there is
+  one).
+
+Checks: every part is in exactly one step and in its step's view; every
+label's count equals the part list's for that step; each step's fixings
+equal the part list's, and they add up to its 926; everything stays inside
+the frame and clear of the title block; no two labels overlap and no label
+covers the drawing.
+
+Times (release build, one machine, a warm GPU): the whole script about
+10 s, of which the model and its contacts 2.1 s (the contacts 1.8 s, shared
+with the part list) and choosing the corners 0.4 s. Per sheet, drawing and
+writing the PNG and the PDF: 0.8, 1.0, 0.8, 1.1, 1.1 and 2.3 s. Projection
+is cheap until the slide is built: 2 to 200 ms per view for steps 1 to 10,
+0.65 s for steps 11 and 12 (the slide's swept faces). The rest of a step is
+script: redrawing the view (up to 2500 entities), the masks and the label
+search, 0.2 to 0.6 s. Well inside the sandbox's 30 s, so the guide is one
+script. With other builds running on the same machine it took up to 26 s.
+
+How it reads: the new parts stand out on every sheet and the labels sit
+clear of the drawing with short leaders. Still weak: the cabin walls
+(step 7) carry 87 markers on 34 boards and read busy; the ridge caps'
+markers bunch along the ridge; views from step 3 on are 1:40 to 1:50,
+because the swing frame makes the drawing wide, so small parts (hangers,
+risers) are small; the 960 x 640 PNG is an overview, the PDF is the sheet
+to read.
+
+**What the guide needed and the API does not have** (each worked around
+in script, visibly):
+
+- No way to style a projection per part. `cad.project` puts edges on one
+  layer per class (visible, hidden), not per part. Drawing the new parts'
+  edges again over the block does not work: the block's copies paint over
+  entities added after it. Repro: `const b = cad.extrude({ min: [0, 0],
+  max: [100, 50] }, { distance: 30 }); cad.addLayer("OLD", { color: 8 });
+  cad.addLayer("NEW", { color: 30 }); const v = cad.project({ view:
+  "front", layers: { visible: "OLD", hidden: "OLD" } }); for (const e of
+  cad.children(v.insert)) cad.addLine(e.start, e.end, { layer: "NEW" });`
+  then a 2D render: the outline is grey (brightest pixel 136, 127, 119);
+  with the insert removed it is orange (239, 120, 2). What would help: a
+  `layers` entry per part selector (`[{ parts, visible, hidden }]`), or
+  `hidden: false` for a part selector, or a call that explodes an insert
+  into plain entities. The guide redraws every view as plain entities and
+  removes the block.
+- No call adds an ellipse, and `defineBlock` takes no ellipse or spline.
+  Projected ellipses (the slide's bends, the ropes, the seats' corners) are
+  redrawn as cubic splines fitted through 25 points of the arc.
+- No window for a projection: a detail of a region is clipped in script
+  (lines exactly, curves resampled).
+- No region per part from `cad.project` (the part's visible outline), so
+  the new parts cannot be shaded; and the 2D render paints every solid fill
+  at a fixed 14 % alpha, so a fill would only tint. The fixing markers are
+  outlines for the same reason.
+- The 2D render draws every stroke 1 px wide, whatever its lineweight, so
+  on the PNGs "strong" and "quiet" are colours only; the PDF
+  (`lineweights: true`) has the weights. Strokes whose box is under 8 px
+  fade, so the markers are faint on the 960 x 640 PNG.
+- `savePdf` draws every linetype solid: the hidden edges of new parts are
+  dashed on the PNG and solid (thinner) in the PDF.
+- `cad.render` pads explicit `bounds` by 10 % as it does the default
+  bounds, so a sheet does not fill the image.
+- No query for where a part meets a plane. The ground anchor of an angled
+  A-frame leg goes at its foot: a unique copy of the leg cut to a 2 mm slab
+  at the ground with `cad.intersect`, its box read, the copy removed
+  (`guide.footOf`).
+
+No projected edge was missing or wrongly hidden in the views looked at
+(every step's sheet, and the whole tower projected at full size from two
+corners, rendered zoomed on the cabin and the deck).
 
 **Still simplified, and what is missing.**
 

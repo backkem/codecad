@@ -15,11 +15,23 @@
 //
 // The isometric view, and any view with a `present` option, is also
 // rendered in presentation quality (path traced, with the material presets
-// of materials.js looked up by each part's `material` attribute) to
-// target/3d-views/NN-name-render.png (NN-name-VIEW-render.png for other
-// views). `present` holds options for that render only (more materials,
-// an environment, exposure). globalThis.EXAMPLE_PRESENT = false skips
-// these renders; globalThis.EXAMPLE_PRESENT_SPP sets their samples.
+// of materials.js looked up by each part's `material` attribute): the
+// isometric one next to the picture, examples/3d/NN-name-render.png (the
+// site shows it), the others to target/3d-views/NN-name-VIEW-render.png.
+// `present` holds options for that render only (more materials, an
+// environment, exposure). globalThis.EXAMPLE_PRESENT = false skips these
+// renders; globalThis.EXAMPLE_PRESENT_SPP sets their samples.
+//
+// Files for the site, next to the picture, written with the renders: the
+// isometric view as a prebaked scene, examples/3d/NN-name.bake3d
+// (cad.bake3d: the parts' meshes, boxes and the render options, with the
+// presentation look of that view, so the site's 3D viewer shows both
+// render modes without a kernel). A sheet (mode: "2d") is also saved as a
+// DWG for the site's 2D viewer, to target/3d-views/NN-name.dwg: the DWG
+// writer's bytes differ from run to run, so the committed copy,
+// examples/3d/NN-name.dwg, is updated by hand when the sheet changes (copy
+// it over), as the 2D examples' DWGs are by their export step. A script
+// that renders on its own calls run.bake() and run.drawing() itself.
 
 const sum = (xs) => xs.reduce((a, b) => a + b, 0);
 
@@ -43,6 +55,7 @@ function start(name) {
   let renderMs = 0;
   const checks = [];
   const files = [];
+  const site = [];
 
   // A number against the value the script computed: relative tolerance
   // `rel` (and an absolute floor `abs` for values near zero).
@@ -94,7 +107,30 @@ function start(name) {
       if ((as === "iso" || present) && opts.mode !== "2d" && globalThis.EXAMPLE_PRESENT !== false) {
         await presentation(as, opts, present ?? {});
       }
+      if (as === "iso") await (opts.mode === "2d" ? drawing() : bake(opts, present ?? {}));
     }
+  }
+
+  // The prebaked scene for the site: the view's options with the
+  // materials and the look of its presentation render.
+  async function bake(opts, present = {}) {
+    if (globalThis.EXAMPLE_RENDER === false) return;
+    const mat = await cad.use("materials");
+    // The view's own ground stays: a ground colour or material of the
+    // presentation render would cover the working render's background too
+    // (the working render draws the ground's colour).
+    const { materials: extra, ground: _ground, ...rest } = present;
+    const out = `${globalThis.EXAMPLE_RENDER_DIR ?? "examples/3d"}/${name}.bake3d`;
+    const r = await cad.bake3d({ ...opts, materials: mat.option(extra ?? {}), ...rest, out });
+    site.push({ path: out, bytes: r.bytes, triangles: r.triangles, chord: r.chord });
+  }
+
+  // The sheet as a DWG for the site's 2D viewer (see the top).
+  async function drawing() {
+    if (globalThis.EXAMPLE_RENDER === false) return;
+    const out = `${globalThis.EXAMPLE_RENDER_DIR ?? "target/3d-views"}/${name}.dwg`;
+    await cad.saveDwg(out);
+    site.push({ path: out });
   }
 
   // The presentation render of one view: the same options, path traced,
@@ -103,7 +139,7 @@ function start(name) {
     const mat = await cad.use("materials");
     const { materials: extra, ...rest } = present;
     const suffix = as === "iso" ? "render" : `${as}-render`;
-    const out = `${globalThis.EXAMPLE_RENDER_DIR ?? "target/3d-views"}/${name}-${suffix}.png`;
+    const out = `${globalThis.EXAMPLE_RENDER_DIR ?? (as === "iso" ? "examples/3d" : "target/3d-views")}/${name}-${suffix}.png`;
     const spp = globalThis.EXAMPLE_PRESENT_SPP;
     const r = await cad.render({
       size: [960, 640],
@@ -137,6 +173,7 @@ function start(name) {
       ...(files.some((f) => f.samples)
         ? { presentation: files.filter((f) => f.samples).map(({ path, ms, samples, trace }) => ({ path, ms, samples, trace })) }
         : {}),
+      ...(site.length ? { site } : {}),
       ms: {
         build: built - t0,
         render: Math.round(renderMs * 10) / 10,
@@ -145,7 +182,7 @@ function start(name) {
     };
   }
 
-  return { near, box, equal, ok, render, summary };
+  return { near, box, equal, ok, render, bake, drawing, summary };
 }
 
 return { start, boxOf, sum };

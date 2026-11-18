@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Examples | CodeCAD</title>
+  <meta name="description" content="CodeCAD examples: 3D models and 2D drawings, each with its script.">
+  <meta name="theme-color" content="#0a0e14">
+  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+  <link rel="stylesheet" href="site.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="container topbar-inner">
+    <a href="./" class="home" aria-label="CodeCAD home"><img src="assets/favicon.svg" alt="" width="20" height="20"> CodeCAD</a>
+    <nav>
+      <a href="gallery.html" aria-current="page">Examples</a>
+      <a href="app/">App</a>
+      <a href="https://github.com/backkem/codecad">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<div class="container">
+  <main class="page" data-gallery>
+    <div class="section-head">
+      <h1>Examples</h1>
+      <p class="lede">Each one is a script. Models are solid parts built and checked on the server; drawings are sheets you hand over, saved as DWG. Some examples are both.</p>
+    </div>
+    <div class="filters" role="tablist" aria-label="Shelves"></div>
+    <div class="examples-gallery"></div>
+    <noscript><p class="lede">The gallery needs JavaScript. The files are in <a href="https://github.com/backkem/codecad/tree/main/examples">examples/</a> on GitHub.</p></noscript>
+  </main>
+
+  <footer class="footer">
+    <a href="https://github.com/backkem/codecad">MIT License</a>
+    &middot; Built with Rust, WASM, and TypeScript
+  </footer>
+</div>
+
+<script type="module" src="site.js"></script>
+</body>
+</html>

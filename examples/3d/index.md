@@ -9,6 +9,13 @@ one next to the script, the other views to `target/3d-views/`. It returns a
 short summary: parts, definitions, total volume, box, checks, files and
 times.
 
+For the site, the isometric view is also written next to the script as a
+presentation render (`NN-name-render.png`) and a prebaked scene
+(`NN-name.bake3d`, which the site's 3D viewer shows without a kernel). A
+sheet's DWG (`11-play-tower-partlist.dwg`, `12-projected-views.dwg`) goes
+to `target/3d-views/`, because the DWG writer's bytes differ from run to
+run: copy it over the committed one when the sheet changes.
+
 Shared code lives in [`lib/`](lib): [`shapes.js`](lib/shapes.js) (boxes,
 members between two points, rounded rectangles, slots, bolt circles,
 arcs through three points, and the closed forms the checks use),
@@ -21,8 +28,10 @@ renders), [`playtower.js`](lib/playtower.js) (the play tower of 11, built once
 for both of its scripts), [`rules.js`](lib/rules.js) (rules for any model:
 what rests on what, overlaps, free space, gaps that trap, guards along
 edges), [`partlist.js`](lib/partlist.js) (a part list with a cutting plan,
-bought items and fixings, from attributes) and [`sheet.js`](lib/sheet.js)
-(a drawing sheet with tables and a title block). They are scripts that use
+bought items and fixings, from attributes), [`sheet.js`](lib/sheet.js)
+(a drawing sheet with tables and a title block) and
+[`guide.js`](lib/guide.js) (construction guides: one drawing per assembly
+step from projected views, with labels placed clear of the drawing). They are scripts that use
 only the public `cad.*` API, loaded with `await cad.use("shapes")`.
 
 ## Reproducing
@@ -192,6 +201,28 @@ pieces from 37 stock lengths, 5.4 % offcut. Saved as a PDF to
 [JS source](11-play-tower-partlist.js)
 
 ![Play tower part list](11-play-tower-partlist.png)
+
+## 11 - Play tower, construction guide
+
+The same model's twelve assembly steps, two per sheet on six sheets
+([`lib/guide.js`](lib/guide.js)). Each step is an isometric view of
+everything built so far from `cad.project`: the parts this step adds in a
+strong orange line, the earlier parts in a thin grey one, told apart by the
+`partId` every projected line carries. Each new member is labelled once,
+with its count, section and cut length from the part list and a leader to
+one of its parts. Markers show where the step's fixings go, one shape per
+kind of joint, with a table of the fixings and one line of instruction
+whose counts come from the data. Each step is seen from the corner that
+leaves its new parts least covered. Larger detail views show the stringer
+cuts, the rafter seat on the wall plate and the swing hangers. Each sheet is
+saved as a PDF page and a 2D PNG (`target/3d-views/`); the picture here is
+the first sheet. The script checks that every part is in exactly one step,
+that the label counts and the fixings agree with the part list, and that no
+label overlaps the drawing or another label.
+
+[JS source](11-play-tower-guide.js)
+
+![Play tower construction guide, sheet 1](11-play-tower-guide.png)
 
 ## 12 - Projected views
 

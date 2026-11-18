@@ -76,17 +76,22 @@ build-kernel:
 build-embed:
     cd web && pnpm exec vite build --config vite.embed.config.ts
 
-# Build GH Pages site: homepage + app + embed + examples
+# Build GH Pages site: homepage + gallery + example pages + app + embed +
+# examples. The example files are copied as committed (drawings, scripts,
+# renders, prebaked scenes): no kernel, GPU or server step.
 build-site: build-wasm clean-dist build-web build-embed
     rm -rf _site
-    mkdir -p _site/app _site/embed _site/examples _site/assets
-    cp site/index.html site/site.css _site/
+    mkdir -p _site/app _site/embed _site/examples/lib _site/examples/3d/lib _site/assets
+    cp site/*.html site/*.css site/*.js _site/
     cp dist/index.html _site/app/
     cp -r dist/assets _site/app/
     cp dist/cadview-web.js _site/app/
     cp dist/cadview-web_bg.wasm _site/app/
     cp dist-embed/codecad-viewer.js dist-embed/cadview-web.js dist-embed/cadview-web_bg.wasm _site/embed/
-    cp examples/*.dwg examples/*.png _site/examples/
+    cp examples/*.dwg examples/*.png examples/*.js _site/examples/
+    cp examples/lib/*.js _site/examples/lib/
+    cp examples/3d/*.js examples/3d/*.png examples/3d/*.dwg examples/3d/*.bake3d _site/examples/3d/
+    cp examples/3d/lib/*.js _site/examples/3d/lib/
     cp docs/brand/icon-mark.svg _site/assets/favicon.svg
     cp docs/brand/logo.svg _site/assets/logo.svg
 

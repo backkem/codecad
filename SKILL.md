@@ -1,16 +1,20 @@
 ---
 name: codecad
-description: Create and modify 2D CAD drawings via CodeCAD. Use when asked to draw, sketch, or produce technical drawings (floor plans, mechanical sections, schematics, geometric constructions).
+description: Create and modify CAD with CodeCAD, CAD you can program - exact 2D drawings and 3D solid models from one script. Use when asked to draw, sketch, model or document something - technical drawings (floor plans, mechanical sections, schematics, geometric constructions), solid parts and assemblies, checks between parts, part lists and projected views.
 ---
 
-# CodeCAD drawing skill
+# CodeCAD skill
 
 ## Purpose
 
-Create and modify 2D CAD drawings through JavaScript code executed in
-the browser or server sandbox. The `cad` global is your drawing surface.
-You write JS, the geometry appears live in the viewport, syncs to the
-server via Yrs CRDT, and can be saved to disk as DWG.
+Create and modify drawings and models through JavaScript code executed
+in the browser or server sandbox. Drawings are what you hand over;
+models are where you think. The `cad` global is your drawing surface
+and your workshop. You write JS, the geometry appears live in the
+viewport, syncs to the server via Yrs CRDT, and can be saved to disk as
+DWG or PDF. Solid parts (see "Solid parts") are built by the server's
+kernel; check them with set queries, render them, and draw them with
+projected views.
 
 Multi-document: multiple drawings can be open in tabs. Use
 `cad.useSession(id)` to select which drawing your code targets.
@@ -19,7 +23,9 @@ Multi-document: multiple drawings can be open in tabs. Use
 
 Use when asked to draw, sketch, illustrate, or produce 2D technical
 drawings: floor plans, mechanical cross-sections, schematics, site plans,
-geometric constructions, or any 2D geometry.
+geometric constructions, or any 2D geometry. Use it as well to model
+solid parts and assemblies, check them against rules, and document them
+as part lists and projected views.
 
 ## API reference
 

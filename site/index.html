@@ -3,24 +3,86 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CodeCAD - 2D CAD you can program</title>
-  <meta name="description" content="Open-source 2D CAD in the browser. Every drawing operation is a function call.">
+  <title>CodeCAD: CAD you can program</title>
+  <meta name="description" content="Open-source CAD you can program. Exact 2D drawings and 3D solid models from one script. Drawings are what you hand over. Models are where you think.">
   <meta name="theme-color" content="#0a0e14">
   <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
   <link rel="stylesheet" href="site.css">
 </head>
 <body>
 
+<header class="topbar">
+  <div class="container topbar-inner">
+    <a href="./" class="home" aria-label="CodeCAD home"><img src="assets/favicon.svg" alt="" width="20" height="20"> CodeCAD</a>
+    <nav>
+      <a href="gallery.html">Examples</a>
+      <a href="app/">App</a>
+      <a href="https://github.com/backkem/codecad">GitHub</a>
+    </nav>
+  </div>
+</header>
+
 <div class="container">
   <section class="hero">
     <img src="assets/logo.svg" alt="CodeCAD" class="logo">
+    <h1 class="product">CAD you can program</h1>
     <p class="tagline">
-      Open-source 2D CAD that runs in the browser. Every drawing operation
-      is a function call. Script it, automate it, point an AI at it.
+      Exact 2D drawings and 3D solid models from one script.
+      Drawings are what you hand over. Models are where you think.
     </p>
     <div class="actions">
       <a href="app/" class="btn btn-primary">Open App</a>
+      <a href="gallery.html" class="btn">Examples</a>
       <a href="https://github.com/backkem/codecad" class="btn">GitHub</a>
+    </div>
+  </section>
+
+  <section class="story">
+    <figure class="hero-figure">
+      <a href="example.html?id=11-play-tower"><img src="examples/3d/11-play-tower-render.png" alt="The play tower, path traced on grass in daylight" width="960" height="640"></a>
+      <figcaption>The play tower: 142 parts from one model library, path traced by the server. <a href="example.html?id=11-play-tower">Open it</a></figcaption>
+    </figure>
+
+    <div class="section-head">
+      <h2>Model. Check. Document.</h2>
+      <p class="lede">One example, three steps, all in script. The rules and the part list are code you can read.</p>
+    </div>
+
+    <ol class="steps">
+      <li class="step">
+        <div class="step-head"><span class="step-n">1</span><h3>Model</h3><span class="badge badge-model">Model</span></div>
+        <a href="example.html?id=11-play-tower#model"><img src="examples/3d/11-play-tower.png" alt="Working render of the play tower, coloured by member" loading="lazy" width="960" height="640"></a>
+        <p>Solid parts from a script: extrude, revolve, sweep, cut, fillet, copy. Posts, deck, cabin, roof, stairs, slide and swings, 142 parts in 42 definitions. The server's solid kernel builds them.</p>
+      </li>
+      <li class="step">
+        <div class="step-head"><span class="step-n">2</span><h3>Check</h3></div>
+<pre class="step-code"><span class="kw">const</span> rules = <span class="kw">await</span> <span class="fn">cad.use</span>(<span class="str">"rules"</span>)
+fail(<span class="str">"no two parts overlap"</span>, rules.noOverlap())
+fail(<span class="str">"every part rests on what carries it"</span>,
+  rules.restsOn({ c: contacts, needs }))
+fail(<span class="str">"no gap that can trap a head"</span>,
+  rules.gaps(climb, <span class="kw">null</span>, [HEAD]))
+fail(<span class="str">"a guard on every platform edge"</span>,
+  rules.guards({ edges, height: <span class="num">600</span>, openings }))</pre>
+        <p>Rules written in the script, over generic queries: overlaps, contacts, distances, free space. The script fails when a rule does not hold. The limits here are illustrative, not a safety standard.</p>
+      </li>
+      <li class="step">
+        <div class="step-head"><span class="step-n">3</span><h3>Document</h3><span class="badge badge-drawing">Drawing</span></div>
+        <a href="example.html?id=11-play-tower#drawing"><img src="examples/3d/11-play-tower-partlist.png" alt="Part list sheet of the play tower" loading="lazy" width="960" height="640"></a>
+        <p>The part list from the model's attributes: sawn timber by section and length, a cutting plan, bought items and fixings, drawn on a sheet with the 2D API. Saved as DWG and PDF.</p>
+      </li>
+    </ol>
+
+    <div class="where">
+      <h3>What runs where</h3>
+      <dl>
+        <dt>Server</dt>
+        <dd>Runs scripts in a sandbox, builds solids with the kernel, checks them, renders PNGs (working and path traced), writes prebaked scenes, DWG and PDF.</dd>
+        <dt>Browser</dt>
+        <dd>Opens DWG, draws and edits in 2D through the same API, and shows prebaked 3D scenes in both render modes. This site's pages ship no solid kernel: 3D scripts run on a server.</dd>
+        <dt>Direction</dt>
+        <dd>Models as the input to fabrication: 3D printing and CNC. Not a feature today.</dd>
+      </dl>
     </div>
   </section>
 
@@ -31,9 +93,16 @@
       Vello/WebGPU rendering, egui CPU fallback.</p>
     </div>
     <div class="feature">
+      <h3>3D in the browser</h3>
+      <p>Prebaked scenes open without a kernel: orbit, zoom, and switch
+      between the working render and the path-traced presentation render.
+      WebGPU only.</p>
+    </div>
+    <div class="feature">
       <h3>Scriptable API</h3>
-      <p>Every operation is a call like <code>cad.addLine()</code>.
-      Drive it from the console, your own code, or a language model.</p>
+      <p>Every operation is a call like <code>cad.addLine()</code> or
+      <code>cad.extrude()</code>. Drive it from the console, your own code,
+      or a language model.</p>
     </div>
     <div class="feature">
       <h3>Real-time sync</h3>
@@ -68,105 +137,60 @@
 
   <section class="examples-section">
     <div class="section-head">
-      <h2>Example drawings</h2>
-      <p class="lede">Drawn by AI agents through the same JavaScript API. Click to open any one in the app.</p>
+      <h2>Examples</h2>
+      <p class="lede">Models and drawings made by AI agents through the same JavaScript API. Each page has the model, the drawing and the script.</p>
     </div>
     <div class="examples-gallery">
-      <!-- Gallery entry template (any count works; a partial last row is centered).
-           Images are 960x640 PNGs shown at 3:2.
-      <a href="app/?file=../examples/NN-name.dwg" class="example-link">
-        <img src="examples/NN-name.png" alt="Title" loading="lazy">
+      <a href="example.html?id=03-bookshelf" class="example-link">
+        <img src="examples/3d/03-bookshelf-render.png" alt="Bookshelf" loading="lazy" width="960" height="640">
         <div class="caption">
-          <div class="title">Title</div>
-          <div class="desc">One-line description</div>
+          <div class="badges"><span class="badge badge-model">Model</span></div>
+          <div class="title">Bookshelf</div>
+          <div class="desc">Twelve parts with dados and a rabbet, cut by the parts</div>
         </div>
       </a>
-      -->
-      <a href="app/?file=../examples/01-flange-plate.dwg" class="example-link">
-        <img src="examples/01-flange-plate.png" alt="Flange Plate" loading="lazy">
+      <a href="example.html?id=12-projected-views" class="example-link">
+        <img src="examples/3d/12-projected-views.png" alt="Projected Views" loading="lazy" width="960" height="640">
         <div class="caption">
-          <div class="title">Flange Plate</div>
-          <div class="desc">DN80 PN16 flange, front view and section A-A</div>
+          <div class="badges"><span class="badge badge-model">Model</span><span class="badge badge-drawing">Drawing</span></div>
+          <div class="title">Projected Views</div>
+          <div class="desc">A pillow block and its shop drawing from exact projections</div>
         </div>
       </a>
-      <a href="app/?file=../examples/02-fibonacci-spiral.dwg" class="example-link">
-        <img src="examples/02-fibonacci-spiral.png" alt="Fibonacci Spiral" loading="lazy">
+      <a href="example.html?id=10-still-life" class="example-link">
+        <img src="examples/3d/10-still-life-render.png" alt="Still Life" loading="lazy" width="960" height="640">
         <div class="caption">
-          <div class="title">Fibonacci Spiral</div>
-          <div class="desc">Square tiling, spiral and golden-ratio construction</div>
+          <div class="badges"><span class="badge badge-model">Model</span></div>
+          <div class="title">Still Life</div>
+          <div class="desc">Glass, bowl, flask and mill: revolves for the path tracer</div>
         </div>
       </a>
-      <a href="app/?file=../examples/03-roof-truss.dwg" class="example-link">
-        <img src="examples/03-roof-truss.png" alt="Howe Roof Truss" loading="lazy">
+      <a href="example.html?id=07-floor-plan" class="example-link">
+        <img src="examples/07-floor-plan.png" alt="Floor Plan" loading="lazy" width="960" height="640">
         <div class="caption">
-          <div class="title">Howe Roof Truss</div>
-          <div class="desc">Timber truss with trimmed joints and member schedule</div>
-        </div>
-      </a>
-      <a href="app/?file=../examples/04-motor-schematic.dwg" class="example-link">
-        <img src="examples/04-motor-schematic.png" alt="Motor Starter" loading="lazy">
-        <div class="caption">
-          <div class="title">Motor Starter</div>
-          <div class="desc">IEC direct-on-line starter, power and control</div>
-        </div>
-      </a>
-      <a href="app/?file=../examples/05-bicycle-frame.dwg" class="example-link">
-        <img src="examples/05-bicycle-frame.png" alt="Bicycle Frame" loading="lazy">
-        <div class="caption">
-          <div class="title">Bicycle Frame</div>
-          <div class="desc">Road frame set out from stack, reach and angles</div>
-        </div>
-      </a>
-      <a href="app/?file=../examples/06-piston-section.dwg" class="example-link">
-        <img src="examples/06-piston-section.png" alt="Piston Section" loading="lazy">
-        <div class="caption">
-          <div class="title">Piston Section</div>
-          <div class="desc">Half-section with ring-groove detail at 3:1</div>
-        </div>
-      </a>
-      <a href="app/?file=../examples/07-floor-plan.dwg" class="example-link">
-        <img src="examples/07-floor-plan.png" alt="Floor Plan" loading="lazy">
-        <div class="caption">
+          <div class="badges"><span class="badge badge-drawing">Drawing</span></div>
           <div class="title">Floor Plan</div>
           <div class="desc">Apartment plan with doors, areas and room schedule</div>
         </div>
       </a>
-      <a href="app/?file=../examples/08-distribution-board.dwg" class="example-link">
-        <img src="examples/08-distribution-board.png" alt="Distribution Board" loading="lazy">
+      <a href="example.html?id=09-spur-gears" class="example-link">
+        <img src="examples/09-spur-gears.png" alt="Spur Gears" loading="lazy" width="960" height="640">
         <div class="caption">
-          <div class="title">Distribution Board</div>
-          <div class="desc">Single-line diagram: main switch, RCDs, 10 circuits</div>
-        </div>
-      </a>
-      <a href="app/?file=../examples/09-spur-gears.dwg" class="example-link">
-        <img src="examples/09-spur-gears.png" alt="Spur Gears" loading="lazy">
-        <div class="caption">
+          <div class="badges"><span class="badge badge-drawing">Drawing</span></div>
           <div class="title">Spur Gears</div>
           <div class="desc">Meshing involute pair with gear data table</div>
         </div>
       </a>
-      <a href="app/?file=../examples/10-cam-follower.dwg" class="example-link">
-        <img src="examples/10-cam-follower.png" alt="Cam and Follower" loading="lazy">
+      <a href="example.html?id=04-motor-schematic" class="example-link">
+        <img src="examples/04-motor-schematic.png" alt="Motor Starter" loading="lazy" width="960" height="640">
         <div class="caption">
-          <div class="title">Cam and Follower</div>
-          <div class="desc">Cycloidal cam profile with displacement diagram</div>
-        </div>
-      </a>
-      <a href="app/?file=../examples/11-pid.dwg" class="example-link">
-        <img src="examples/11-pid.png" alt="P&amp;ID" loading="lazy">
-        <div class="caption">
-          <div class="title">P&amp;ID</div>
-          <div class="desc">Tank and pump with level and flow control loops</div>
-        </div>
-      </a>
-      <a href="app/?file=../examples/12-site-plan.dwg" class="example-link">
-        <img src="examples/12-site-plan.png" alt="Site Plan" loading="lazy">
-        <div class="caption">
-          <div class="title">Site Plan</div>
-          <div class="desc">Boundary from bearings, setbacks, parking, contours</div>
+          <div class="badges"><span class="badge badge-drawing">Drawing</span></div>
+          <div class="title">Motor Starter</div>
+          <div class="desc">IEC direct-on-line starter, power and control</div>
         </div>
       </a>
     </div>
+    <div class="more"><a href="gallery.html" class="btn">All examples</a></div>
   </section>
 
   <footer class="footer">

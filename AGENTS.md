@@ -1,10 +1,21 @@
-# CodeCAD - AI-native 2D CAD
+# CodeCAD - CAD you can program
 
-Browser-based 2D CAD viewer and editor with Rust server backend.
-Reads .dwg via acadrust (Lines, Arcs, Circles, LwPolylines, Ellipses,
-Splines, Hatches, Text/MText, Dimensions, Block Inserts). Dual GPU
-renderer: Vello (compute-based, WebGPU) with egui/eframe fallback.
-Multi-document tabs with per-session Yrs CRDT sync over WebTransport.
+Exact 2D drawings and 3D solid models from one script. Drawings are
+what you hand over; models are where you think. A browser viewer and
+editor with a Rust server backend.
+
+2D: reads .dwg via acadrust (Lines, Arcs, Circles, LwPolylines,
+Ellipses, Splines, Hatches, Text/MText, Dimensions, Block Inserts),
+writes DWG and PDF. Dual GPU renderer: Vello (compute-based, WebGPU)
+with egui/eframe fallback. Multi-document tabs with per-session Yrs
+CRDT sync over WebTransport.
+
+3D: solid parts in the document as exact feature trees, evaluated by a
+solid kernel on the server (or by an optional kernel module in the
+page), set queries for checks between parts, working and path-traced
+presentation renders, exact projected views into 2D, and prebaked
+scenes the browser shows without a kernel (docs/3d-design.md).
+Fabrication output (3D printing, CNC) is a direction, not a feature.
 
 ## Core-first rule
 

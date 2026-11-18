@@ -1,12 +1,18 @@
-@import url("https://fonts.googleapis.com/css2?family=Jost:wght@400;500&family=JetBrains+Mono:wght@400&display=swap");
+/* No web fonts are fetched: the site loads nothing from other hosts. Jost
+   and JetBrains Mono are used where installed, else the system's. */
 
 :root {
-  /* Brand palette (docs/brand/brand-guide.md). Amber is crosshair-only. */
+  /* Brand palette (docs/brand/brand-guide.md). */
   --void: #0a0e14;
   --text: #e8e8e8;
   --muted: #6b7280;
   --grid: #151a22;
-  --accent: #ffb000; /* crosshair only (lives in logo.svg); never use for UI */
+  /* Amber: the crosshair (in logo.svg) and the marks of a Drawing (badges,
+     tabs). Never for other UI. */
+  --accent: #ffb000;
+  /* The kind-of-view accent for a Model: badges, tabs and the 3D viewer's
+     mode control only. The viewer reads this variable too; change it here. */
+  --codecad-model: #5ea2ff;
 
   /* Derived tones: secondary text with readable contrast, hairlines */
   --text-strong: #ffffff; /* hover/emphasis */
@@ -14,8 +20,8 @@
   --line: #1f2630;
   --line-strong: #2e3744;
 
-  --mono: "JetBrains Mono", ui-monospace, monospace;
-  --sans: "Jost", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --sans: "Jost", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 
   /* 4px spacing scale */
   --s1: 4px;
@@ -46,6 +52,7 @@ body {
 a { color: var(--text); text-underline-offset: 3px; }
 a:hover { color: var(--text-strong); }
 :focus-visible { outline: 1px solid var(--text); outline-offset: 3px; }
+img { max-width: 100%; height: auto; }
 
 code {
   font-family: var(--mono);
@@ -60,7 +67,13 @@ code {
 }
 
 section + section { border-top: 1px solid var(--line); }
-.hero + .features { border-top: 0; padding-top: var(--s2); }
+
+h1 {
+  font-size: 28px;
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
 
 h2 {
   font-size: 20px;
@@ -69,13 +82,63 @@ h2 {
   letter-spacing: -0.005em;
 }
 
+h3 {
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
 .lede {
   color: var(--text-2);
   font-size: 15px;
   margin-top: var(--s1);
+  max-width: 46em;
 }
 
 .section-head { margin-bottom: var(--s5); }
+
+/* ── Top bar ─────────────────────────────────────────────────────── */
+
+.topbar { border-bottom: 1px solid var(--line); }
+.topbar-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s4);
+  min-height: 48px;
+}
+.topbar .home {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  font-weight: 500;
+  text-decoration: none;
+}
+.topbar nav { display: flex; gap: var(--s5); }
+.topbar nav a {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text-2);
+  text-decoration: none;
+}
+.topbar nav a:hover, .topbar nav a[aria-current="page"] { color: var(--text); }
+
+/* ── Kind badges: Model and Drawing ─────────────────────────────── */
+
+.badges { display: flex; gap: var(--s2); }
+.badge {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 3px 6px 3px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+}
+.badge-model { color: var(--codecad-model); }
+.badge-drawing { color: var(--accent); }
 
 /* ── Hero ────────────────────────────────────────────────────────── */
 
@@ -89,14 +152,19 @@ h2 {
   width: 300px;
   max-width: 78%;
   height: auto;
-  margin: 0 auto var(--s4);
+  margin: 0 auto var(--s5);
+}
+
+.hero .product {
+  font-size: 30px;
+  margin-bottom: var(--s3);
 }
 
 .hero .tagline {
   color: var(--text-2);
   font-size: 18px;
   line-height: 1.5;
-  max-width: 34em;
+  max-width: 30em;
   margin: 0 auto var(--s6);
   text-wrap: balance;
 }
@@ -132,11 +200,91 @@ h2 {
 }
 .btn-primary:hover { background: var(--text-strong); border-color: var(--text-strong); color: var(--void); }
 
+/* ── Story: model, check, document ──────────────────────────────── */
+
+.hero + .story { border-top: 0; }
+.story { padding: 0 0 var(--s7); }
+
+.hero-figure { margin-bottom: var(--s7); }
+.hero-figure img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 3 / 2;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--grid);
+}
+figcaption {
+  color: var(--text-2);
+  font-size: 13px;
+  margin-top: var(--s2);
+}
+
+.steps {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--s5);
+}
+.step {
+  min-width: 0;
+  border-top: 1px solid var(--line-strong);
+  padding-top: var(--s4);
+}
+.step-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-bottom: var(--s3);
+}
+.step-head h3 { flex: 1; }
+.step-n {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-2);
+}
+.step img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 3 / 2;
+  object-fit: cover;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--grid);
+}
+.step p {
+  color: var(--text-2);
+  font-size: 14px;
+  margin-top: var(--s3);
+}
+.step .step-code {
+  font-size: 11px;
+  line-height: 1.6;
+  padding: var(--s3);
+  aspect-ratio: 3 / 2;
+  overflow: auto;
+}
+
+.where {
+  margin-top: var(--s7);
+  border-top: 1px solid var(--line);
+  padding-top: var(--s5);
+}
+.where h3 { margin-bottom: var(--s3); }
+.where dl {
+  display: grid;
+  grid-template-columns: 7em 1fr;
+  gap: var(--s2) var(--s4);
+  font-size: 15px;
+}
+.where dt { font-family: var(--mono); font-size: 13px; color: var(--text); padding-top: 2px; }
+.where dd { color: var(--text-2); }
+
 /* ── Features ────────────────────────────────────────────────────── */
 
 .features {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: var(--s5) var(--s6);
   padding: var(--s7) 0;
 }
@@ -146,12 +294,7 @@ h2 {
   padding-top: var(--s4);
 }
 
-.feature h3 {
-  font-size: 16px;
-  font-weight: 500;
-  line-height: 1.3;
-  margin-bottom: var(--s2);
-}
+.feature h3 { margin-bottom: var(--s2); }
 
 .feature p {
   color: var(--text-2);
@@ -159,7 +302,7 @@ h2 {
   line-height: 1.55;
 }
 
-/* ── Code sample ────────────────────────────────────────────────── */
+/* ── Code ────────────────────────────────────────────────────────── */
 
 .code-section { padding: var(--s7) 0; }
 
@@ -200,6 +343,7 @@ pre .cmt { color: #5c6370; }
 /* ── Examples ────────────────────────────────────────────────────── */
 
 .examples-section { padding: var(--s7) 0; }
+.more { text-align: center; margin-top: var(--s5); }
 
 /* Flex (not grid) so any entry count works: a partial last row is
    centered instead of left-hanging. --cols is set per breakpoint. */
@@ -240,6 +384,7 @@ pre .cmt { color: #5c6370; }
   padding: var(--s3) var(--s4) var(--s4);
   border-top: 1px solid var(--line);
 }
+.example-link .caption .badges { margin-bottom: var(--s2); }
 .example-link .caption .title {
   font-size: 15px;
   font-weight: 500;
@@ -251,6 +396,137 @@ pre .cmt { color: #5c6370; }
   line-height: 1.45;
   margin-top: var(--s1);
 }
+
+/* ── Gallery page and example page ──────────────────────────────── */
+
+.page { padding: var(--s7) 0; min-height: 60vh; }
+
+/* Shelf filters and example tabs share one look: a label with an
+   underline in the colour of its kind when selected. */
+.filters, .tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s1) var(--s5);
+  border-bottom: 1px solid var(--line);
+  margin-bottom: var(--s5);
+}
+.filter, .tab {
+  --kind: var(--text);
+  appearance: none;
+  background: none;
+  border: 0;
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  padding: var(--s2) 0 var(--s3);
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  text-decoration: none;
+}
+.filter:hover, .tab:hover { color: var(--text); }
+.filter[aria-selected="true"], .tab[aria-selected="true"] {
+  color: var(--text);
+  border-bottom-color: var(--kind);
+}
+.filter-models, .tab-model { --kind: var(--codecad-model); }
+.filter-drawings, .tab-drawing { --kind: var(--accent); }
+.filter .count { color: var(--muted); margin-left: var(--s1); }
+.tab .sub { color: var(--muted); margin-left: var(--s2); }
+
+.crumbs {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: var(--s4);
+}
+.crumbs a { color: var(--text-2); text-decoration: none; }
+.crumbs a:hover { color: var(--text); }
+
+.panel { border-top: 0; }
+
+.example-head { margin-bottom: var(--s5); }
+.example-head .badges { margin-bottom: var(--s3); }
+.example-head .lede { margin-top: var(--s3); }
+
+.panel .viewer { margin-top: 0; height: clamp(300px, 56vw, 560px); }
+.viewer-note {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: var(--s2);
+}
+
+.figures {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--s4);
+  margin-top: var(--s5);
+}
+.figures:empty { display: none; }
+.figures.one { grid-template-columns: 1fr; max-width: 640px; }
+.figures img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 3 / 2;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--grid);
+}
+
+.notes { margin-top: var(--s5); max-width: 46em; }
+.notes p { color: var(--text-2); font-size: 14px; margin-bottom: var(--s3); }
+.links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s4);
+  font-family: var(--mono);
+  font-size: 13px;
+  margin-top: var(--s4);
+}
+.notes .links { margin-top: 0; }
+pre.cmd { padding: var(--s3) var(--s4); font-size: 12px; }
+
+.files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  margin-bottom: var(--s3);
+}
+.file {
+  appearance: none;
+  background: none;
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: var(--s1) var(--s2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.file.lib { color: var(--muted); }
+.file:hover { color: var(--text); border-color: var(--text-2); }
+.file[aria-selected="true"] { color: var(--void); background: var(--text); border-color: var(--text); }
+pre.source {
+  max-height: 72vh;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.6;
+  padding: var(--s4);
+}
+
+.pager {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s4);
+  margin-top: var(--s7);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 13px;
+}
+.pager a { color: var(--text-2); text-decoration: none; }
+.pager a:hover { color: var(--text); }
 
 /* ── Footer ──────────────────────────────────────────────────────── */
 
@@ -268,14 +544,22 @@ pre .cmt { color: #5c6370; }
 
 @media (max-width: 760px) {
   .features { grid-template-columns: 1fr; gap: var(--s5); }
+  .steps { grid-template-columns: 1fr; }
+  .step .step-code { aspect-ratio: auto; }
   .examples-gallery { --cols: 2; }
 }
 
 @media (max-width: 520px) {
   .container { padding: 0 var(--s4); }
+  .topbar nav { gap: var(--s4); }
   .hero { padding: var(--s7) 0 var(--s6); }
+  .hero .product { font-size: 24px; }
   .hero .tagline { font-size: 16px; margin-bottom: var(--s5); }
-  .features, .code-section, .examples-section { padding: var(--s6) 0; }
+  .features, .code-section, .examples-section, .page { padding: var(--s6) 0; }
   .examples-gallery { --cols: 1; }
+  .figures { grid-template-columns: 1fr; }
+  .where dl { grid-template-columns: 1fr; gap: 0; }
+  .where dd { margin-bottom: var(--s3); }
+  h1 { font-size: 24px; }
   pre { padding: var(--s4); font-size: 12px; }
 }

@@ -1,0 +1,16 @@
+[package]
+name = "cadview-kernel-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "The solid kernel as a WebAssembly module a page loads on demand: cadview-solid behind cadview-core's byte interface (solid::remote)"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+# cdylib: the module the browser fetches; rlib: native tests.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+cadview-core = { path = "../cadview-core" }
+cadview-solid = { path = "../cadview-solid" }

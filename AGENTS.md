@@ -122,6 +122,14 @@ crates/
                               #   Document) + content-keyed cache of solids and
                               #   meshes; a miss continues from the longest cached
                               #   feature prefix; NO_KERNEL error without one
+        baked.rs              #   prebaked scenes (cad.bake3d): parts, meshes, exact
+                              #   boxes and volumes, render options; read back as
+                              #   an Evaluator (BakedEvaluator), no kernel needed
+        remote.rs             #   a kernel behind bytes: Request/Reply, KernelServer
+                              #   (in the kernel module), RemoteEvaluator (on the
+                              #   page), NotLoaded; a test reads eval.rs so every
+                              #   trait method crosses
+        wire.rs               #   kernel answers as serializable mirrors
         scene.rs              #   parts -> Scene3d for cad.render (view, colours,
                               #   chord, cutaway, explode, materials by attribute,
                               #   environment, exposure)
@@ -129,9 +137,17 @@ crates/
                               #   2D segments), EdgeSel, Plane3, Placement
         kernel.rs             #   SolidKernel trait (optional capabilities with
                               #   defaults: tessellate, evaluate_from, bbox_within,
-                              #   distances, interferences), TriMesh, EvalError,
-                              #   MassProps (centroid optional), Aabb3, TightBox.
-                              #   Core links no kernel
+                              #   distances, interferences, topology, silhouettes,
+                              #   ray_hits), TriMesh, EvalError, MassProps
+                              #   (centroid optional), Aabb3, TightBox, Curve3,
+                              #   Surface3. Core links no kernel
+        curves.rs             #   evaluating and placing Curve3 / Surface3
+        silhouette.rs         #   closed-form silhouettes of curved surfaces
+        hlr.rs                #   hidden lines on exact curves: exact projection,
+                              #   splits at crossings, merge on carriers
+        oracle.rs             #   visibility oracle: mesh BVH, side rays, exact rays
+        project.rs            #   cad.project / cad.viewPoints (rung 3D3a): a view as
+                              #   a block of exact lines, arcs, circles, ellipses
         select.rs             #   EdgeSel -> exact 3D target curves (kernel-neutral)
         mesh.rs               #   TriMesh topology (closed, Euler counts), shared by
                               #   the arris adapter and the harness
@@ -162,6 +178,8 @@ crates/
                               #   cadview-render's process-wide GPU device (native)
       examples/shapes.rs      # procedural meshes -> PNGs, timings, --fallback
       examples/noise.rs       # RMS noise of renders against a reference PNG
+      examples/bake.rs        # a .bake3d -> PNG natively, no kernel (the browser
+                              #   3D view's reference)
     cadview-web/              # wasm-bindgen target (browser renderer)
       src/main.rs             # entry points, module wiring
       src/session.rs          # SessionRegistry, DocumentSession, SESSIONS
@@ -173,6 +191,16 @@ crates/
                               #   the page's shared GpuContext, demand-driven
                               #   rAF, pointer/wheel input; draws core's display
                               #   list through cadview-render's scene builder
+      src/view3d.rs           # 3D view: per-canvas surface on the same
+                              #   GpuContext, orbit input, working (raster) and
+                              #   presentation (progressive path tracer) modes,
+                              #   demand-driven frames; scene from core's
+                              #   parts_scene (kernel, bake or server bake)
+      src/kernel.rs           # the kernel module as the page's SolidEnv:
+                              #   RemoteEvaluator over __codecadKernel.call
+    cadview-kernel-wasm/      # the solid kernel as a module the page loads on
+                              #   demand (cadview-solid behind solid::remote);
+                              #   link.sh keeps only its ck_* exports
     cadview-server/           # native Rust server
       src/main.rs             # entry: HTTP (axum) + WebTransport (wtransport)
       src/store.rs            # DocumentStore trait (SingleFileStore, FolderStore)
@@ -185,6 +213,7 @@ crates/
       src/render.rs           # cad.render handler (sandbox, WT RPC and --render);
                               #   with a view: parts in 3D via cadview-render3d
       src/solids.rs           # the arris evaluator (cadview-solid), one per process
+      src/bake.rs             # cad.bake3d (sandbox, WT RPC) and GET /api/bake3d
       src/sync.rs             # re-exports cadview_core::sync::SyncDoc
     cadview-solid/            # the shipped kernel adapter (wasm32 + native)
       src/arris.rs            # ArrisKernel (arris =0.11.1), the only file naming
@@ -229,7 +258,10 @@ crates/
       App.tsx                 # React root: tabs, viewports, layer panel, drag-drop
       TabBar.tsx              # tab strip with close buttons + "+" add
       DocumentPicker.tsx      # file list from /api/documents, folder grouping
-      ViewportContainer.tsx   # per-session canvas + eframe WebRunner lifecycle
+      ViewportContainer.tsx   # per-session canvas; 2D/3D switch, 3D toolbar
+      kernel.ts               # loads the kernel module on demand (manifest,
+                              #   wire version, content-hashed file)
+      embed.ts                # <codecad-viewer src=.dwg | scene=.bake3d>
       LayerPanel.tsx          # layer visibility toggle panel
       index.css               # CodeCAD brand styles (void/amber/off-white)
   SKILL.md                    # drawing skill: techniques, patterns, creed
@@ -308,6 +340,7 @@ just build-server # native server binary
 just build-packed      # single binary with frontend baked in
 just build-packed-full # same + examples/ baked in
 just clean-dist        # remove stale hashed WASM from dist/
+just build-kernel      # optional: the solid kernel module (dist/kernel/)
 ```
 
 **IMPORTANT**: after changing cadview-web Rust code, you must run
@@ -664,6 +697,16 @@ match on `Shape`.
   when a shell calls `invalidate()` because entities changed in place:
   the web shell bumps a per-session `doc_rev` on every mutation, sync
   update and file load, and both renderers compare against it.
+- **3D view** (`view3d.rs`, docs/3d-design.md section 14): a canvas on
+  the same `GpuContext` (one device per page), drawn by
+  `cadview-render3d` from core's `parts_scene`. Working mode: one raster
+  frame per change. Presentation mode: the working render while the
+  camera moves, then path-traced samples in batches of about 24 ms of GPU
+  time (one batch in flight), up to a target, then no frames; a slow GPU
+  traces at half resolution with a target it reaches in about 30 s.
+  WebGPU only: without it the view says so. Geometry comes from the page's
+  kernel module (loaded on demand, `just build-kernel`), a prebaked scene
+  (`cad.bake3d`), or, in the app with a server, the server's bake.
 
 ### Render to PNG
 

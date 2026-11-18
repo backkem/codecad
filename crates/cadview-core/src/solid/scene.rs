@@ -27,7 +27,7 @@ use serde_json::Value;
 use crate::document::Document;
 use crate::scene3d::{
     palette_color, srgb_to_linear, Background, Bands, Brushed, Camera3d, ClipMode, ClipPlane,
-    Environment, Ground, LightFrame, Material, NamedView, Occlusion, Pattern, PatternAxis,
+    Environment, Ground, LightFrame, Material, Mottle, NamedView, Occlusion, Pattern, PatternAxis,
     Projection, Scene3d, VIEWER_BACKGROUND,
 };
 use crate::solid::kernel::Aabb3;
@@ -49,6 +49,9 @@ pub struct PartsScene {
     pub chord: f64,
     /// The kernel that tessellated.
     pub kernel: String,
+    /// Fit the camera to the scene before drawing: true for a named view,
+    /// false when the options place the camera themselves (`camera`).
+    pub fit: bool,
 }
 
 /// Is this `cad.render` call a 3D one? `mode: "3d" | "2d"` decides; without
@@ -210,8 +213,16 @@ fn pattern(v: &Value, base: &Material, what: &str) -> Result<Pattern, String> {
                 Some(_) => return Err(format!("{what}.circular is true or false")),
             },
         })),
+        "mottle" => Ok(Pattern::Mottle(Mottle {
+            scale: num(v, "scale", &what, 1e-3, 1e9)?.unwrap_or(500.0),
+            color: match v.get("color") {
+                None | Some(Value::Null) => base.base_color.map(|c| c * 0.6),
+                Some(c) => linear(rgb(c, &format!("{what}.color"))?),
+            },
+            strength: num(v, "strength", &what, 0.0, 1.0)?.unwrap_or(0.5),
+        })),
         other => Err(format!(
-            "{what}.kind is \"flat\", \"bands\" or \"brushed\", got '{other}'"
+            "{what}.kind is \"flat\", \"bands\", \"brushed\" or \"mottle\", got '{other}'"
         )),
     }
 }
@@ -380,6 +391,14 @@ fn environment(v: &Value) -> Result<Environment, String> {
     if let Some(k) = num(obj, "intensity", "environment", 0.0, 1e6)? {
         env.intensity = k;
     }
+    match obj.get("sweep") {
+        None | Some(Value::Null) => {}
+        Some(Value::Bool(b)) => env.sweep = *b,
+        Some(_) => return Err("environment.sweep is true or false".into()),
+    }
+    if let Some(h) = num(obj, "haze", "environment", 0.0, 1e12)? {
+        env.haze = h;
+    }
     match obj.get("sun") {
         None | Some(Value::Null) => {}
         Some(Value::Bool(false)) => env.sun = None,
@@ -433,6 +452,88 @@ fn environment(v: &Value) -> Result<Environment, String> {
         }
     }
     Ok(env)
+}
+
+/// The `camera` render option: `{eye, target, fov?, height?, up?}` in world
+/// mm. Perspective by default, with `fov` the vertical field of view in
+/// degrees (default 30); `height` (mm, the view's height) makes it
+/// orthographic, and so does `projection: "orthographic"` (then the height
+/// is what `fov` frames at the target). `up` is the world direction shown
+/// as up (default +Z). `None` without one.
+fn camera_option(o: &Value, projection: Projection) -> Result<Option<Camera3d>, String> {
+    let Some(c) = o.get("camera").filter(|c| !c.is_null()) else {
+        return Ok(None);
+    };
+    if !c.is_object() {
+        return Err("camera is {eye: [x, y, z], target: [x, y, z], fov?, height?, up?}".into());
+    }
+    let eye = p3(c.get("eye").unwrap_or(&Value::Null), "camera.eye")?;
+    let target = p3(c.get("target").unwrap_or(&Value::Null), "camera.target")?;
+    let fov = num(c, "fov", "camera", 1.0, 170.0)?.unwrap_or(crate::scene3d::DEFAULT_FOV_Y_DEG);
+    let height = num(c, "height", "camera", 1e-6, 1e9)?;
+    let up = match c.get("up") {
+        None | Some(Value::Null) => Vec3::Z,
+        Some(u) => {
+            let p = p3(u, "camera.up")?;
+            Vec3::new(p.x, p.y, p.z)
+        }
+    };
+    if (eye - target).length() <= 0.0 {
+        return Err("camera.eye and camera.target must differ".into());
+    }
+    let (projection, lens) = match (height, projection) {
+        (Some(h), _) => (Projection::Orthographic, h),
+        (None, Projection::Orthographic) => (
+            Projection::Orthographic,
+            2.0 * (eye - target).length() * (0.5 * fov.to_radians()).tan(),
+        ),
+        (None, Projection::Perspective) => (Projection::Perspective, fov.to_radians()),
+    };
+    Camera3d::placed(eye, target, projection, lens, up)
+        .map(Some)
+        .ok_or_else(|| {
+            "camera: eye and target must differ, and up must be a non-zero vector".into()
+        })
+}
+
+/// The `fit` render option: fit the camera to the parts (true for a named
+/// view by default, false for a placed `camera`).
+fn fit_option(o: &Value, placed: bool) -> Result<bool, String> {
+    match o.get("fit") {
+        None | Some(Value::Null) => Ok(!placed),
+        Some(Value::Bool(b)) => Ok(*b),
+        Some(_) => Err("fit is true or false".into()),
+    }
+}
+
+/// The `portals` render option: up to [`crate::scene3d::MAX_PORTALS`]
+/// rectangles `{origin, u, v}` (a corner and two perpendicular edges, mm)
+/// through which the dome lights an interior.
+fn portals_option(o: &Value) -> Result<Vec<crate::scene3d::Portal>, String> {
+    let shape = "portals is a list of {origin: [x, y, z], u: [x, y, z], v: [x, y, z]}";
+    let list = match o.get("portals") {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(a)) => a,
+        Some(_) => return Err(shape.into()),
+    };
+    if list.len() > crate::scene3d::MAX_PORTALS {
+        return Err(format!("at most {} portals", crate::scene3d::MAX_PORTALS));
+    }
+    list.iter()
+        .map(|p| {
+            if !p.is_object() {
+                return Err(shape.to_string());
+            }
+            let origin = p3(p.get("origin").unwrap_or(&Value::Null), "portal origin")?;
+            let u = p3(p.get("u").unwrap_or(&Value::Null), "portal u")?;
+            let v = p3(p.get("v").unwrap_or(&Value::Null), "portal v")?;
+            crate::scene3d::Portal::checked(
+                origin,
+                Vec3::new(u.x, u.y, u.z),
+                Vec3::new(v.x, v.y, v.z),
+            )
+        })
+        .collect()
 }
 
 /// Builds the scene `cad.render` draws for the document's parts, for an
@@ -521,7 +622,10 @@ pub fn parts_scene(doc: &Document, o: &Value, pixels: (u32, u32)) -> Result<Part
         palette_color(n)
     };
 
+    // A placed camera looks through a lens: perspective unless asked.
+    let placed = o.get("camera").is_some_and(|c| !c.is_null());
     let projection = match o.get("projection").and_then(Value::as_str) {
+        None if placed => Projection::Perspective,
         None | Some("orthographic") => Projection::Orthographic,
         Some("perspective") => Projection::Perspective,
         Some(other) => {
@@ -530,8 +634,13 @@ pub fn parts_scene(doc: &Document, o: &Value, pixels: (u32, u32)) -> Result<Part
             ))
         }
     };
+    let camera = camera_option(o, projection)?;
     let mut scene = Scene3d {
-        camera: Camera3d::new(view_of(o)?, projection),
+        camera: match camera {
+            Some(c) => c,
+            None => Camera3d::new(view_of(o)?, projection),
+        },
+        portals: portals_option(o)?,
         ..Scene3d::default()
     };
     // Number the colour groups in document order first (see color_of).
@@ -594,15 +703,27 @@ pub fn parts_scene(doc: &Document, o: &Value, pixels: (u32, u32)) -> Result<Part
         None | Some(Value::Null) | Some(Value::Bool(false)) => {}
         Some(Value::Bool(true)) => scene.ground = Some(Ground::default()),
         Some(g @ Value::Object(_)) => {
+            let color = match g.get("color") {
+                None | Some(Value::Null) => None,
+                Some(c) => Some(rgb(c, "ground color")?),
+            };
+            // A material, like a part's, over the ground's colour.
+            let base = Material::from_srgb8(
+                color.map_or(255, |c| c[0]),
+                color.map_or(255, |c| c[1]),
+                color.map_or(255, |c| c[2]),
+            );
+            let material = match g.get("material") {
+                None | Some(Value::Null) => None,
+                Some(m) => Some(material(m, base, "ground.material")?),
+            };
             scene.ground = Some(Ground {
                 height: g.get("height").and_then(Value::as_f64),
-                color: match g.get("color") {
-                    None | Some(Value::Null) => None,
-                    Some(c) => Some(rgb(c, "ground color")?),
-                },
+                color,
+                material,
             })
         }
-        Some(_) => return Err("ground is true, false or {height?, color?}".into()),
+        Some(_) => return Err("ground is true, false or {height?, color?, material?}".into()),
     }
     scene.clip_planes = clip_planes(o)?;
     scene.clip_mode = match o.get("clipMode").and_then(Value::as_str) {
@@ -647,6 +768,7 @@ pub fn parts_scene(doc: &Document, o: &Value, pixels: (u32, u32)) -> Result<Part
         triangles,
         chord,
         kernel: solids.kernel_name(),
+        fit: fit_option(o, camera.is_some())?,
     })
 }
 
@@ -735,6 +857,67 @@ mod tests {
     }
 
     #[test]
+    fn camera_and_portal_options() {
+        // A camera 3 m away at eye height, looking level along +y.
+        let o = json!({"camera": {"eye": [100, -3000, 1600], "target": [100, 0, 1600], "fov": 40}});
+        let c = camera_option(&o, Projection::Perspective).unwrap().unwrap();
+        assert!((c.eye() - Point3::new(100.0, -3000.0, 1600.0)).length() < 1e-9);
+        assert!((c.target - Point3::new(100.0, 0.0, 1600.0)).length() < 1e-12);
+        assert!((c.fov_y.to_degrees() - 40.0).abs() < 1e-12);
+        assert!(c.pitch.abs() < 1e-12);
+        // Straight down.
+        let o = json!({"camera": {"eye": [0, 0, 10], "target": [0, 0, 0]}});
+        let c = camera_option(&o, Projection::Perspective).unwrap().unwrap();
+        assert!((c.eye() - Point3::new(0.0, 0.0, 10.0)).length() < 1e-9);
+        assert!(camera_option(&json!({}), Projection::Perspective)
+            .unwrap()
+            .is_none());
+        // A height makes it orthographic, that many mm high.
+        let o = json!({"camera": {"eye": [0, -2000, 0], "target": [0, 0, 0], "height": 800}});
+        let c = camera_option(&o, Projection::Perspective).unwrap().unwrap();
+        assert_eq!(c.projection, Projection::Orthographic);
+        assert!((2.0 * c.half_height() - 800.0).abs() < 1e-9);
+        // Up +X: +X shows as up on screen.
+        let o = json!({"camera": {"eye": [0, -2000, 0], "target": [0, 0, 0], "up": [1, 0, 0]}});
+        let c = camera_option(&o, Projection::Perspective).unwrap().unwrap();
+        assert!((c.up() - Vec3::X).length() < 1e-12, "{:?}", c.up());
+        // Fitting: named views fit, placed cameras do not, unless asked.
+        assert!(fit_option(&json!({}), false).unwrap());
+        assert!(!fit_option(&json!({}), true).unwrap());
+        assert!(fit_option(&json!({"fit": true}), true).unwrap());
+        assert!(fit_option(&json!({"fit": 1}), true).is_err());
+        for bad in [
+            json!({"camera": {"eye": [0, 0, 0], "target": [0, 0, 0]}}),
+            json!({"camera": {"eye": [0, 0, 1]}}),
+            json!({"camera": {"eye": [0, 0, 1], "target": [0, 0, 0], "fov": 180}}),
+            json!({"camera": {"eye": [0, 0, 1], "target": [0, 0, 0], "up": [0, 0, 0]}}),
+            json!({"camera": {"eye": [0, 0, 1], "target": [0, 0, 0], "height": -3}}),
+            json!({"camera": 3}),
+        ] {
+            assert!(
+                camera_option(&bad, Projection::Perspective).is_err(),
+                "{bad}"
+            );
+        }
+
+        let p = portals_option(&json!({"portals": [
+            {"origin": [0, 0, 900], "u": [1200, 0, 0], "v": [0, 0, 1200]}
+        ]}))
+        .unwrap();
+        assert_eq!(p.len(), 1);
+        assert!((p[0].area() - 1.44e6).abs() < 1e-6);
+        for bad in [
+            json!({"portals": {"origin": [0, 0, 0]}}),
+            // Not a rectangle.
+            json!({"portals": [{"origin": [0, 0, 0], "u": [1, 0, 0], "v": [1, 1, 0]}]}),
+            json!({"portals": [{"origin": [0, 0, 0], "u": [0, 0, 0], "v": [0, 1, 0]}]}),
+            json!({"portals": [{}, {}, {}, {}, {}]}),
+        ] {
+            assert!(portals_option(&bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn environment_option_presets_and_overrides() {
         assert_eq!(environment(&json!("sky")).unwrap(), Environment::sky());
         assert_eq!(
@@ -754,6 +937,14 @@ mod tests {
         );
         assert_eq!(sun.direction, Vec3::Z);
         assert!(environment(&json!({"sun": false})).unwrap().sun.is_none());
+        // The studio's floor sweeps into its dome; the sky's is endless.
+        assert!(Environment::studio().sweep && !Environment::sky().sweep);
+        assert!(
+            !environment(&json!({"preset": "studio", "sweep": false}))
+                .unwrap()
+                .sweep
+        );
+        assert!(environment(&json!({"sweep": 1})).is_err());
         for bad in [
             json!("night"),
             json!(3),

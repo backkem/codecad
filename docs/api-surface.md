@@ -47,7 +47,8 @@ cad.currentSession()  // "electrical.dwg"
 | `cad.currentSession()` | Returns current target session ID, or null. |
 | `cad.sessions.create(id)` | Create session + open server sync stream. |
 | `cad.sessions.destroy(id)` | Close sync stream + drop session. |
-| `cad.sessions.list()` | Returns `[{id, entity_count, js_target, visible}]`. |
+| `cad.sessions.list()` | Returns `[{id, entity_count, part_count, baked, js_target, visible}]`. |
+| `cad.sessions.loadBake(id, bytes, adopt)` | Load a prebaked 3D scene (see "Solid parts in the browser"). |
 | `cad.sessions.loadDwgBytes(id, bytes)` | Load DWG from Uint8Array into session. |
 | `cad.viewport.start(canvasId, sessionId)` | Start eframe renderer on canvas. |
 | `cad.viewport.stop(canvasId)` | Stop renderer. |
@@ -1015,7 +1016,12 @@ cad.render({
   view: "iso", ground: true, out: "renders/shelf.png",
   quality: "presentation", spp: 1024, seed: 0,  // same scene, spp and seed: same bytes
   materials: mat.option(),     // { attr: "material", map: { oak: { color, roughness, pattern }, ... }, default? }
-  environment: "studio",       // "studio" | "sky" | { preset, zenith, horizon, ground, intensity, sun: { direction, frame, angle, irradiance, color } | false }
+  environment: "studio",       // "studio" | "sky" | { preset, zenith, horizon, ground, intensity, sweep, sun: { direction, frame, angle, irradiance, color } | false }
+  exposure: 0,                 // stops
+  denoise: true,               // edge-aware denoiser (default); false: the raw estimate
+  portals: [{ origin: [0, 3300, 900], u: [0, 1600, 0], v: [0, 0, 1200] }],  // openings the sky lights an interior through
+})
+// -> { ..., quality: "presentation", samples, denoised, trace: | "sky" | { preset, zenith, horizon, ground, intensity, sun: { direction, frame, angle, irradiance, color } | false }
   exposure: 0,                 // stops
 })
 // -> { ..., quality: "presentation", samples, trace: { passes, triangles, bvhMs, uploadMs, traceMs, pngMs, ... } }
@@ -1028,6 +1034,171 @@ for wood grain, `brushed` for streaks along an axis or, `circular`, about
 it; `axis` is "long", "short", "symmetry" or a vector in the part's
 frame). The core knows no material names. The working render uses only
 `color`, `metallic` and `roughness` from it.
+
+A placed camera replaces the named view in both qualities:
+`camera: { eye: [x, y, z], target: [x, y, z], fov: 30 }` (mm, vertical
+field of view in degrees) is perspective; `height: 800` instead (the
+view's height in mm) makes it orthographic; `up` is the world direction
+shown as up (default [0, 0, 1]). It is used as given unless `fit: true`
+(named views fit unless `fit: false`).
+
+The ground takes a material like a part (`ground: { material: { color,
+roughness, pattern } }`; the working render draws its colour). The
+`mottle` pattern (`{kind: "mottle", scale, strength, color}`) adds soft
+patches about `scale` mm across, so an even surface (a lawn, a floor) is
+not flat; `materials.js` has `lawn`. `haze` (mm, default 150 m for "sky")
+blends the ground seen far away into the horizon colour, so the sky meets
+it without a hard line.
+
+`sweep` (on for "studio") blends the backdrop seen
+just above the horizon up from the lit ground into the dome, so a level
+view shows no line where the floor meets it. `portals` are rectangles (a
+corner and two perpendicular edges): the tracer samples the dome through
+them directly, which an interior lit through windows needs to converge;
+the result is the same. Shadow rays from the sun pass through glass
+(attenuated, not bent).
+
+### Prebaked scenes: `cad.bake3d`
+
+A server script writes what a viewer without a kernel needs: the parts,
+their meshes, exact boxes and volumes, and the render options to start
+from (design section 14.3).
+
+```js
+const mat = await cad.use("materials");
+cad.bake3d({ out: "examples/3d/03-bookshelf.bake3d",
+             view: "iso", ground: true, materials: mat.option() })
+// -> { ok, path, bytes, parts, defs, solids, triangles, chord, coarser, kernel, format, ms }
+```
+
+It takes the 3D `cad.render` options (not `size`, `pixelRatio`,
+`backend`, `mode`); `chord` defaults to a quarter pixel at 1280 px.
+`coarser` counts solids the kernel would only mesh at a coarser chord.
+`GET /api/bake3d?doc=<key>[&options=<json>]` (bearer token) returns the
+same bytes.
+
+### Solid parts in the browser
+
+The page shows parts in both render modes and, once it has loaded the
+kernel module, evaluates them itself with the server's core code.
+
+```js
+await cad.loadKernel()          // once: fetches the kernel module (~1.5 MB gzipped)
+const p = cad.extrude({ min: [0, 0], max: [100, 50] }, { distance: 18 })
+cad.parts()                     // the server's numbers
+cad.kernel.status()             // { state: "none" | "not-loaded" | "loaded", kernel, evaluations }
+```
+
+Before `cad.loadKernel()`, a call that needs geometry throws "the solid
+kernel is not loaded in this page yet: run `await cad.loadKernel()`
+once, then call again", and starts the download, so the call works when
+tried again. A build without the module (`just build-kernel` not run)
+says so from `cad.loadKernel()`.
+
+The 3D view, for a page's own canvas (the app's 2D/3D switch uses it):
+
+| Method | Description |
+|--------|-------------|
+| `cad.view3d.start(canvas, sessionId, opts)` | Show a session's parts. `opts`: 3D `cad.render` options plus `quality` ("working" \| "presentation") and `spp`. Returns a key. WebGPU only. |
+| `cad.view3d.command(key, cmd)` | `{quality, view, projection, fit: true, orbit: [yaw, pitch], spp, traceScale: 1 \| 2, denoise, options}` |
+| `cad.view3d.stats(key)` | Frames drawn, samples and target, timings, camera, errors. |
+| `cad.view3d.stop(key)` | Stop it. |
+| `cad.view3d.devices()` | GPU devices the page created (one is expected). |
+| `cad.sessions.loadBake(id, bytes, adopt)` | Load a `.bake3d`; `adopt`: the session takes its parts. |
+| `cad.api.fetchBake(docId, opts?)` | The server's bake of a document (`GET /api/bake3d`). |
+
+Where the 3D view gets geometry, in order: the page's kernel when loaded;
+a bake the session holds; in the app with a server, the server's bake of
+the document (fetched again when its parts change). Presentation mode
+draws the working render while the camera moves, then accumulates samples
+up to its target and stops; on a slow GPU it traces at half resolution
+and sets a target it reaches in about 30 s. Every image it shows goes
+through the tracer's denoiser, as `cad.render` does (`denoise: false` in
+the options or a command shows the raw estimate).
+
+The embed viewer shows a bake with a Working/Presentation switch, and
+never downloads the kernel:
+
+```html
+<script type="module" src="embed/codecad-viewer.js"></script>
+<codecad-viewer scene="examples/3d/03-bookshelf.bake3d" style="width:960px;height:640px"></codecad-viewer>
+```
+
+The app opens one with `?scene=<url>` or a dropped `.bake3d` file.
+
+### Projected views
+
+Built in rung 3D3a. `cad.project` turns the parts into ordinary 2D
+drawing entities: one view of them, with visible edges, hidden edges and
+silhouettes, as exact lines, arcs, circles and ellipses that the 2D
+renderer, DWG and PDF already understand.
+
+```js
+const front = cad.project({ view: "front", at: [120, 185], scale: 1 });
+// -> { block: "view-front", insert: "e_41", view, from, right, up, origin, at, scale,
+//      parts, entities, counts: { line, arc, circle, ellipse, spline, visible, hidden },
+//      bounds: { min, max }, open: [], stats, oracle, ms, toSheet(p3) }
+cad.project({ from: [1, -2, 1], up: [0, 0, 1], parts: { attrs: { part: "side" } },
+              at: [300, 80], scale: 0.5, hidden: false, name: "side detail" });
+front.toSheet([0, 0, 50]);                           // a 3D point on the sheet
+cad.viewPoints({ view: "front", at: [120, 185], points: [[0, 0, 50]] });  // the same, by options
+cad.entities({ expand: true, attrs: { partId: "p_7", edge: "hidden" } }); // its hidden lines
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `view` | | A name, as `cad.render` names views: `front`, `back`, `left`, `right`, `top`, `bottom`, `iso` (also `isometric`, `iso-se`), `iso-sw`, `iso-ne`, `iso-nw`. Or give `from`. |
+| `from`, `up` | up: world Z (Y when looking along Z) | A general direction toward the eye, and which way is up on the sheet. |
+| `parts` | all | The part selector. |
+| `origin` | centre of the parts' box | The 3D point drawn at `at`. Views of one set of parts share it, so they line up. |
+| `at`, `scale` | `[0, 0]`, 1 | Where the view goes on the sheet, and sheet units per mm. |
+| `hidden` | true | Draw hidden edges. |
+| `silhouettes` | true | Draw the outlines of curved faces. |
+| `smooth` | false | Draw edges where two faces meet tangentially (round boundaries) everywhere. Without it they are drawn only where they lie on the outline of the view. |
+| `layers` | `{visible: "visible", hidden: "hidden"}` | The layer of each class: `visible`, `hidden`, `silhouette` (default: the visible layer), `hiddenSilhouette` (default: the hidden layer). |
+| `partAttrs` | false | Copy each part's attributes onto its entities too. |
+| `name` | `"view-<view>"` | The block's name. |
+| `place` | true | Place an insert (or move the one there is). |
+| `exact`, `chord` | true, max(0.01, 1e-5 x size) | The visibility oracle: ask the kernel's exact rays where the mesh is unsure; the mesh's chord (mm). |
+
+| Choice | Decision | Why |
+|---|---|---|
+| What a view is | One **block definition** in true size (view-plane millimetres, the view's origin at the block's (0, 0)) and one **insert** at `at` with `scale`. Projecting again with the same name replaces the block's content and moves its first insert, so what a script placed next to it stays. | A view moves, scales and exports as one thing, and DWG keeps it as a block. The scale is in the insert, so the block's numbers are the part's. |
+| Link to the part | Every entity carries `partId` (`"p_7"`), `edge` (`"visible"` or `"hidden"`) and `curve` (`"edge"` or `"silhouette"`), through the attribute mechanism; `partAttrs: true` adds the part's own attributes. | A script dimensions, labels or restyles by part with the selectors it already has (`entities({expand: true, attrs})`, `children(insert)`). |
+| Layers | The script names them. Nothing in the core gives a layer name meaning. A layer the call creates gets plain defaults (white; Continuous 0.5 mm for visible and silhouettes, Hidden 0.25 mm for hidden), an existing layer is left as it is. Linetype and weight come from the layer, since block shapes carry none. | No built-in layer semantics. |
+| Mapping 3D to the sheet | `toSheet(p)` on the result (plain arithmetic on `origin`, `right`, `up`, `at`, `scale`), or `cad.viewPoints` with the same view options and `points`. | Dimensions and labels go on projected features with the existing 2D calls. |
+| Arranging views | Not in the core. First- or third-angle placement is a script library (`examples/3d/lib/views.js`, `arrange`), from `viewPoints` of the parts' box. | It is a drafting convention, not geometry. |
+
+What is exact: a line projects to a line, a circle or an ellipse to an
+ellipse (a circle when its plane faces the viewer, a line when the view
+runs along its plane), so the entities are LINE, ARC, CIRCLE and ELLIPSE.
+Silhouettes come in closed form: two rulings of a cylinder, elliptic
+cylinder or cone, the great circle of a sphere, and the four or two
+circles of a torus whose axis is along or across the view. A B-spline edge
+(where two cylinders meet) is drawn as the conic it lies on in this view
+when it lies on one (on its cylinder seen along the axis), and otherwise
+as a cubic spline fitted to 0.01 mm. Coincident pieces are merged, and
+visible wins over hidden, so a view carries no duplicates.
+
+How visibility is decided: every curve is split where, in the view, it
+crosses another projected edge or silhouette, where another curve ends on
+it, and where a conic seen edge on folds back: those are the only places
+visibility can change between parts that do not intersect. The crossings
+are exact (closed form where one curve is straight, Newton's method on the
+exact parameters otherwise). Each piece is then asked once, at its middle
+(long pieces at three points, and split by bisection where they
+disagree): a ray toward the eye against a fine mesh of the parts, which is
+a numeric oracle only and is never stored or drawn. Where the mesh cannot
+be trusted (a hit within 50 chords, or within two chords of the mesh's
+outline, or at a grazing angle), four rays 8 chords to the side decide it
+(visible if any escapes), and failing that the kernel's exact ray hits.
+Pieces shorter than 1e-6 mm take a neighbour's class.
+
+`open` lists what has no closed form here: torus faces seen obliquely
+(their silhouette is not a conic) and B-spline faces; their silhouettes
+are missing from the view. Parts must not interpenetrate: an edge that
+passes into another part changes visibility where it pierces it, which is
+not a crossing in the view.
 
 ### A domain library on top
 
@@ -1051,8 +1222,7 @@ return { board, dado, cutList };
 
 ### Not yet
 
-Projected 2D views, sections, a browser viewport and a kernel in the
-browser, materials, assets and `scene3d` settings, live tool links
+Sections and hatching, dimensions placed automatically, materials, assets and `scene3d` settings, live tool links
 (`ToolRef::Part`) and clearances on tool parts are later rungs (3D2b to
 3D6b). Between parts: no `nearest3d` yet, and no distance from a bare point
 to a part.

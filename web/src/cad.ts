@@ -9,14 +9,21 @@ import init, {
   cad_call,
   export_dwg_bytes,
   export_pdf_bytes,
+  gpu_devices_created,
+  kernel_expect,
+  kernel_status,
   session_create,
   session_current,
   session_destroy,
   session_list,
+  session_load_bake,
   session_load_dwg,
   session_use,
   start_renderer,
+  start_view3d,
   stop_renderer,
+  view3d_command,
+  view3d_stats,
   yrs_apply_update,
   yrs_encode_update,
   yrs_pending_update,
@@ -31,6 +38,7 @@ import type {
   SavePdfOptions,
 } from "./cad-api";
 import { buildCadApi } from "./cad-api";
+import { KERNEL_HINT, type KernelInfo, loadKernel } from "./kernel";
 
 export type { CadApi, EntityJson, LayerInfo };
 
@@ -39,8 +47,77 @@ export type { CadApi, EntityJson, LayerInfo };
 export interface SessionInfo {
   id: string;
   entity_count: number;
+  /** Solid parts in the document. */
+  part_count: number;
+  /** A prebaked 3D scene is loaded. */
+  baked: boolean;
   js_target: boolean;
   visible: boolean;
+}
+
+/** Options of a 3D view: the 3D `cad.render` options plus its own. */
+export interface View3dOptions extends RenderOptions {
+  quality?: "working" | "presentation";
+}
+
+/** A change to a running 3D view. */
+export interface View3dCommand {
+  quality?: "working" | "presentation";
+  view?: RenderOptions["view"];
+  projection?: "orthographic" | "perspective";
+  /** Re-fit the camera to the parts. */
+  fit?: boolean;
+  /** Turn the camera: [yaw, pitch] in radians. */
+  orbit?: [number, number];
+  /** Presentation: fixed sample target (null: adapt to the GPU). */
+  spp?: number | null;
+  /** Presentation: 1 full resolution, 2 half. */
+  traceScale?: 1 | 2;
+  /** Presentation: the denoiser (default on, as in `cad.render`). */
+  denoise?: boolean;
+  /** Render options to change (colours, materials, light, ...). */
+  options?: RenderOptions;
+}
+
+/** What `cad.view3d.stats(key)` reports. */
+export interface View3dStats {
+  key: string;
+  session: string;
+  quality: "working" | "presentation";
+  /** Frames drawn (raster frames and trace batches). */
+  frames: number;
+  rasterFrames: number;
+  traceBatches: number;
+  /** Animation-frame callbacks run. */
+  ticks: number;
+  firstFrameMs: number | null;
+  rasterCpuMs: number;
+  rasterGpuMs: number;
+  /** Presentation: samples accumulated, and the target. */
+  samples: number;
+  target: number;
+  /** Time from the start of the accumulation to the target (ms). */
+  traceDoneMs: number | null;
+  /** GPU time of one sample at the current resolution (ms). */
+  sampleMs: number;
+  traceScale: number;
+  denoise: boolean;
+  batch: number;
+  resets: number;
+  sceneBuilds: number;
+  parts: number;
+  triangles: number;
+  width: number;
+  height: number;
+  adapter: string;
+  camera: {
+    yaw: number;
+    pitch: number;
+    distance: number;
+    target: [number, number, number];
+    projection: string;
+  } | null;
+  error: string | null;
 }
 
 export interface DocumentInfo {
@@ -184,6 +261,67 @@ const sessions = {
     if (result.error) throw new Error(result.error);
     return result;
   },
+
+  /**
+   * Load a prebaked 3D scene (`cad.bake3d`'s file). `adopt`: the session's
+   * parts become the bake's (a viewer); otherwise the bake only supplies
+   * geometry for the parts the session already has.
+   */
+  loadBake(
+    id: string,
+    data: Uint8Array,
+    adopt: boolean,
+  ): { ok: boolean; parts: number; solids: number; triangles: number } {
+    const result = JSON.parse(session_load_bake(id, data, adopt));
+    if (result.error) throw new Error(result.error);
+    return result;
+  },
+};
+
+// ── 3D view ─────────────────────────────────────────────────────────
+
+/** Is there a WebGPU adapter? The 3D view needs one (no fallback). */
+export async function hasWebGpu(): Promise<boolean> {
+  if (typeof navigator === "undefined" || !("gpu" in navigator)) return false;
+  try {
+    const adapter = await (navigator as any).gpu.requestAdapter();
+    return !!adapter;
+  } catch {
+    return false;
+  }
+}
+
+/** A message for pages without WebGPU. */
+export const NO_WEBGPU_3D =
+  "The 3D view needs WebGPU, which this browser does not offer (try a current Chrome or Edge). The 2D view still works.";
+
+const view3d = {
+  /** Show a session's parts on `canvas`. Returns a key for the calls below. */
+  start(
+    canvas: HTMLCanvasElement,
+    sessionId: string,
+    opts: View3dOptions = {},
+  ): string {
+    const r = JSON.parse(start_view3d(canvas, sessionId, JSON.stringify(opts)));
+    if (r.error) throw new Error(r.error);
+    return r.key;
+  },
+  stop(key: string): void {
+    stop_renderer(key);
+  },
+  command(key: string, cmd: View3dCommand): void {
+    const r = JSON.parse(view3d_command(key, JSON.stringify(cmd)));
+    if (r.error) throw new Error(r.error);
+  },
+  stats(key: string): View3dStats {
+    const r = JSON.parse(view3d_stats(key));
+    if (r.error && !r.key) throw new Error(r.error);
+    return r as View3dStats;
+  },
+  /** GPU devices this page created (one is expected). */
+  devices(): number {
+    return gpu_devices_created();
+  },
 };
 
 // ── Renderer selection ─────────────────────────────────────────────────
@@ -245,6 +383,10 @@ function downloadBlob(
 const cadCore = buildCadApi({
   call: (method, argsJson) => {
     const raw = cad_call(method, argsJson);
+    // A call that needed geometry before the kernel was loaded: start
+    // fetching it now (once), so the call works when tried again.
+    if (raw.includes("solid kernel is not loaded"))
+      loadKernel().catch(() => {});
     schedulePendingSync();
     return raw;
   },
@@ -269,6 +411,21 @@ export const cad = {
   // Browser-only: session management
   sessions,
   viewport,
+  view3d,
+
+  /**
+   * Load the solid kernel (a separate WebAssembly module, fetched once).
+   * Until then, calls that need geometry fail with a message saying so.
+   */
+  loadKernel: (): Promise<KernelInfo> => loadKernel(),
+  kernel: {
+    load: (): Promise<KernelInfo> => loadKernel(),
+    status: (): {
+      state: "none" | "not-loaded" | "loaded";
+      kernel: string;
+      evaluations: number;
+    } => JSON.parse(kernel_status()),
+  },
 
   useSession(id: string): void {
     const result = JSON.parse(session_use(id));
@@ -368,6 +525,27 @@ export const cad = {
       const resp = await fetch("/api/documents", { headers });
       if (!resp.ok) throw new Error(`GET /api/documents: ${resp.status}`);
       return resp.json();
+    },
+    /**
+     * The server's prebaked 3D scene of a document (its kernel evaluates
+     * the parts): the interim geometry source of the app's 3D view while
+     * the page has no kernel of its own. Pending edits are flushed first.
+     */
+    async fetchBake(
+      docId: string,
+      opts: RenderOptions = {},
+    ): Promise<Uint8Array> {
+      await flushAndWaitSync();
+      const token = window.__CADVIEW_TOKEN;
+      const headers: Record<string, string> = {};
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const q = new URLSearchParams({ doc: docId });
+      if (Object.keys(opts).length) q.set("options", JSON.stringify(opts));
+      const resp = await fetch(`/api/bake3d?${q}`, { headers });
+      if (!resp.ok) {
+        throw new Error(`GET /api/bake3d: ${resp.status} ${await resp.text()}`);
+      }
+      return new Uint8Array(await resp.arrayBuffer());
     },
   },
 };
@@ -610,6 +788,7 @@ export function setLoadProgressCallback(cb: (pct: number) => void): void {
 export async function initCadEmbed(): Promise<void> {
   const cleanup = trackWasmProgress((pct) => _onLoadProgress?.(pct));
   await init();
+  kernel_expect(KERNEL_HINT);
   cleanup();
   _rendererType = await detectRenderer();
 }
@@ -617,6 +796,7 @@ export async function initCadEmbed(): Promise<void> {
 export async function initCad(): Promise<void> {
   const cleanup = trackWasmProgress((pct) => _onLoadProgress?.(pct));
   await init();
+  kernel_expect(KERNEL_HINT);
   cleanup();
 
   const params = new URLSearchParams(window.location.search);

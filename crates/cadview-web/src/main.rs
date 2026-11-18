@@ -1,14 +1,20 @@
 //! cadview-web: browser shell. Session registry (`session`), wasm-bindgen
-//! exports (`exports`), the Vello renderer (`vello_render`) and the egui
-//! fallback renderer (`egui_render`). All CAD and drawing decisions live in
-//! cadview-core; the Vello scene comes from cadview-render.
+//! exports (`exports`), the Vello renderer (`vello_render`), the egui
+//! fallback renderer (`egui_render`), the 3D view (`view3d`) and the link to
+//! the kernel module (`kernel`). All CAD and drawing decisions live in
+//! cadview-core; the Vello scene comes from cadview-render, the 3D frames
+//! from cadview-render3d.
 
 mod egui_render;
 #[cfg(target_arch = "wasm32")]
 mod exports;
+#[cfg(target_arch = "wasm32")]
+mod kernel;
 mod session;
 #[cfg(all(target_arch = "wasm32", feature = "vello-renderer"))]
 mod vello_render;
+#[cfg(all(target_arch = "wasm32", feature = "vello-renderer"))]
+mod view3d;
 
 #[cfg(not(target_arch = "wasm32"))]
 use eframe::egui;

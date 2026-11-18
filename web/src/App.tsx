@@ -9,6 +9,8 @@ import { ViewportContainer } from "./ViewportContainer";
 interface Tab {
   id: string;
   label: string;
+  /** Opens in the 3D view (a prebaked scene). */
+  view3d?: boolean;
 }
 
 interface LayerState {
@@ -42,6 +44,21 @@ export function App() {
         prev.map((t) => (t.id === sessionId ? { ...t, label: newLabel } : t)),
       );
     });
+
+    // Open a prebaked 3D scene from ?scene=URL (no kernel needed)
+    const sceneUrl = new URLSearchParams(window.location.search).get("scene");
+    if (sceneUrl) {
+      fetch(sceneUrl)
+        .then((r) => {
+          if (!r.ok) throw new Error(`${r.status}`);
+          return r.arrayBuffer();
+        })
+        .then((buf) => {
+          const name = sceneUrl.split("/").pop() || "scene.bake3d";
+          loadBakeAsTab(name, new Uint8Array(buf));
+        })
+        .catch((e) => console.error(`[CodeCAD] ?scene= load failed: ${e}`));
+    }
 
     // Auto-load DWG from ?file=URL parameter
     const fileUrl = new URLSearchParams(window.location.search).get("file");
@@ -128,6 +145,24 @@ export function App() {
     }
   }
 
+  // Load a prebaked 3D scene into a new tab, shown in 3D
+  function loadBakeAsTab(name: string, bytes: Uint8Array) {
+    const label = name.replace(/\.bake3d$/i, "");
+    const id = `scene-${Date.now()}-${name}`;
+    try {
+      cad.sessions.create(id);
+      const r = cad.sessions.loadBake(id, bytes, true);
+      console.log(
+        `[CodeCAD] Loaded ${name}: ${r.parts} parts, ${r.solids} solids`,
+      );
+    } catch (e) {
+      console.error(`[CodeCAD] Failed to load ${name}:`, e);
+      return;
+    }
+    setTabs((prev) => [...prev, { id, label, view3d: true }]);
+    activateTab(id);
+  }
+
   // Load a dropped DWG file into a new tab
   function loadDroppedFile(file: File) {
     file.arrayBuffer().then((buf) => {
@@ -188,6 +223,10 @@ export function App() {
       for (const file of files) {
         if (file.name.toLowerCase().endsWith(".dwg")) {
           loadDroppedFile(file);
+        } else if (file.name.toLowerCase().endsWith(".bake3d")) {
+          file
+            .arrayBuffer()
+            .then((buf) => loadBakeAsTab(file.name, new Uint8Array(buf)));
         } else {
           console.warn(`[CodeCAD] Ignoring non-DWG file: ${file.name}`);
         }
@@ -257,13 +296,16 @@ export function App() {
           <ViewportContainer
             key={activeTab.id}
             sessionId={activeTab.id}
+            initial3d={activeTab.view3d}
             focused={true}
             onFocus={() => {}}
           />
         )}
         {dragOver && (
           <div className="drop-overlay">
-            <div className="drop-message">Drop .dwg file to open</div>
+            <div className="drop-message">
+              Drop a .dwg or .bake3d file to open
+            </div>
           </div>
         )}
 

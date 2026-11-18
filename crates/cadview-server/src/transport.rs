@@ -344,6 +344,17 @@ async fn handle_rpc_call(
                 Err(e) => format!(r#"{{"error":{}}}"#, serde_json::json!(e)),
             }
         }
+        "bake3d" => {
+            let reg = registry.lock().await;
+            let Some(slot) = reg.get(doc_key) else {
+                return format!(r#"{{"error":"document '{}' not loaded"}}"#, doc_key);
+            };
+            let base = std::env::current_dir().unwrap_or_default();
+            match crate::bake::bake_to_file(&slot.document, &args, &base) {
+                Ok(v) => v.to_string(),
+                Err(e) => format!(r#"{{"error":{}}}"#, serde_json::json!(e)),
+            }
+        }
         "loadDwg" => {
             let path = req["args"]["path"].as_str().unwrap_or("");
             if path.is_empty() {

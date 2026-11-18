@@ -12,10 +12,18 @@ times.
 Shared code lives in [`lib/`](lib): [`shapes.js`](lib/shapes.js) (boxes,
 members between two points, rounded rectangles, slots, bolt circles,
 arcs through three points, and the closed forms the checks use),
-[`checks.js`](lib/checks.js) (checks, renders and the summary) and
+[`checks.js`](lib/checks.js) (checks, renders and the summary),
 [`flange.js`](lib/flange.js) (the weld-neck flange of 01, placed again by
-07). They are scripts that use only the public `cad.*` API, loaded with
-`await cad.use("shapes")`.
+07), [`bookshelf.js`](lib/bookshelf.js) and [`stool.js`](lib/stool.js) (the
+models of 03 and 08, placed again in the room of 09),
+[`materials.js`](lib/materials.js) (named materials for presentation
+renders), [`playtower.js`](lib/playtower.js) (the play tower of 11, built once
+for both of its scripts), [`rules.js`](lib/rules.js) (rules for any model:
+what rests on what, overlaps, free space, gaps that trap, guards along
+edges), [`partlist.js`](lib/partlist.js) (a part list with a cutting plan,
+bought items and fixings, from attributes) and [`sheet.js`](lib/sheet.js)
+(a drawing sheet with tables and a title block). They are scripts that use
+only the public `cad.*` API, loaded with `await cad.use("shapes")`.
 
 ## Reproducing
 
@@ -117,18 +125,87 @@ about the axis. Front view.
 
 ![Turned stool](08-turned-stool.png)
 
-## 11 - Play tower, timber frame
+## 09 - Room
 
-The frame of the flagship: four posts, a 1500 x 1500 platform at 1450 with
-rims, joists and deck boards notched round the posts, a swing beam on a
-head rail out to an A-frame, stairs with stringers and treads, and a
-gabled timber roof at 35 degrees (wall plates, rafters seated on the plates
-with a birdsmouth, a ridge board, butted roof boards and ridge caps). 63
-parts in 17 definitions; angled members are cut level and plumb. The script
-checks that no two parts overlap, that every rafter rests on a plate and the
-ridge, and that the roof clears the swing beam (by 328.8). Seen from the
-south-west so the stairs face the viewer, exploded and from the front.
+The living room of the 2D floor plan `07-floor-plan` in 3D: two external
+walls with a window each, two partitions (one with the door), an oak floor
+and a ceiling, with the bookshelf of 03 against the north wall and the
+stool of 08 in the sunlight from the west window. The walls are typed in
+from 07's numbers (a script here cannot read files outside this folder).
+The working picture is a dollhouse cut; the presentation render stands
+inside in daylight, with the two windows named as portals.
 
-[JS source](11-play-tower-frame.js)
+[JS source](09-room.js)
 
-![Play tower frame](11-play-tower-frame.png)
+![Room](09-room.png)
+
+## 10 - Still life
+
+A wine glass, a glazed bowl, a steel flask with its cap and a walnut pepper
+mill on an oak table: every object one revolve of exact lines and arcs,
+checked against its Pappus volume and against the kernel's rule that no
+arc's circle may cross the revolve axis. The presentation render, from a
+placed perspective camera, shows refraction through the glass, reflections
+on the steel and contact shadows.
+
+[JS source](10-still-life.js)
+
+![Still life](10-still-life.png)
+
+## 11 - Play tower with slide and swings
+
+The flagship, a garden play set of our own design: a 1500 x 1500 platform
+at 1450 on four posts, a cabin of board walls with two windows and a door
+under a gabled roof, a front railing, stairs with risers and handrails, a
+sandbox, a 3 m wave slide and two swings on a beam out to an A-frame. 142
+parts in 42 definitions; the slide, the swings and the sand are bought
+(`bought: true`). The model is written once, in
+[`lib/playtower.js`](lib/playtower.js). Besides its views, the script
+renders it from a standing adult's eye height on a lawn (view `eye`, a
+placed perspective camera; to the views folder).
+
+The script checks it with rules written in script over the set queries
+([`lib/rules.js`](lib/rules.js)): no two parts overlap, every part rests on
+what carries it, every post stands on the ground, nothing but the swing
+itself in each swing's free space and nothing in the slide's run-out, no
+gap that can trap a head or a finger, and a guard on every platform edge
+except at the stairs and the slide. The limits are illustrative, not a
+safety standard. Seen from the south-west so the stairs face the viewer;
+exploded, from the front and from the north-east; and path traced on grass
+in daylight.
+
+[JS source](11-play-tower.js)
+
+![Play tower with slide and swings](11-play-tower.png)
+
+## 11 - Play tower, part list
+
+The same model's part list ([`lib/partlist.js`](lib/partlist.js)), drawn
+on one sheet with the 2D API: sawn timber by section and cut length (long
+point to long point, with the angles of the end cuts), a cutting plan per
+section drawn to scale (first-fit decreasing, 3 mm kerf, offcuts hatched),
+the bought items, the fixings counted from the joints by rules of thumb
+the model states, and the order of assembly. 157.3 m of timber in 129
+pieces from 37 stock lengths, 5.4 % offcut. Saved as a PDF to
+`target/3d-views/`.
+
+[JS source](11-play-tower-partlist.js)
+
+![Play tower part list](11-play-tower-partlist.png)
+
+## 12 - Projected views
+
+A shop drawing of a pillow block: a base with R8 corners and two
+counterbored bolt holes, an upright with a semicircular top, a chamfered
+Ø32 bore and an oil hole into it. Front, top and left views in first-angle
+order and an isometric view come from `cad.project` (exact lines, arcs,
+circles and ellipses, hidden edges dashed on their own layer), laid out
+on an A3 sheet by [`lib/views.js`](lib/views.js) with a title block and
+dimensions placed through each view's `toSheet`. Where the oil hole meets
+the bore the edge is not a conic; in the front view it lies on the bore's
+circle and is drawn as that circle, elsewhere as a fitted spline. Written
+as a 2D PNG and a PDF (`target/3d-views/`).
+
+[JS source](12-projected-views.js)
+
+![Projected views of a pillow block](12-projected-views.png)

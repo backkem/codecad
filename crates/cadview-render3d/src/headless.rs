@@ -204,6 +204,7 @@ fn trace_settings(opts: &RenderOptions3d) -> TraceSettings {
     TraceSettings {
         spp: opts.spp,
         seed: opts.seed,
+        denoise: opts.denoise,
         ..TraceSettings::default()
     }
 }
@@ -256,16 +257,19 @@ pub fn render_rgba_stats(
 /// Linear radiance from a presentation render of `scene`.
 #[derive(Debug, Clone)]
 pub struct Radiance3d {
-    /// Mean linear radiance per pixel before exposure and tone curve,
-    /// row-major from the top-left.
+    /// Linear radiance per pixel before exposure and tone curve, row-major
+    /// from the top-left: what the image shows (denoised when the options
+    /// ask for it).
     pub pixels: Vec<[f32; 3]>,
+    /// With the denoiser on: the mean of the samples before it.
+    pub raw: Option<Vec<[f32; 3]>>,
     pub width: u32,
     pub height: u32,
     pub stats: TraceStats,
 }
 
-/// Path trace `scene` (whatever `opts.quality` says) and return the mean
-/// linear radiance per pixel: what tests compare with closed forms.
+/// Path trace `scene` (whatever `opts.quality` says) and return the linear
+/// radiance per pixel: what tests compare with closed forms.
 pub fn render_radiance(
     scene: &Scene3d,
     opts: &RenderOptions3d,
@@ -275,16 +279,25 @@ pub fn render_radiance(
     let scene = prepare_scene(scene, opts);
     let mut frame = build_frame(&scene, width, height);
     frame.pixel_ratio = opts.pixel_ratio;
-    let ((pixels, stats), _) = on_shared(|gpu| {
+    let ((raw, denoised, stats), _) = on_shared(|gpu| {
         let mut guard = lock(&TRACER);
         let tracer = guard.get_or_insert_with(|| PathTracer::new(gpu.device));
         tracer.set_settings(trace_settings(opts));
         tracer.reset();
         render_frame_rgba(gpu, tracer, &frame)?;
-        Ok((tracer.radiance(gpu)?, tracer.stats()))
+        Ok((
+            tracer.radiance(gpu)?,
+            tracer.denoised_radiance(gpu)?,
+            tracer.stats(),
+        ))
     })?;
+    let (pixels, raw) = match denoised {
+        Some(d) => (d, Some(raw)),
+        None => (raw, None),
+    };
     Ok(Radiance3d {
         pixels,
+        raw,
         width,
         height,
         stats,

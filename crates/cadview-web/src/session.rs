@@ -32,6 +32,19 @@ pub(crate) struct DocumentSession {
     /// Set by client-side commands (setLayerVisible, etc.) to signal
     /// renderers that a repaint is needed even without entity changes.
     pub(crate) render_dirty: bool,
+    /// A prebaked 3D scene: the geometry the 3D view shows while the page
+    /// has no kernel (see `cadview_core::solid::baked`).
+    pub(crate) bake: Option<SessionBake>,
+}
+
+/// A loaded bake and the solid environment over it (its own cache). Read
+/// by the wasm exports and the 3D view only.
+#[allow(dead_code)]
+pub(crate) struct SessionBake {
+    pub(crate) baked: cadview_core::solid::baked::Baked,
+    pub(crate) env: cadview_core::solid::SolidEnv,
+    /// Bumped on every load, so views rebuild their scene.
+    pub(crate) rev: u64,
 }
 
 impl DocumentSession {
@@ -49,7 +62,35 @@ impl DocumentSession {
             render_dirty: false,
             doc_rev: 0,
             cache: RenderCache::new(),
+            bake: None,
         }
+    }
+
+    /// Load a prebaked 3D scene. With `adopt`, the document takes the
+    /// bake's parts and definitions (a viewer showing a file); without, the
+    /// bake only supplies geometry for the parts the document already has
+    /// (the app, whose parts arrive by sync).
+    #[allow(dead_code)]
+    pub(crate) fn load_bake(
+        &mut self,
+        bytes: &[u8],
+        adopt: bool,
+    ) -> Result<(usize, usize), String> {
+        let baked = cadview_core::solid::baked::Baked::from_bytes(bytes)?;
+        let (solids, triangles) = baked.solids();
+        if adopt {
+            self.doc.part_defs = baked.defs.clone();
+            self.doc.parts = baked.parts.clone();
+            self.doc_rev += 1;
+        }
+        let rev = self.bake.as_ref().map_or(0, |b| b.rev) + 1;
+        self.bake = Some(SessionBake {
+            env: baked.env(),
+            baked,
+            rev,
+        });
+        self.render_dirty = true;
+        Ok((solids, triangles))
     }
 }
 
@@ -309,5 +350,20 @@ mod tests {
 
         assert_eq!(reg.sessions["a"].hidden_layers, vec!["WALLS"]);
         assert!(reg.sessions["b"].hidden_layers.is_empty());
+    }
+
+    #[test]
+    fn a_damaged_bake_is_refused_and_changes_nothing() {
+        let mut reg = fresh_registry();
+        create_session(&mut reg, "a");
+        let s = reg.sessions.get_mut("a").unwrap();
+        let rev = s.doc_rev;
+        let e = s.load_bake(b"not a bake", true).unwrap_err();
+        assert!(e.contains("prebaked"), "{e}");
+        let mut bad_version = b"CCB3".to_vec();
+        bad_version.extend_from_slice(&99u32.to_le_bytes());
+        assert!(s.load_bake(&bad_version, true).unwrap_err().contains("99"));
+        assert!(s.bake.is_none());
+        assert_eq!(s.doc_rev, rev);
     }
 }

@@ -448,6 +448,10 @@ pub enum Pattern {
     /// Fine streaks along an axis and highlights stretched across it
     /// ([`Brushed`]): brushed or ground metal.
     Brushed(Brushed),
+    /// A soft, large-scale variation toward a second colour ([`Mottle`]):
+    /// an even surface (a lawn, a painted floor, a plastered wall) that
+    /// should not look perfectly flat.
+    Mottle(Mottle),
 }
 
 /// Rings about an axis: see [`Pattern::Bands`] and [`pattern_albedo`].
@@ -466,6 +470,17 @@ pub struct Bands {
     /// Distance of the ring axis from the centre of the mesh's box, toward
     /// its thinnest side (mm). 0 puts the axis through the middle.
     pub distance: f64,
+}
+
+/// A soft variation: see [`Pattern::Mottle`] and [`mottle_weight`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Mottle {
+    /// Size of the patches (mm): the larger of the two noise scales.
+    pub scale: f64,
+    /// The second colour (linear).
+    pub color: [f64; 3],
+    /// How far toward `color` the surface goes at most, 0..1.
+    pub strength: f64,
 }
 
 /// Streaks along an axis: see [`Pattern::Brushed`].
@@ -587,6 +602,7 @@ pub fn streak_direction(m: &Material, pf: &PatternFrame, p: Point3) -> Vec3 {
 ///   ring weight `w` ([`bands_weight`]) and fine pores `g` (streak noise
 ///   at a fifth of the ring spacing).
 /// - Brushed: `base (1 - 0.25 streaks s)` with streak noise `s`.
+/// - Mottle: `mix(base, color, strength m)` with [`mottle_weight`] `m`.
 pub fn pattern_albedo(m: &Material, pf: &PatternFrame, p: Point3) -> [f64; 3] {
     let base = m.base_color.map(|c| c.clamp(0.0, 1.0));
     match m.pattern {
@@ -603,7 +619,24 @@ pub fn pattern_albedo(m: &Material, pf: &PatternFrame, p: Point3) -> [f64; 3] {
             let dim = 1.0 - 0.25 * br.streaks.clamp(0.0, 1.0) * s;
             base.map(|c| c * dim)
         }
+        Pattern::Mottle(mo) => {
+            let w = mo.strength.clamp(0.0, 1.0) * mottle_weight(&mo, pf, p);
+            std::array::from_fn(|i| base[i] + (mo.color[i].clamp(0.0, 1.0) - base[i]) * w)
+        }
     }
+}
+
+/// The weight of [`Mottle`] at `p` (mesh frame), in [0, 1]: two octaves of
+/// value noise, `0.65 n(q / scale) + 0.35 n(q / (0.37 scale))` with `q`
+/// measured from the pattern frame's origin, so the patches are soft and
+/// about `scale` across, with smaller ones inside.
+pub fn mottle_weight(mo: &Mottle, pf: &PatternFrame, p: Point3) -> f64 {
+    let q = p - pf.origin;
+    let k = 1.0 / mo.scale.max(1e-6);
+    let a = value_noise([q.x * k, q.y * k, q.z * k], pf.seed ^ 0x2545_f491);
+    let k2 = k / 0.37;
+    let b = value_noise([q.x * k2, q.y * k2, q.z * k2], pf.seed ^ 0x9e37_79b9);
+    0.65 * a + 0.35 * b
 }
 
 /// The roughness of material `m` at `p` after its pattern, as `(along,
@@ -770,6 +803,7 @@ pub fn pattern_frame(m: &Material, mesh: &RenderMesh, index: usize) -> PatternFr
         }
         Pattern::Bands(b) => (b.axis, b.distance),
         Pattern::Brushed(b) => (b.axis, 0.0),
+        Pattern::Mottle(_) => (PatternAxis::Vector(Vec3::Z), 0.0),
     };
     let pa = principal_axes(mesh);
     let axes = pa.axes;
@@ -799,6 +833,30 @@ pub fn pattern_frame(m: &Material, mesh: &RenderMesh, index: usize) -> PatternFr
         axis,
         origin: centre + thin.scale(distance),
         seed,
+    }
+}
+
+/// The pattern frame of a ground's material ([`Ground::material`]): the
+/// origin under the scene's centre at the ground's height `at`, a fixed
+/// seed. The ground is endless, so a "longest" axis is world X and a
+/// "shortest" or "symmetry" axis is Z; bands move their axis `distance`
+/// below the ground (so the rings show as stripes along the axis, like
+/// boards), as they move it toward a part's thinnest side.
+pub fn ground_pattern_frame(m: &Material, at: Point3) -> PatternFrame {
+    let (axis, distance) = match m.pattern {
+        Pattern::Flat | Pattern::Mottle(_) => (PatternAxis::Vector(Vec3::Z), 0.0),
+        Pattern::Bands(b) => (b.axis, b.distance),
+        Pattern::Brushed(b) => (b.axis, 0.0),
+    };
+    let axis = match axis {
+        PatternAxis::Longest => Vec3::X,
+        PatternAxis::Shortest | PatternAxis::Symmetry => Vec3::Z,
+        PatternAxis::Vector(v) => v.normalized().unwrap_or(Vec3::X),
+    };
+    PatternFrame {
+        axis,
+        origin: Point3::new(at.x, at.y, at.z - distance),
+        seed: pcg_hash(0x6772_6e64),
     }
 }
 
@@ -967,7 +1025,31 @@ pub struct Environment {
     pub sun: Option<Sun>,
     /// Scales the dome and the sun together.
     pub intensity: f64,
+    /// A studio backdrop for a scene with a ground: what is seen directly
+    /// just above the horizon (by the camera, in a mirror, through glass)
+    /// blends from the radiance of the open ground (its colour times the
+    /// irradiance of the dome and the sun on a level surface, over pi, a
+    /// closed form) into the dome over the lowest [`SWEEP_ELEVATION_DEG`]
+    /// degrees, as a studio floor curves up into the wall. The ground then
+    /// meets the backdrop without a line in a level view. The light that
+    /// reaches surfaces is not changed. Without it the ground ends at a
+    /// horizon (outdoors).
+    pub sweep: bool,
+    /// Aerial haze for a scene with a ground, as a distance (mm; 0 for
+    /// none): the ground seen directly (by the camera, in a mirror, through
+    /// glass) at distance `t` blends toward the dome's `horizon` colour by
+    /// `1 - exp(-t / haze)`, so far ground fades into the sky at the horizon
+    /// instead of ending in a line. Light reaching surfaces is not changed.
+    pub haze: f64,
 }
+
+/// Elevation (degrees) over which the studio backdrop blends from the
+/// ground into the dome ([`Environment::sweep`]).
+pub const SWEEP_ELEVATION_DEG: f64 = 20.0;
+
+/// The haze distance (mm) of the [`Environment::sky`] preset: ground
+/// seen 150 m away is blended 63 % (1 - 1/e) into the horizon colour.
+pub const SKY_HAZE: f64 = 150_000.0;
 
 impl Environment {
     /// A neutral photo studio: a grey dome, bright overhead and dark toward
@@ -975,7 +1057,8 @@ impl Environment {
     /// light (16 degrees) from above and to the left of the camera, which
     /// turns with the camera like the working render's headlight. A
     /// horizontal surface in the open receives about `pi` in the isometric
-    /// views (so a white floor comes out near 1 before tone mapping).
+    /// views (so a white floor comes out near 1 before tone mapping). The
+    /// floor sweeps up into the dome ([`Environment::sweep`]).
     pub fn studio() -> Environment {
         Environment {
             zenith: [0.70; 3],
@@ -989,6 +1072,8 @@ impl Environment {
                 color: [1.0, 0.98, 0.95],
             }),
             intensity: 1.0,
+            sweep: true,
+            haze: 0.0,
         }
     }
 
@@ -1007,6 +1092,8 @@ impl Environment {
                 color: [1.0, 0.94, 0.86],
             }),
             intensity: 1.0,
+            sweep: false,
+            haze: SKY_HAZE,
         }
     }
 
@@ -1018,6 +1105,8 @@ impl Environment {
             ground: l,
             sun: None,
             intensity: 1.0,
+            sweep: false,
+            haze: 0.0,
         }
     }
 
@@ -1371,6 +1460,8 @@ pub struct Camera3d {
     pub projection: Projection,
     /// Vertical field of view in radians, in (0, pi).
     pub fov_y: f64,
+    /// The world direction that shows as up on screen (unit; default +Z).
+    pub world_up: Vec3,
 }
 
 impl Default for Camera3d {
@@ -1390,7 +1481,47 @@ impl Camera3d {
             distance: 1000.0,
             projection,
             fov_y: DEFAULT_FOV_Y_DEG.to_radians(),
+            world_up: Vec3::Z,
         }
+    }
+
+    /// A camera at `eye` looking at `target`, with `world_up` showing as up
+    /// on screen. `lens` is the vertical field of view in radians for
+    /// [`Projection::Perspective`], or the height of the view in mm for
+    /// [`Projection::Orthographic`] (its width follows the image's aspect).
+    /// `None` when eye and target coincide, the lens is out of range, or
+    /// `world_up` is zero.
+    pub fn placed(
+        eye: Point3,
+        target: Point3,
+        projection: Projection,
+        lens: f64,
+        world_up: Vec3,
+    ) -> Option<Camera3d> {
+        let back = eye - target;
+        let distance = back.length();
+        let b = back.normalized().filter(|_| distance.is_finite())?;
+        let world_up = world_up.normalized()?;
+        let fov_y = match projection {
+            Projection::Perspective => lens,
+            Projection::Orthographic => 2.0 * (0.5 * lens / distance).atan(),
+        };
+        if !(lens.is_finite() && lens > 0.0 && fov_y > 0.0 && fov_y < std::f64::consts::PI) {
+            return None;
+        }
+        Some(Camera3d {
+            target,
+            yaw: if b.x == 0.0 && b.y == 0.0 {
+                -std::f64::consts::FRAC_PI_2
+            } else {
+                b.y.atan2(b.x)
+            },
+            pitch: b.z.clamp(-1.0, 1.0).asin(),
+            distance,
+            projection,
+            fov_y,
+            world_up,
+        })
     }
 
     /// Turn to `view`, keeping target, distance and projection.
@@ -1407,6 +1538,11 @@ impl Camera3d {
 
     /// Unit screen-right vector (the eye frame's +X).
     pub fn right(&self) -> Vec3 {
+        if self.world_up != Vec3::Z {
+            if let Some(r) = (-self.back()).cross(self.world_up).normalized() {
+                return r;
+            }
+        }
         let (sy, cy) = self.yaw.sin_cos();
         Vec3::new(-sy, cy, 0.0)
     }
@@ -1623,6 +1759,11 @@ pub struct Ground {
     /// ground a shadow catcher: only the contact shadow shows. A colour
     /// fades into the background with distance from the scene.
     pub color: Option<[u8; 3]>,
+    /// A material for the presentation render (colour, roughness, a
+    /// pattern such as [`Pattern::Mottle`]), in the ground's own frame
+    /// ([`ground_pattern_frame`]). Its colour replaces `color`; the working
+    /// render draws that colour only. `None`: a Lambert surface of `color`.
+    pub material: Option<Material>,
 }
 
 /// Size of the drawn ground square: half its side is this many times the
@@ -1738,6 +1879,45 @@ pub enum ClipMode {
     All,
 }
 
+/// A rectangle through which the environment's dome lights an interior: a
+/// window or a door opening. A path tracer samples the dome through it
+/// directly (next-event estimation), as it does the sun, instead of waiting
+/// for a bounce to find the opening; that is what lets an interior lit
+/// through a window converge. It changes how fast the image converges, not
+/// what it converges to: light from the dome that does not come through a
+/// portal still arrives the ordinary way.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Portal {
+    /// One corner.
+    pub origin: Point3,
+    /// The two edges from that corner, perpendicular to each other.
+    pub u: Vec3,
+    pub v: Vec3,
+}
+
+/// Most portals a scene may carry.
+pub const MAX_PORTALS: usize = 4;
+
+impl Portal {
+    /// The portal if its edges are finite, non-zero and perpendicular (to
+    /// 1e-6 of their lengths), else why not.
+    pub fn checked(origin: Point3, u: Vec3, v: Vec3) -> Result<Portal, String> {
+        let (lu, lv) = (u.length(), v.length());
+        if !(origin.is_finite() && lu.is_finite() && lv.is_finite() && lu > 0.0 && lv > 0.0) {
+            return Err("a portal needs a finite corner and two non-zero edges".into());
+        }
+        if u.dot(v).abs() > 1e-6 * lu * lv {
+            return Err("a portal's edges must be perpendicular (a rectangle)".into());
+        }
+        Ok(Portal { origin, u, v })
+    }
+
+    /// Area (mm^2).
+    pub fn area(&self) -> f64 {
+        self.u.cross(self.v).length()
+    }
+}
+
 /// Everything a 3D view shows. Several parts are several items, each with
 /// its own placement (an exploded view is a change of placements, see
 /// [`Scene3d::explode`]) and material.
@@ -1766,6 +1946,9 @@ pub struct Scene3d {
     /// Exposure of the presentation render in stops ([`exposure_scale`]);
     /// the working render ignores it.
     pub exposure: f64,
+    /// Openings through which the dome lights an interior (at most
+    /// [`MAX_PORTALS`]); the working render ignores them.
+    pub portals: Vec<Portal>,
 }
 
 impl Default for Scene3d {
@@ -1784,6 +1967,7 @@ impl Default for Scene3d {
             clip_mode: ClipMode::Any,
             environment: Environment::default(),
             exposure: 0.0,
+            portals: Vec::new(),
         }
     }
 }
@@ -1990,6 +2174,8 @@ pub struct FrameGround {
     pub fade: (f64, f64),
     /// Linear-light colour.
     pub color: [f64; 3],
+    /// The ground's material and where its pattern sits, if it has one.
+    pub material: Option<(Material, PatternFrame)>,
 }
 
 impl FrameGround {
@@ -2087,6 +2273,8 @@ pub struct Frame3d<'a> {
     pub environment: FrameEnvironment,
     /// The presentation render's exposure as a factor ([`exposure_scale`]).
     pub exposure: f64,
+    /// The scene's portals (at most [`MAX_PORTALS`]).
+    pub portals: Vec<Portal>,
     pub items: Vec<FrameItem<'a>>,
 }
 
@@ -2109,7 +2297,14 @@ pub fn build_frame(scene: &Scene3d, width: u32, height: u32) -> Frame3d<'_> {
                 center: [c.x, c.y],
                 half_size: GROUND_EXTENT * reach + (b.max.z - b.min.z),
                 fade: (GROUND_FADE.0 * reach, GROUND_FADE.1 * reach),
-                color: g.color.map_or(background, |c| c.map(srgb_to_linear)),
+                color: match g.material {
+                    Some(m) => m.base_color.map(|v| v.clamp(0.0, 1.0)),
+                    None => g.color.map_or(background, |c| c.map(srgb_to_linear)),
+                },
+                material: g.material.map(|m| {
+                    let z = g.height.unwrap_or(b.min.z);
+                    (m, ground_pattern_frame(&m, Point3::new(c.x, c.y, z)))
+                }),
             })
         }
         _ => None,
@@ -2173,6 +2368,8 @@ pub fn build_frame(scene: &Scene3d, width: u32, height: u32) -> Frame3d<'_> {
             ground: env.ground.map(|v| v.max(0.0) * k),
             sun: None,
             intensity: 1.0,
+            sweep: env.sweep,
+            haze: env.haze,
         },
         sun: env.sun.and_then(|s| {
             let d = match s.frame {
@@ -2219,6 +2416,7 @@ pub fn build_frame(scene: &Scene3d, width: u32, height: u32) -> Frame3d<'_> {
         pixel_world: 2.0 * cam.half_height() / height.max(1) as f64,
         environment,
         exposure: exposure_scale(scene.exposure),
+        portals: scene.portals.iter().take(MAX_PORTALS).copied().collect(),
         items: scene
             .items
             .iter()
@@ -3035,6 +3233,7 @@ mod tests {
         s.ground = Some(Ground {
             height: Some(-3.0),
             color: Some([0, 0, 0]),
+            ..Ground::default()
         });
         s.occlusion = None;
         let f = build_frame(&s, 300, 200);

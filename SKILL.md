@@ -306,8 +306,9 @@ the PNG back to check placement and proportions before saving the DWG.
 
 Exact 3D solids, in mm with Z up. A part places a definition (a feature
 tree: shape only) and carries attributes. Server scripts evaluate every
-change on the kernel; elsewhere geometry queries throw "this build has no
-solid kernel".
+change on the kernel, and so does a browser page after
+`await cad.loadKernel()`; without a kernel, geometry queries throw and say
+which.
 
 ```js
 const side = cad.extrude({ min: [0, 0], max: [300, 800] },
@@ -325,6 +326,14 @@ cad.render({ view: "iso", out: "exploded.png", explode: 0.6, colorBy: { attr: "p
 // Path traced, materials by attribute (names live in examples/3d/lib/materials.js)
 cad.render({ view: "iso", out: "shot.png", ground: true, quality: "presentation",
              materials: (await cad.use("materials")).option(), environment: "studio" })
+// A placed camera (perspective, not fitted); denoised by default; an interior
+// names its windows as portals so daylight through them converges
+cad.render({ camera: { eye: [4950, 2750, 1550], target: [1500, 5150, 1050], fov: 62 },
+             quality: "presentation", environment: "sky", out: "inside.png",
+             portals: [{ origin: [0, 3300, 900], u: [0, 1600, 0], v: [0, 0, 1200] }] })
+// Orthographic placed camera (height in mm), another up; a ground with a material
+cad.render({ camera: { eye: [0, -3000, 800], target: [0, 0, 800], height: 2000, up: [0, 0, 1] },
+             ground: { material: (await cad.use("materials")).presets.lawn }, out: "front.png" })
 ```
 
 - Profiles stay exact: vertex lists with bulges, `{center, radius}`,
@@ -340,6 +349,11 @@ cad.render({ view: "iso", out: "shot.png", ground: true, quality: "presentation"
   <reason>` and changes nothing. Read the reason, change the input.
 - Check what you built: compare `parts()` volumes and boxes with what you
   meant, and look at the render.
+- In the browser console, `await cad.loadKernel()` once before calls that
+  need geometry (until then they throw and say so). To show parts on a
+  page without a kernel, bake them on the server:
+  `cad.bake3d({ out: "x.bake3d", view: "iso", ground: true })`, then
+  `<codecad-viewer scene="x.bake3d">` or the app's `?scene=x.bake3d`.
 - Meaning goes in attributes (`attrs: { part: "shelf" }`), never in the
   geometry. Details: `docs/api-surface.md`, "Solid parts".
 - Cut joints with the parts that fill them: `cad.cut(side, { part: shelf })`
@@ -354,6 +368,13 @@ cad.render({ view: "iso", out: "shot.png", ground: true, quality: "presentation"
   points; touching parts are at 0), `cad.inside3d(a, { min, max })`,
   `cad.distance3d(p, q)`. A domain rule (no overlaps, a clearance, a fixing
   that must touch) is a filter on their pairs. Expect `skipped: []`.
+- Write a rule as one query and a filter, never a loop of `distance3d`:
+  "what rests on what" is one `pairsWithin3d(all, null, 1e-6)` and a table
+  of who carries whom. A region that must stay free (a swing's arc, a
+  probe along an edge) is a temporary part: add it with an attribute,
+  ask `overlapping3d(zone, others)`, remove it. Make a broken copy of the
+  model and see each rule fail with part names before trusting it passes.
+  `examples/3d/lib/rules.js` has these rules for any model.
 - `cad.mirror3d(p, { point, normal, copy: true })` makes the mirror image
   (a left side from a right side). It places a mirrored definition of its
   own, shared by all images of one definition.
@@ -366,6 +387,15 @@ cad.render({ view: "iso", out: "shot.png", ground: true, quality: "presentation"
 - Views: `"iso"` is the south-east corner; `"iso-sw"`, `"iso-ne"` and
   `"iso-nw"` look from the others (stairs climbing toward +x face
   `"iso-sw"`). A quarter cutaway is two planes with `clipMode: "all"`.
+- Shop drawings: `const v = cad.project({ view: "front", at: [120, 185],
+  scale: 0.5, layers: { visible: "outline", hidden: "hidden" } })` draws the
+  parts as a block of exact lines, arcs, circles and ellipses, hidden edges
+  on their own layer (give that layer a dashed linetype). Place dimensions
+  with `v.toSheet([x, y, z])` (or `cad.viewPoints`), select a part's lines
+  with `entities({ expand: true, attrs: { partId } })`. Every view of one
+  set of parts is centred on the same 3D point, so views line up;
+  `examples/3d/lib/views.js` arranges them in first or third angle and
+  draws a sheet. `v.open` must be empty (else some silhouette is missing).
 
 ### Viewport
 

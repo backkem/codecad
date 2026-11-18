@@ -20,8 +20,12 @@ pub fn session_create(session_id: &str) -> String {
     }
     let client_id = reg.next_client_id;
     reg.next_client_id += 1;
-    reg.sessions
-        .insert(session_id.to_string(), DocumentSession::new(client_id));
+    let mut session = DocumentSession::new(client_id);
+    // The page's solid environment (the kernel module, once loaded).
+    if let Some(env) = crate::kernel::page_env() {
+        session.doc.solids = env;
+    }
+    reg.sessions.insert(session_id.to_string(), session);
     // Auto-set js_target if this is the first session
     if reg.js_target.is_none() {
         reg.js_target = Some(session_id.to_string());
@@ -80,9 +84,11 @@ pub fn session_list() -> String {
             let is_target = reg.js_target.as_deref() == Some(id.as_str());
             let has_renderer = reg.renderers.values().any(|sid| sid == id);
             format!(
-                r#"{{"id":"{}","entity_count":{},"js_target":{},"visible":{}}}"#,
+                r#"{{"id":"{}","entity_count":{},"part_count":{},"baked":{},"js_target":{},"visible":{}}}"#,
                 id,
                 s.doc.entities.len(),
+                s.doc.parts.len(),
+                s.bake.is_some(),
                 is_target,
                 has_renderer
             )
@@ -104,7 +110,7 @@ pub fn session_load_dwg(session_id: &str, data: &[u8]) -> String {
         Ok(doc) => {
             let count = doc.entities.len();
             session.sync.populate_from_document(&doc);
-            session.doc = doc;
+            session.doc.replace_keeping_solids(doc);
             session.doc_rev += 1;
             session.cache = RenderCache::new();
             session.initialized = false; // trigger auto-fit
@@ -140,11 +146,23 @@ pub fn yrs_apply_update(session_id: &str, update: &[u8]) -> String {
     if let Err(e) = session.sync.apply_update(update) {
         return format!(r#"{{"error":"{e}"}}"#);
     }
+    // An empty update (no structs, no deletions: the server echoes the
+    // page's empty flushes) leaves the document as it was: no rebuild, and
+    // no frame for any view.
+    if update.len() <= 2 && update.iter().all(|&b| b == 0) {
+        return format!(
+            r#"{{"ok":true,"entities":{},"_session":"{}"}}"#,
+            session.doc.entities.len(),
+            session_id
+        );
+    }
 
     let was_empty = session.doc.entities.is_empty();
     let new_doc = session.sync.to_document();
     let count = new_doc.entities.len();
-    session.doc = new_doc;
+    // The page's solid environment (a kernel, when loaded) is shell state:
+    // it survives the rebuild, as on the server.
+    session.doc.replace_keeping_solids(new_doc);
     session.doc_rev += 1;
 
     if was_empty && count > 0 {
@@ -414,12 +432,111 @@ pub fn stop_renderer(renderer_key: &str) -> String {
     let mut reg = SESSIONS.lock().unwrap();
     if reg.renderers.remove(renderer_key).is_some() {
         reg.repaint_fns.remove(renderer_key);
+        drop(reg);
+        // A 3D view frees its GPU resources now.
+        #[cfg(feature = "vello-renderer")]
+        crate::view3d::release(renderer_key);
         // The CadViewApp/Vello will see it's no longer in the renderers map
         // and stop requesting repaints. The caller should remove the canvas element.
         r#"{"ok":true}"#.to_string()
     } else {
         format!(r#"{{"error":"no renderer for key '{}'"}}"#, renderer_key)
     }
+}
+
+// ── 3D view ──────────────────────────────────────────────────────────
+
+/// Start a 3D view of a session's parts on `canvas` (WebGPU only; the egui
+/// fallback has no 3D). `options_json`: `cad.render` options (view,
+/// projection, colorBy, materials, environment, ...) plus `quality`
+/// ("working" | "presentation") and `spp`. Stop it with `stop_renderer`.
+#[cfg(all(target_arch = "wasm32", feature = "vello-renderer"))]
+#[wasm_bindgen]
+pub fn start_view3d(
+    canvas: web_sys::HtmlCanvasElement,
+    session_id: &str,
+    options_json: &str,
+) -> String {
+    let options: serde_json::Value = match serde_json::from_str(options_json) {
+        Ok(v) => v,
+        Err(e) => return serde_json::json!({ "error": format!("options: {e}") }).to_string(),
+    };
+    let key = format!(
+        "r3_{}",
+        NEXT_RENDERER_KEY.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    {
+        let mut reg = SESSIONS.lock().unwrap();
+        if !reg.sessions.contains_key(session_id) {
+            return format!(r#"{{"error":"session '{}' not found"}}"#, session_id);
+        }
+        reg.renderers.insert(key.clone(), session_id.to_string());
+    }
+    crate::view3d::start(canvas, session_id, &key, options);
+    serde_json::json!({ "ok": true, "key": key, "session": session_id }).to_string()
+}
+
+/// Change a 3D view: `{quality, view, projection, fit, orbit: [dyaw,
+/// dpitch], spp, traceScale, options}`.
+#[cfg(all(target_arch = "wasm32", feature = "vello-renderer"))]
+#[wasm_bindgen]
+pub fn view3d_command(key: &str, command_json: &str) -> String {
+    let c: serde_json::Value = match serde_json::from_str(command_json) {
+        Ok(v) => v,
+        Err(e) => return serde_json::json!({ "error": format!("command: {e}") }).to_string(),
+    };
+    match crate::view3d::command(key, &c) {
+        Ok(()) => r#"{"ok":true}"#.to_string(),
+        Err(e) => serde_json::json!({ "error": e }).to_string(),
+    }
+}
+
+/// Frame counters, samples, timings and the camera of a 3D view.
+#[cfg(all(target_arch = "wasm32", feature = "vello-renderer"))]
+#[wasm_bindgen]
+pub fn view3d_stats(key: &str) -> String {
+    match crate::view3d::stats(key) {
+        Ok(v) => v.to_string(),
+        Err(e) => serde_json::json!({ "error": e }).to_string(),
+    }
+}
+
+/// Load a prebaked 3D scene (`cad.bake3d`'s file) into a session. With
+/// `adopt`, the session's parts become the bake's (a viewer); without, the
+/// bake only supplies geometry for the parts the session has (the app).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn session_load_bake(session_id: &str, data: &[u8], adopt: bool) -> String {
+    let mut reg = SESSIONS.lock().unwrap();
+    let Some(session) = reg.sessions.get_mut(session_id) else {
+        return format!(r#"{{"error":"session '{}' not found"}}"#, session_id);
+    };
+    let result = match session.load_bake(data, adopt) {
+        Ok((solids, triangles)) => serde_json::json!({
+            "ok": true,
+            "parts": session.doc.parts.len(),
+            "solids": solids,
+            "triangles": triangles,
+            "_session": session_id,
+        })
+        .to_string(),
+        Err(e) => return serde_json::json!({ "error": e }).to_string(),
+    };
+    for (key, sid) in &reg.renderers {
+        if sid == session_id {
+            if let Some(f) = reg.repaint_fns.get(key) {
+                f.call();
+            }
+        }
+    }
+    result
+}
+
+/// GPU devices this page has created (the one-device-per-page check).
+#[cfg(all(target_arch = "wasm32", feature = "vello-renderer"))]
+#[wasm_bindgen]
+pub fn gpu_devices_created() -> u32 {
+    cadview_render::context::devices_created()
 }
 
 // ── Binary export (DWG / PDF bytes for browser download) ────────────

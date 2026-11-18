@@ -70,9 +70,10 @@ scoreboard cases yet.
 | 6 | `06-spur-gears.js` | 2 | One arc per flank, no root fillets. No mesh interference check. |
 | 7 | `07-pipe-spool.js` | 7 | The third flange is the mating flange of the next spool, on a stub. No gaskets, bolts or welds. |
 | 8 | `08-turned-stool.js` | 7 | Beads are half circles (a flatter bead's circle crosses the leg axis: refused as a spindle torus). Joints are not cut: tenons overlap the seat and legs; feet and shoulders stay square to the 8° leg. |
-| 9 | not started | | Waits for the presentation render. |
-| 10 | not started | | Waits for the presentation render. |
-| 11 | `11-play-tower-frame.js` | 63 | The timber frame and a gabled timber roof: posts, platform frame and deck, swing beam on a head rail, A-frame, stairs; wall plates, rafters, ridge board, roof boards and ridge caps. The roof boards are butted with 5 mm gaps, not lapped: chosen so every contact is a face the overlap check reads as a touch (lapped boards would meet along lines; not tried). No cabin, railings, sandbox, slide, swings, fixings or clearance rules yet. Checks between parts (3D1b): no two overlap, the swing beam rests on the head rail and both legs, every rafter rests on a plate and the ridge, the roof clears the swing beam by 328.8. |
+| 9 | `09-room.js` | 25 | 07's living room (5000 x 3200, walls 300 and 100, two windows, a door), typed in: a script under `examples/3d` cannot read `examples/07-floor-plan.js` or its DWG (the sandbox reads below the script's folder only). Heights are the script's. Windows are open, no glass. The bookshelf and stool come from `lib/bookshelf.js` and `lib/stool.js`; the stool's untrimmed feet are lifted so their lowest edges touch the floor. Checks: wall volumes with openings, nothing of the room overlaps the furniture, the bookshelf's back on the wall, the stool in the sun patch the script computes. |
+| 10 | `10-still-life.js` | 11 | A wine glass, a glazed bowl, a steel flask and cap, a walnut pepper mill and its finial on an oak table. The kernel refuses an arc whose circle crosses the axis, so the glass bowl has a flat floor and a straight tapered wall, the bowl a flat inside floor, the flask a quarter-circle shoulder, and the mill no convex swell (a cove between beads); the script checks every arc against the rule. No knurled band. |
+| 11 | `11-play-tower.js`, `11-play-tower-partlist.js` | 142 | The whole set, built once by `lib/playtower.js`: the frame and roof, a cabin, a railing, stairs with risers and handrails, a sandbox, a wave slide and two swings. Rules over set queries (`lib/rules.js`) and a part list with a cutting plan (`lib/partlist.js`). Simplified: roof boards butted, not lapped (every contact is then a face the overlap check reads as a touch); bought parts are plausible solids, not a maker's; fixings are counted, not modelled; no construction guide yet. See "Example 11" below. |
+| 12 | `12-projected-views.js` | 1 | A pillow block drawn on an A3 sheet: front, top and left views in first angle and an isometric view from `cad.project` (rung 3D3a), dimensions through `toSheet`, PNG and PDF. The oil hole is 8 mm off the bore's axis: on it, arris 0.11.1 refuses the cut. The play tower's construction guide can now be drawn from such views (`lib/views.js`); it is not written yet. |
 
 ### Presentation renders (2026-11-18, rung 3D5a first slice)
 
@@ -96,10 +97,112 @@ holds for all; point 3 holds except where noted (no denoiser yet); point 4
 | 6 | turned steel | 1.77 s | Concentric streaks show on the faces; some speckle remains where the streaks are finer than a pixel. |
 | 7 | steel pipe, red gloss paint, turned steel flanges | 1.21 s | The pipe's streaks run along the whole spool's longest direction, not around the bends. |
 | 8 | oak | 2.18 s | Reads as a wooden stool; grain runs along each leg and stretcher. |
-| 11 | stained timber | 1.81 s | Studio light, not the grass and daylight of the box picture (the script can pass `environment: "sky"` and a green ground). |
+| 11 | stained timber, green-stained roof, yellow plastic slide, rubber seats, rope, galvanised hangers, sand | 2.41 s | On grass in daylight (`environment: "sky"`, a green ground). Not yet the box picture; see "Example 11" below. |
 
-No example uses glass yet; glass is checked by the tests (a slab's
-displacement, energy in the furnace).
+Second slice (denoiser on): the times above are for raw 1024 samples;
+denoised, 256 samples already look converged on 01, 03 and 06, and the
+default stays 1024. The studio floor now meets its backdrop without a line.
+
+| # | Materials | Trace | What still looks wrong |
+|---|---|---|---|
+| 9 | white paint, oak floor, the bookshelf and stool in oak; sky with a low western sun, two portals, exposure +1.7 | 17 s, 512 spp (interior) | Reads as a sunlit room: a sun patch with the stool's shadow, bounce light on the walls, sky and ground through the windows. The walls are plain; no glass, frames or skirting; the ground outside is a flat colour (the sky's haze softens its horizon). Faint blotches remain on the shaded walls (light bounced off the sun patch, found by chance). |
+| 10 | glass, blue glaze, stainless, black plastic, walnut, brass, oak; a dimmed studio, exposure +0.3 | 5.3 s, 1024 spp (camera) | Glass refracts the flask behind it and casts a light shadow; the steel reflects the bowl and the glass; contact shadows under each object. The wood grain is regular stripes; the flask reads as polished chrome more than brushed steel; a little grain is left where the glass's inner floor is seen through two walls; the glass is empty and its shadow has no caustic. |
+| 11 | stained timber, green roof, yellow slide; sky, a lawn ground (mottle), eye height 1.6 m, perspective (view "eye") | about 3 s, 1024 spp | Reads as a garden play set seen by a person standing near it: soft lawn patches, hazed horizon, sun shadows. No grass blades or context (fence, trees), so the ground is a soft coloured plane; the haze greys the middle distance a little. |
+
+### Example 11: the play tower (2026-11-18)
+
+Our own design. `lib/playtower.js` builds it; `11-play-tower.js` checks
+and renders it; `11-play-tower-partlist.js` draws its part list. Every
+part carries `member`, `assembly`, `material`, and `section` (sawn timber)
+or `bought: true` and `item`. Angled members carry `cut`, their end cuts.
+
+**The model: 142 parts in 42 definitions.**
+
+| Assembly | Parts |
+|---|---|
+| Tower | 4 posts 90x90, 4 rims and 3 joists 45x145, 11 deck boards 28x130 (front and back notched round the posts) |
+| Swing frame | head rail and swing beam 90x140, two A-frame legs 90x90 cut level, a tie 45x95 |
+| Stairs | 2 stringers 45x195, 7 treads 28x220, 6 risers 22x145 (closed risers, an 8 mm drain gap at the foot), 4 stair posts 90x90, 2 handrails 45x95 cut plumb |
+| Roof | 2 wall plates, 8 rafters with a birdsmouth, a ridge board, 14 roof boards and 2 ridge caps, stained green |
+| Cabin | 34 wall boards 22x145 on three sides, window openings 500 x 445 at the back and on the right, a door the width of the stairs; 6 studs beside the openings |
+| Railing | a rail post, a top rail 600 above the deck, 4 balusters 22x145 |
+| Sandbox | 8 boards 28x130 in two rows, sand 200 deep (bought, by volume) |
+| Slide (bought) | a trough with lips swept along lines and tangent arcs: flat on the deck, a chute at 40°, a wave crest at 15°, a second chute, a level run-out 230 above the ground; 3025 long, 2653 out from the deck; a foot under the exit |
+| Swings (bought) | 2 seats 430 x 170, 4 ropes Ø16, 4 hangers under the beam |
+
+**The rules**, script code in `lib/rules.js` over `overlapping3d` and
+`pairsWithin3d`. The limits are illustrative, chosen to be plausible for a
+garden play set, and are not taken from a safety standard. Each rule names
+the parts when it fails; each was checked to fail on a model broken on
+purpose ("top rail p_141 rests on post, needs a rail post", "head gap 94
+between baluster p_143 and baluster p_144", "finger gap 18 between slide
+p_169 and rail post p_139", "bench p_186 is inside the free space of swing
+1", "edge front has no guard 600 high from 90 to 864"). Times are the
+release build on one machine.
+
+| Rule | Limit | Result | Time |
+|---|---|---|---|
+| No two parts overlap | touching is fine | none | 1.2 s |
+| Every part rests on what carries it | a table: rims on two posts, a riser on its tread and both stringers, a rope on its hanger and its seat, ...; a member with no entry fails | 436 contacts, all carried | 1.7 s |
+| Every post, leg and stair post stands on the ground | foot at z = 0 | all | |
+| Free space round each swing | a ring sector about the rope tops, 57.5° each way (the seat's half depth plus 1800 along its arc), 250 beside the seat, 1100 above it: nothing in it but that swing | clear | 1.1 s |
+| Run-out beyond the slide's exit | 2000 long, 500 wider than the slide each side, 1800 high: empty | clear | (above) |
+| Head traps where a child climbs and leans | no gap from 89 to 230 | none open; 26 gaps in range closed by a part between | 1.2 s |
+| Finger traps where hands go | no gap from 8 to 25 | none open; 10 closed | 1.6 s |
+| Guards | every deck edge higher than 1000 has something reaching 600 above the deck, except at the stairs and the slide | all four edges | 0.4 s |
+
+How the rules work, and what they found while the model was built:
+
+- A free-space zone, a guard probe along an edge and a rod across a gap
+  are temporary parts with the attribute `rules.probe`: added, asked about
+  with one `overlapping3d`, removed.
+- A gap is the distance between two parts (`pairsWithin3d`), counted only
+  where the parts face each other across it and only if a rod through the
+  middle of the facing area enters no other part. That rod found the open
+  risers (153 between treads, in the head range), which is why the stairs
+  have risers; the risers then close those gaps. The finger rule found a
+  22 mm slot between the upper stair posts and the sandbox frame; the
+  sandbox sides moved in line with the posts' inner faces.
+- The model script runs in about 12 s: build 0.3 s, checks and rules 7.3
+  s, renders 2.9 s (the presentation trace 2.4 s).
+
+**The part list** (`lib/partlist.js`, generic over the attributes above).
+A sawn piece's cut length is its own box (the part's local box) along its
+longest side, rounded up to the mm: for an angled member, long point to
+long point, with the angles from `cut`. The two other sides are checked
+against `section`. The cutting plan is first-fit decreasing into the
+longest stock length (2400 to 4800 in steps of 600) with a 3 mm kerf,
+each length then cut down to the shortest stock that holds its pieces.
+Result: 129 pieces in 8 sections, 157.3 m, from 37 stock lengths (166.2
+m), 5.4 % offcut. Bought: the slide and its foot, 2 seats, 4 hangers, 7.46
+m of rope, 0.32 m³ of sand. Fixings from rules of thumb per joint (39
+rules, from "2 coach bolts per post to rim" to "2 screws per roof board
+per rafter") and per part (a ground anchor per post): 926 for 436 joints;
+a joint no rule names fails the part list script. The data also holds an
+assembly order (12 steps, each with its parts and the fixings it uses)
+for the construction guide, which waits for projected views.
+
+**Still simplified, and what is missing.**
+
+- Bought parts are plausible solids: the slide is one swept trough (no
+  handles, no moulded ribs), ropes are straight rods, a hanger is a plate.
+- The gap rule judges openings between two parts. It does not know how
+  deep an opening is (a niche backed by a wall counts like a hole through
+  it) or openings bounded by three or more parts. A core query that says
+  which parts a set of segments (or thin probes) enter would replace the
+  temporary rods; the real question, the largest probe that passes an
+  opening, has no query at all.
+- The slide is slow to query: about 0.1 to 0.3 s per pair against a
+  board, about 1 s against a far part inside its box (the sandbox, 1.2 m
+  under it), and 2 to 3 s between two swept sections, so the slide is one
+  piece and its seat on the deck is short enough that its box clears the
+  sandbox. Per-face boxes in the broad phase would prune far pairs.
+- The presentation render is not yet the picture on the box. The views
+  are the named isometric corners, so the camera looks down at the grass:
+  no horizon, no sky in the picture, and the first swing hides behind the
+  cabin from every corner. The ground is one flat colour, not grass. Both
+  need the renderer (a camera with an eye, a target and a field of view; a
+  ground material), not the model.
 
 ## The examples
 

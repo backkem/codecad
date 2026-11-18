@@ -78,7 +78,8 @@ function start(name) {
 
   // Render each view. `views` is a list of cad.render options plus `as`,
   // the view's file suffix; the one with as: "iso" is the example's
-  // picture. Marks the end of the build on first use.
+  // picture (a 2D sheet, with mode: "2d", gets no presentation render).
+  // Marks the end of the build on first use.
   async function render(views) {
     if (built === null) built = Date.now();
     if (globalThis.EXAMPLE_RENDER === false) return;
@@ -90,7 +91,7 @@ function start(name) {
       const r = await cad.render({ size: [960, 640], ...opts, out });
       renderMs += r.ms;
       files.push({ view: as, path: out, ms: r.ms, triangles: r.triangles });
-      if ((as === "iso" || present) && globalThis.EXAMPLE_PRESENT !== false) {
+      if ((as === "iso" || present) && opts.mode !== "2d" && globalThis.EXAMPLE_PRESENT !== false) {
         await presentation(as, opts, present ?? {});
       }
     }

@@ -1000,6 +1000,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cadview-kernel-wasm"
+version = "0.1.0"
+dependencies = [
+ "cadview-core",
+ "cadview-solid",
+]
+
+[[package]]
 name = "cadview-render"
 version = "0.1.0"
 dependencies = [
@@ -1065,6 +1073,7 @@ version = "0.1.0"
 dependencies = [
  "cadview-core",
  "cadview-render",
+ "cadview-render3d",
  "eframe",
  "egui",
  "getrandom 0.3.4",

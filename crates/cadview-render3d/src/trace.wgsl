@@ -24,7 +24,9 @@ struct Globals {
     cam_back: vec4<f32>,
     // width, height, first sample of this pass, samples in this pass.
     size: vec4<u32>,
-    // seed, max bounces, flags (1 ground, 2 sun, 4 clip "all"), clip planes.
+    // seed, max bounces, flags (1 ground, 2 sun, 4 clip "all", 8 guides,
+    // 16 sweep, 32 portals, 64 transmissive parts, 128 ground material),
+    // clip planes.
     params: vec4<u32>,
     // Unit direction toward the sun, w: cosine of its angular radius.
     sun_dir: vec4<f32>,
@@ -35,11 +37,20 @@ struct Globals {
     nadir: vec4<f32>,
     // Ground albedo, w: ground height.
     ground: vec4<f32>,
-    // x: clamp on the luminance of indirect contributions (0 = none).
+    // x: clamp on the luminance of indirect contributions (0 = none),
+    // y: aerial haze distance of the directly seen ground (0 = none).
     misc: vec4<f32>,
-    // x: instances.
+    // x: instances, y: the ground's material (flag 128).
     counts: vec4<u32>,
     clip: array<vec4<f32>, 4>,
+    // The studio sweep (flag 16): rgb the radiance of the open, lit ground;
+    // w the sine of the elevation over which the backdrop seen above the
+    // horizon blends from it into the dome.
+    sweep: vec4<f32>,
+    // x: portals (flag 32).
+    portal_count: vec4<u32>,
+    // Per portal: corner (w: area), edge u, edge v (a rectangle).
+    portals: array<vec4<f32>, 12>,
 };
 
 struct Node {
@@ -92,6 +103,10 @@ struct Mat {
 @group(0) @binding(5) var<storage, read> instances: array<Instance>;
 @group(0) @binding(6) var<storage, read> materials: array<Mat>;
 @group(0) @binding(7) var<storage, read_write> accum: array<vec4<f32>>;
+// The denoiser's guides (flag 8), summed over samples, three per pixel:
+// (albedo, luminance^2 of the sample), (normal, 1 if it hit), (position,
+// footprint) with position and footprint counted only for hits.
+@group(0) @binding(8) var<storage, read_write> aux: array<vec4<f32>>;
 
 const PI: f32 = 3.14159265358979;
 const INF: f32 = 3.0e38;
@@ -213,6 +228,15 @@ fn surface_at(m: Mat, p_mesh: vec3<f32>, to_world: mat4x4<f32>) -> Surface {
         let rr = clamp(r * (1.0 + 0.6 * st * (sn - 0.5)), 0.0, 1.0);
         s.r_across = rr;
         s.r_along = rr * (1.0 - 0.8 * clamp(m.pat_misc.y, 0.0, 1.0));
+    } else if (kind == 3u) {
+        // cadview_core::scene3d::mottle_weight.
+        let q = p_mesh - m.pat_origin.xyz;
+        let k = 1.0 / max(m.pat_axis.w, 1e-6);
+        let seed = bitcast<u32>(m.pat_origin.w);
+        let a = value_noise(q * k, seed ^ 0x2545f491u);
+        let b = value_noise(q * (k / 0.37), seed ^ 0x9e3779b9u);
+        let w = clamp(m.pat_color.w, 0.0, 1.0) * (0.65 * a + 0.35 * b);
+        s.albedo = mix(base, clamp(m.pat_color.rgb, vec3<f32>(0.0), vec3<f32>(1.0)), w);
     }
     return s;
 }
@@ -709,6 +733,300 @@ fn camera_ray(px: vec2<f32>) -> array<vec3<f32>, 2> {
     return array<vec3<f32>, 2>(o, -g.cam_back.xyz);
 }
 
+// What a ray meets first: a part, the ground, or nothing (kind 0).
+struct HitInfo {
+    // 0 nothing, 1 a part, 2 the ground.
+    kind: u32,
+    t: f32,
+    p: vec3<f32>,
+    // Shading and geometric normals, as stored (not yet facing the ray).
+    n: vec3<f32>,
+    ng: vec3<f32>,
+    s: Surface,
+};
+
+fn ground_surface() -> Surface {
+    var s: Surface;
+    s.albedo = g.ground.rgb;
+    s.metallic = 0.0;
+    s.r_along = 1.0;
+    s.r_across = 1.0;
+    s.transmission = 0.0;
+    s.ior = 1.0;
+    s.clearcoat = 0.0;
+    s.coat_roughness = 1.0;
+    s.emission = vec3<f32>(0.0);
+    s.axis = vec3<f32>(1.0, 0.0, 0.0);
+    return s;
+}
+
+fn find_hit(o: vec3<f32>, d: vec3<f32>) -> HitInfo {
+    var h: HitInfo;
+    let hit = trace_scene(o, d, INF, false);
+    let tg = ground_hit(o, d);
+    if (hit.inst == 0xffffffffu && tg == INF) {
+        h.kind = 0u;
+        return h;
+    }
+    if (tg < hit.t) {
+        h.kind = 2u;
+        h.t = tg;
+        h.p = o + d * tg;
+        h.p.z = g.ground.w;
+        h.n = vec3<f32>(0.0, 0.0, 1.0);
+        h.ng = h.n;
+        if ((g.params.z & 128u) != 0u) {
+            // The ground's own material, in world coordinates.
+            let id = mat4x4<f32>(
+                vec4<f32>(1.0, 0.0, 0.0, 0.0),
+                vec4<f32>(0.0, 1.0, 0.0, 0.0),
+                vec4<f32>(0.0, 0.0, 1.0, 0.0),
+                vec4<f32>(0.0, 0.0, 0.0, 1.0),
+            );
+            h.s = surface_at(materials[g.counts.y], h.p, id);
+        } else {
+            h.s = ground_surface();
+        }
+        return h;
+    }
+    h.kind = 1u;
+    h.t = hit.t;
+    let inst = instances[hit.inst];
+    let tri = tris[hit.tri];
+    let m = materials[inst.info.y];
+    let w0 = 1.0 - hit.u - hit.v;
+    let pm = tri.p0.xyz + tri.e1.xyz * hit.u + tri.e2.xyz * hit.v;
+    h.p = (inst.to_world * vec4<f32>(pm, 1.0)).xyz;
+    h.ng = normalize((inst.to_world * vec4<f32>(cross(tri.e1.xyz, tri.e2.xyz), 0.0)).xyz);
+    let i0 = bitcast<u32>(tri.p0.w);
+    let i1 = bitcast<u32>(tri.e1.w);
+    let i2 = bitcast<u32>(tri.e2.w);
+    let nm = normals[i0].xyz * w0 + normals[i1].xyz * hit.u + normals[i2].xyz * hit.v;
+    h.n = normalize((inst.to_world * vec4<f32>(nm, 0.0)).xyz);
+    h.s = surface_at(m, pm, inst.to_world);
+    // Seen through a cut: the inside of a closed part. Shade it as the cap
+    // on the plane the ray last crossed, flat section colour.
+    if (clip_count() > 0u && dot(h.ng, d) > 0.0) {
+        let cap = cap_crossing(o, d, hit.t);
+        if (cap.w > 0.0) {
+            h.t = cap.w;
+            h.p = o + d * cap.w;
+            // The plane's normal points into the removed side, where the
+            // ray came from.
+            h.ng = cap.xyz;
+            h.n = h.ng;
+            h.s.albedo = m.section.rgb;
+            h.s.metallic = 0.0;
+            h.s.r_along = 1.0;
+            h.s.r_across = 1.0;
+            h.s.transmission = 0.0;
+            h.s.ior = 1.0;
+            h.s.clearcoat = 0.0;
+            h.s.emission = vec3<f32>(0.0);
+        }
+    }
+    return h;
+}
+
+// ── The studio sweep ───────────────────────────────────────────────────
+
+// The backdrop seen directly (by the camera, or in a mirror or through
+// glass) toward d: the dome, except just above the horizon, where it
+// blends up from the open ground's own radiance, as a studio floor curves
+// up into the wall, so the floor meets the backdrop without a line. Light
+// that reaches surfaces from the dome is not changed.
+fn backdrop(d: vec3<f32>) -> vec3<f32> {
+    let c = dome(d);
+    if ((g.params.z & 16u) == 0u || d.z < 0.0) {
+        return c;
+    }
+    let t = clamp(d.z / max(g.sweep.w, 1e-6), 0.0, 1.0);
+    return mix(g.sweep.rgb, c, t * t * (3.0 - 2.0 * t));
+}
+
+// ── Portals: where the dome's light comes into an interior ─────────────
+
+fn portal_count() -> u32 {
+    if ((g.params.z & 32u) == 0u) {
+        return 0u;
+    }
+    return g.portal_count.x;
+}
+
+// Solid-angle pdf of portal sampling producing direction d from o: one
+// portal chosen uniformly, then a uniform point on it.
+fn portal_pdf(o: vec3<f32>, d: vec3<f32>) -> f32 {
+    let np = portal_count();
+    var pdf = 0.0;
+    for (var k = 0u; k < np; k++) {
+        let q = g.portals[3u * k];
+        let u = g.portals[3u * k + 1u].xyz;
+        let v = g.portals[3u * k + 2u].xyz;
+        let nrm = cross(u, v);
+        let area = q.w;
+        let den = dot(nrm, d);
+        if (abs(den) < 1e-12) {
+            continue;
+        }
+        let t = dot(nrm, q.xyz - o) / den;
+        if (t <= 0.0) {
+            continue;
+        }
+        let x = o + d * t - q.xyz;
+        let a = dot(x, u) / dot(u, u);
+        let b = dot(x, v) / dot(v, v);
+        if (a < 0.0 || a > 1.0 || b < 0.0 || b > 1.0) {
+            continue;
+        }
+        let cosl = abs(den) / length(nrm);
+        pdf += t * t / (area * cosl);
+    }
+    return pdf / f32(max(np, 1u));
+}
+
+// ── Shadows through glass ──────────────────────────────────────────────
+
+// How much of the sun reaches o along d: 0 behind anything opaque or the
+// ground; through glass (and other transmissive surfaces) the share each
+// crossing lets through, `transmission (1 - F)` with F the Fresnel
+// reflectance of air to glass at that angle, times the tint on the way in.
+// The ray is not bent. So a thin glass wall casts the faint shadow it
+// should, but the focused caustic of a thick glass body is not drawn
+// (plain path tracing finds it only by rare paths, which the clamp on
+// indirect light mostly removed anyway). w: 1 if the ray crossed glass.
+fn sun_shadow(o_in: vec3<f32>, d: vec3<f32>) -> vec4<f32> {
+    if (ground_hit(o_in, d) < INF) {
+        return vec4<f32>(0.0);
+    }
+    if (trace_scene(o_in, d, INF, true).inst == 0xffffffffu) {
+        return vec4<f32>(1.0, 1.0, 1.0, 0.0);
+    }
+    if ((g.params.z & 64u) == 0u) {
+        // No transmissive part in the scene.
+        return vec4<f32>(0.0);
+    }
+    var o = o_in;
+    var t = vec3<f32>(1.0);
+    for (var k = 0u; k < 16u; k++) {
+        let h = find_hit(o, d);
+        if (h.kind == 0u) {
+            return vec4<f32>(t, 1.0);
+        }
+        let tr = h.s.transmission * (1.0 - h.s.metallic);
+        if (h.kind == 2u || tr <= 0.0) {
+            return vec4<f32>(0.0);
+        }
+        let entering = dot(h.ng, d) < 0.0;
+        // Air to glass both ways: through a wall of parallel faces the
+        // way out lets through what the way in did.
+        let f = fresnel_dielectric(abs(dot(h.ng, d)), 1.0 / h.s.ior);
+        t *= tr * (1.0 - f);
+        if (entering) {
+            t *= h.s.albedo;
+        }
+        if (max(t.r, max(t.g, t.b)) < 1e-4) {
+            return vec4<f32>(0.0);
+        }
+        o = offset_ray(h.p, select(h.ng, -h.ng, entering));
+    }
+    return vec4<f32>(0.0);
+}
+
+// ── Guides for the denoiser ────────────────────────────────────────────
+
+var<private> aux_albedo: vec3<f32>;
+var<private> aux_normal: vec3<f32>;
+var<private> aux_pos: vec3<f32>;
+var<private> aux_fp: f32;
+var<private> aux_hit: f32;
+
+// World size of one pixel at path length `len` from the camera.
+fn footprint(len: f32) -> f32 {
+    let k = 2.0 * g.cam_up.w / f32(g.size.y);
+    if (g.cam_origin.w > 0.5) {
+        return len * k;
+    }
+    return k;
+}
+
+// The guides of one sample, from its first hit `h` of the camera ray
+// (o, d): albedo, normal and position of the first surface that is not a
+// mirror or clear glass. Through those it follows the mirror direction or
+// the refraction (deterministically, no random numbers), tinting the albedo,
+// so what is seen in them keeps its edges. Uses no random numbers, so the
+// image does not change when the guides are recorded.
+fn record_aux(o_in: vec3<f32>, d_in: vec3<f32>, h_in: HitInfo) {
+    var o = o_in;
+    var d = d_in;
+    var h = h_in;
+    var tint = vec3<f32>(1.0);
+    var len = 0.0;
+    var first_n = vec3<f32>(0.0);
+    var first_p = vec3<f32>(0.0);
+    var first_fp = 0.0;
+    for (var k = 0u; k < 4u; k++) {
+        if (h.kind == 0u) {
+            aux_albedo = tint;
+            if (k > 0u) {
+                // Seen in a mirror or through glass: the dome. Keep the
+                // first surface's normal and place.
+                aux_normal = first_n;
+                aux_pos = first_p;
+                aux_fp = first_fp;
+                aux_hit = 1.0;
+            }
+            return;
+        }
+        len += h.t;
+        let s = h.s;
+        let entering = dot(h.ng, d) < 0.0;
+        let ngo = select(-h.ng, h.ng, entering);
+        var ns = select(-h.n, h.n, dot(h.n, -d) >= 0.0);
+        if (dot(ns, ngo) <= 0.0) {
+            ns = ngo;
+        }
+        if (k == 0u) {
+            first_n = ns;
+            first_p = h.p;
+            first_fp = footprint(len);
+        }
+        let glass = s.transmission * (1.0 - s.metallic) >= 0.5 && s.r_across < 0.1;
+        let mirror = s.metallic >= 0.5 && s.transmission < 0.5 && max(s.r_along, s.r_across) < 0.32;
+        if (!(glass || mirror) || k == 3u) {
+            var a = s.albedo;
+            if (any(s.emission > vec3<f32>(0.0))) {
+                a = vec3<f32>(1.0);
+            }
+            aux_albedo = tint * a;
+            aux_normal = ns;
+            aux_pos = h.p;
+            aux_fp = footprint(len);
+            aux_hit = 1.0;
+            return;
+        }
+        var wi: vec3<f32>;
+        if (glass) {
+            let eta = select(s.ior, 1.0 / s.ior, entering);
+            wi = refract(d, ns, eta);
+            if (dot(wi, wi) < 1e-12 || dot(wi, ngo) >= 0.0) {
+                wi = reflect(d, ns);
+                o = offset_ray(h.p, ngo);
+            } else {
+                if (entering) {
+                    tint *= s.albedo;
+                }
+                o = offset_ray(h.p, -ngo);
+            }
+        } else {
+            wi = reflect(d, ns);
+            tint *= s.albedo;
+            o = offset_ray(h.p, ngo);
+        }
+        d = wi;
+        h = find_hit(o, d);
+    }
+}
+
 fn trace_path(px: vec2<f32>) {
     let ray = camera_ray(px);
     var o = ray[0];
@@ -717,17 +1035,26 @@ fn trace_path(px: vec2<f32>) {
     // Pdf of the BSDF sample that made this ray (0: a delta event or the
     // camera), for weighting a sun it hits against sun sampling.
     var prev_pdf = 0.0;
+    // Since the last surface that sampled the sun (`armed`), only
+    // refractions through glass: the sun seen at the end of such a chain
+    // was already counted by that surface's shadow ray, which passes
+    // through glass.
+    var armed = false;
+    var through_glass = false;
     let max_bounces = g.params.y;
     for (var bounce = 0u; bounce <= max_bounces; bounce++) {
-        let hit = trace_scene(o, d, INF, false);
-        let tg = ground_hit(o, d);
-        var p: vec3<f32>;
-        var n: vec3<f32>;
-        var ng: vec3<f32>;
-        var s: Surface;
-        if (hit.inst == 0xffffffffu && tg == INF) {
+        let h = find_hit(o, d);
+        if (bounce == 0u && (g.params.z & 8u) != 0u) {
+            record_aux(o, d, h);
+        }
+        if (h.kind == 0u) {
             var c = dome(d);
-            if (in_sun(d)) {
+            if (prev_pdf == 0.0) {
+                c = backdrop(d);
+            } else if (portal_count() > 0u) {
+                c *= power_heuristic(prev_pdf, portal_pdf(o, d));
+            }
+            if (in_sun(d) && !through_glass) {
                 var w = 1.0;
                 if (prev_pdf > 0.0) {
                     w = power_heuristic(prev_pdf, 1.0 / g.sun_radiance.w);
@@ -737,55 +1064,16 @@ fn trace_path(px: vec2<f32>) {
             add(throughput * c, bounce);
             return;
         }
-        if (tg < hit.t) {
-            p = o + d * tg;
-            p.z = g.ground.w;
-            n = vec3<f32>(0.0, 0.0, 1.0);
-            ng = n;
-            s.albedo = g.ground.rgb;
-            s.metallic = 0.0;
-            s.r_along = 1.0;
-            s.r_across = 1.0;
-            s.transmission = 0.0;
-            s.ior = 1.0;
-            s.clearcoat = 0.0;
-            s.coat_roughness = 1.0;
-            s.emission = vec3<f32>(0.0);
-            s.axis = vec3<f32>(1.0, 0.0, 0.0);
-        } else {
-            let inst = instances[hit.inst];
-            let tri = tris[hit.tri];
-            let m = materials[inst.info.y];
-            let w0 = 1.0 - hit.u - hit.v;
-            let pm = tri.p0.xyz + tri.e1.xyz * hit.u + tri.e2.xyz * hit.v;
-            p = (inst.to_world * vec4<f32>(pm, 1.0)).xyz;
-            ng = normalize((inst.to_world * vec4<f32>(cross(tri.e1.xyz, tri.e2.xyz), 0.0)).xyz);
-            let i0 = bitcast<u32>(tri.p0.w);
-            let i1 = bitcast<u32>(tri.e1.w);
-            let i2 = bitcast<u32>(tri.e2.w);
-            let nm = normals[i0].xyz * w0 + normals[i1].xyz * hit.u + normals[i2].xyz * hit.v;
-            n = normalize((inst.to_world * vec4<f32>(nm, 0.0)).xyz);
-            s = surface_at(m, pm, inst.to_world);
-            // Seen through a cut: the inside of a closed part. Shade it as
-            // the cap on the plane the ray last crossed, flat section colour.
-            if (clip_count() > 0u && dot(ng, d) > 0.0) {
-                let cap = cap_crossing(o, d, hit.t);
-                if (cap.w > 0.0) {
-                    p = o + d * cap.w;
-                    // The plane's normal points into the removed side,
-                    // where the ray came from.
-                    ng = cap.xyz;
-                    n = ng;
-                    s.albedo = m.section.rgb;
-                    s.metallic = 0.0;
-                    s.r_along = 1.0;
-                    s.r_across = 1.0;
-                    s.transmission = 0.0;
-                    s.ior = 1.0;
-                    s.clearcoat = 0.0;
-                    s.emission = vec3<f32>(0.0);
-                }
-            }
+        let p = h.p;
+        let n = h.n;
+        let ng = h.ng;
+        let s = h.s;
+        if (h.kind == 2u && prev_pdf == 0.0 && g.misc.y > 0.0) {
+            // Aerial haze on the ground seen directly: it fades into the
+            // horizon colour with distance (Environment::haze).
+            let f = 1.0 - exp(-h.t / g.misc.y);
+            add(throughput * g.horizon.rgb * f, bounce);
+            throughput *= 1.0 - f;
         }
         let wo = -d;
         let entering = dot(ng, d) < 0.0;
@@ -801,53 +1089,67 @@ fn trace_path(px: vec2<f32>) {
         }
 
         // Glass: Fresnel picks reflection or refraction; a delta event.
+        // Rough glass picks a microfacet normal first (visible normals).
+        // Single scattering on the microfacets would lose the light they
+        // shadow and the light a facet sends to the wrong side of the
+        // surface (31 % of a white sphere's light in the furnace at
+        // roughness 0.6). Light that is not lost scatters again on the
+        // microsurface and leaves, so here a facet that sends light the
+        // wrong way is drawn again (up to four times) and no shadowing
+        // weight is applied: every path goes on with its energy, along the
+        // single-scattering lobe. The lobe's shape at grazing angles is
+        // approximate; its energy is right.
         if (rand() < s.transmission * (1.0 - s.metallic)) {
             let eta = select(s.ior, 1.0 / s.ior, entering);
             let a = alpha_of(s.r_across);
-            var mn = ns;
+            let rough = s.r_across > 0.03;
             var tl: Lobes;
-            if (s.r_across > 0.03) {
-                tl.n = ns;
-                var tt = vec3<f32>(1.0, 0.0, 0.0);
-                if (abs(ns.x) > 0.9) {
-                    tt = vec3<f32>(0.0, 1.0, 0.0);
-                }
-                tl.t = normalize(tt - ns * dot(tt, ns));
-                tl.b = cross(ns, tl.t);
-                let vl = to_local(tl, wo);
-                let hl = sample_vndf(vl, a, a, rand(), rand());
-                mn = tl.t * hl.x + tl.b * hl.y + ns * hl.z;
+            tl.n = ns;
+            var tt = vec3<f32>(1.0, 0.0, 0.0);
+            if (abs(ns.x) > 0.9) {
+                tt = vec3<f32>(0.0, 1.0, 0.0);
             }
-            let ci = dot(wo, mn);
-            let fr = fresnel_dielectric(ci, eta);
+            tl.t = normalize(tt - ns * dot(tt, ns));
+            tl.b = cross(ns, tl.t);
             var wi: vec3<f32>;
             var through = false;
-            if (rand() < fr) {
-                wi = reflect(d, mn);
-            } else {
-                wi = refract(d, mn, eta);
-                if (dot(wi, wi) < 1e-12) {
+            var valid = false;
+            for (var tries = 0u; tries < 4u; tries++) {
+                var mn = ns;
+                if (rough) {
+                    let hl = sample_vndf(to_local(tl, wo), a, a, rand(), rand());
+                    mn = tl.t * hl.x + tl.b * hl.y + ns * hl.z;
+                }
+                let fr = fresnel_dielectric(dot(wo, mn), eta);
+                through = false;
+                if (rand() < fr) {
                     wi = reflect(d, mn);
                 } else {
-                    through = true;
+                    wi = refract(d, mn, eta);
+                    if (dot(wi, wi) < 1e-12) {
+                        wi = reflect(d, mn);
+                    } else {
+                        through = true;
+                    }
+                }
+                valid = select(dot(wi, ngo) > 0.0, dot(wi, ngo) < 0.0, through);
+                if (valid || !rough) {
+                    break;
                 }
             }
+            if (!valid) {
+                return;
+            }
             if (through) {
-                if (dot(wi, ngo) >= 0.0) {
-                    return;
-                }
                 if (entering) {
                     throughput *= s.albedo;
                 }
                 o = offset_ray(p, -ngo);
+                through_glass = through_glass || armed;
             } else {
-                if (dot(wi, ngo) <= 0.0) {
-                    return;
-                }
                 o = offset_ray(p, ngo);
-            }
-            if (s.r_across > 0.03) {
-                throughput *= ggx_g1(to_local(tl, select(wi, -wi, through)), a, a);
+                armed = false;
+                through_glass = false;
             }
             d = wi;
             prev_pdf = 0.0;
@@ -856,17 +1158,43 @@ fn trace_path(px: vec2<f32>) {
             let vl = to_local(lobes, wo);
             let origin = offset_ray(p, ngo);
             // Next-event estimation of the sun, weighted against BSDF
-            // sampling by the power heuristic.
+            // sampling by the power heuristic. A shadow ray passes through
+            // glass (see `sun_shadow`); light that reached the sun that way
+            // is counted here only, with weight 1.
             if ((g.params.z & 2u) != 0u) {
                 let wl = sample_sun();
                 if (dot(wl, ngo) > 0.0 && dot(wl, ns) > 0.0) {
-                    let blocked = trace_scene(origin, wl, INF, true).inst != 0xffffffffu
+                    let sh = sun_shadow(origin, wl);
+                    if (any(sh.rgb > vec3<f32>(0.0))) {
+                        let e = eval_lobes(lobes, vl, to_local(lobes, wl));
+                        let pl = 1.0 / g.sun_radiance.w;
+                        let wgt = select(power_heuristic(pl, e.w), 1.0, sh.w > 0.0);
+                        add(throughput * e.rgb * sh.rgb * g.sun_radiance.rgb * (wgt / pl), bounce + 1u);
+                    }
+                }
+            }
+            armed = true;
+            through_glass = false;
+            // Next-event estimation of the dome through the portals, if the
+            // scene names any (an interior lit through its windows).
+            let np = portal_count();
+            if (np > 0u) {
+                let k = min(u32(rand() * f32(np)), np - 1u);
+                let q = g.portals[3u * k];
+                let u = g.portals[3u * k + 1u].xyz;
+                let v = g.portals[3u * k + 2u].xyz;
+                let x = q.xyz + u * rand() + v * rand();
+                let dv = x - origin;
+                let wl = normalize(dv);
+                if (dot(wl, ngo) > 0.0 && dot(wl, ns) > 0.0) {
+                    let pl = portal_pdf(origin, wl);
+                    let blocked = pl <= 0.0
+                        || trace_scene(origin, wl, INF, true).inst != 0xffffffffu
                         || ground_hit(origin, wl) < INF;
                     if (!blocked) {
                         let e = eval_lobes(lobes, vl, to_local(lobes, wl));
-                        let pl = 1.0 / g.sun_radiance.w;
                         let wgt = power_heuristic(pl, e.w);
-                        add(throughput * e.rgb * g.sun_radiance.rgb * (wgt / pl), bounce + 1u);
+                        add(throughput * e.rgb * dome(wl) * (wgt / pl), bounce + 1u);
                     }
                 }
             }
@@ -933,16 +1261,42 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let pixel = id.y * g.size.x + id.x;
     var sum = accum[pixel];
+    let guides = (g.params.z & 8u) != 0u;
+    var a0 = vec4<f32>(0.0);
+    var a1 = vec4<f32>(0.0);
+    var a2 = vec4<f32>(0.0);
+    if (guides) {
+        a0 = aux[3u * pixel];
+        a1 = aux[3u * pixel + 1u];
+        a2 = aux[3u * pixel + 2u];
+    }
     let seed = pcg(g.params.x);
     for (var k = 0u; k < g.size.w; k++) {
         let sample = g.size.z + k;
         rng = pcg(pixel ^ pcg(sample ^ seed));
         radiance = vec3<f32>(0.0);
+        aux_albedo = vec3<f32>(1.0);
+        aux_normal = vec3<f32>(0.0);
+        aux_pos = vec3<f32>(0.0);
+        aux_fp = 0.0;
+        aux_hit = 0.0;
         let px = vec2<f32>(f32(id.x) + rand(), f32(id.y) + rand());
         trace_path(px);
         // A sample that went wrong (not finite) counts as black.
         let ok = all(radiance == radiance) && all(abs(radiance) < vec3<f32>(1e30));
-        sum += vec4<f32>(select(vec3<f32>(0.0), radiance, ok), 1.0);
+        let r = select(vec3<f32>(0.0), radiance, ok);
+        sum += vec4<f32>(r, 1.0);
+        if (guides) {
+            let l = lum(r);
+            a0 += vec4<f32>(aux_albedo, l * l);
+            a1 += vec4<f32>(aux_normal, aux_hit);
+            a2 += vec4<f32>(aux_pos * aux_hit, aux_fp * aux_hit);
+        }
     }
     accum[pixel] = sum;
+    if (guides) {
+        aux[3u * pixel] = a0;
+        aux[3u * pixel + 1u] = a1;
+        aux[3u * pixel + 2u] = a2;
+    }
 }

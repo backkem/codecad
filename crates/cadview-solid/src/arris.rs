@@ -61,11 +61,13 @@ use arris::topo::{Body, Edge, Model};
 use arris::Control;
 
 use cadview_core::solid::kernel::{
-    Aabb3, Closest, EvalError, Evaluated, Interference, MassProps, Placed, SolidKernel, TightBox,
-    ToolResolver, TriMesh, Validity,
+    Aabb3, BrepEdge, BrepFace, BrepTopology, Closest, Curve3, EvalError, Evaluated, Interference,
+    MassProps, Placed, Ray3, RayHit3, RayHits as CoreRayHits, SilhouetteCurve, Silhouettes,
+    SolidKernel, Surface3, TightBox, ToolResolver, TriMesh, Validity,
 };
 use cadview_core::solid::mesh::topology;
 use cadview_core::solid::select::{edge_query, EdgeQuery};
+use cadview_core::solid::silhouette::candidates;
 use cadview_core::solid::types::{
     arc_point, DefId, Depth, FeatId, Feature, Frame3, Op, PartDef, Path3, Placement, Plane3,
     Point3, Profile2d, Seg2, Seg3, ToolRef, Vec3,
@@ -278,6 +280,439 @@ impl SolidKernel for ArrisKernel {
             .iter()
             .map(|&(i, j)| space.interference(i, j))
             .collect())
+    }
+
+    /// The body's faces (`model.faces`, in walk order) with their exact
+    /// surfaces, and its edges with their exact curves, the faces of this
+    /// body each bounds, and whether it is a seam or a smooth join (the
+    /// outward normals of both faces agree to [`SMOOTH_COS`] at a quarter,
+    /// half and three quarters of the edge).
+    fn topology(&self, b: &ArrisBrep) -> Result<BrepTopology, EvalError> {
+        let k = kernel_err(None);
+        let m = &b.model;
+        let handles = m.faces(b.body).map_err(&k)?;
+        let mut faces = Vec::with_capacity(handles.len());
+        let mut surfaces = Vec::with_capacity(handles.len());
+        for f in &handles {
+            let entity = m.face(f.id).map_err(&k)?;
+            let surface = m.surface(entity.surface()).map_err(&k)?;
+            faces.push(BrepFace {
+                surface: surface3(surface),
+                reversed: f.orientation == arris::topo::Orientation::Reversed,
+            });
+            surfaces.push(surface);
+        }
+        let index = |id| handles.iter().position(|f| f.id == id);
+        let mut edges = Vec::new();
+        for e in m.edges(b.body).map_err(&k)? {
+            let Some((curve, range)) = m.edge(e.id).map_err(&k)?.curve() else {
+                continue;
+            };
+            let curve = m.curve(curve).map_err(&k)?;
+            let mut own: Vec<usize> = Vec::new();
+            let mut uses = 0;
+            for u in m.edge_uses(e.id).map_err(&k)? {
+                if let Some(i) = index(u.face) {
+                    uses += 1;
+                    if !own.contains(&i) {
+                        own.push(i);
+                    }
+                }
+            }
+            let seam = own.len() == 1 && uses >= 2;
+            let smooth = seam
+                || (own.len() == 2 && [0.25, 0.5, 0.75].iter().all(|&s| {
+                    let p = curve.point(range.lerp(s));
+                    let n = |i: usize| outward_normal(surfaces[i], faces[i].reversed, p);
+                    matches!((n(own[0]), n(own[1])), (Some(a), Some(c)) if a.dot(&c) >= SMOOTH_COS)
+                }));
+            edges.push(BrepEdge {
+                curve: curve3(curve),
+                range: [range.lo(), range.hi()],
+                faces: own,
+                seam,
+                smooth,
+            });
+        }
+        Ok(BrepTopology { faces, edges })
+    }
+
+    /// The closed forms of `silhouette::candidates` on each curved face,
+    /// clipped to the face: each candidate is sampled at [`CLIP_SAMPLES`]
+    /// points over its range (a line's range is where it crosses the face's
+    /// box), each point classified against the face's own domain, and each
+    /// change from inside to outside located by bisection on the curve's
+    /// parameter to [`CLIP_ITERATIONS`] halvings. A whole circle on the
+    /// face stays one piece.
+    fn silhouettes(&self, b: &ArrisBrep, view: Vec3) -> Result<Silhouettes, EvalError> {
+        let k = kernel_err(None);
+        let m = &b.model;
+        let mut out = Silhouettes::default();
+        for (fi, f) in m.faces(b.body).map_err(&k)?.iter().enumerate() {
+            let entity = m.face(f.id).map_err(&k)?;
+            let surface = m.surface(entity.surface()).map_err(&k)?;
+            if matches!(surface, Surface::Plane { .. }) {
+                continue;
+            }
+            let cands = match candidates(&surface3(surface), view) {
+                Ok(c) => c,
+                Err(why) => {
+                    out.skipped.push((fi, why));
+                    continue;
+                }
+            };
+            if cands.is_empty() {
+                continue;
+            }
+            let domain = FaceDomain::of(m, f.id, entity.tolerance()).map_err(&k)?;
+            let on_face = |p: Point3| {
+                surface
+                    .project(pt(p))
+                    .is_ok_and(|proj| domain.side(proj.uv).0 != Side::Outside)
+            };
+            let mut rims: Vec<(&Curve, arris::math::Interval)> = Vec::new();
+            for e in domain.edges() {
+                if let Some((c, r)) = m.edge(*e).map_err(&k)?.curve() {
+                    rims.push((m.curve(c).map_err(&k)?, r));
+                }
+            }
+            for c in cands {
+                let (range, closed) = match c.range {
+                    Some(r) => (r, true),
+                    None => {
+                        let Some(bx) = domain.bounds() else {
+                            out.skipped
+                                .push((fi, "a face without a bounded box".into()));
+                            continue;
+                        };
+                        let Curve3::Line { origin, dir } = &c.curve else {
+                            continue;
+                        };
+                        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+                        for corner in 0..8 {
+                            let q = Point3::new(
+                                if corner & 1 == 0 {
+                                    bx.min[0]
+                                } else {
+                                    bx.max[0]
+                                },
+                                if corner & 2 == 0 {
+                                    bx.min[1]
+                                } else {
+                                    bx.max[1]
+                                },
+                                if corner & 4 == 0 {
+                                    bx.min[2]
+                                } else {
+                                    bx.max[2]
+                                },
+                            );
+                            let t = (q - *origin).dot(*dir);
+                            lo = lo.min(t);
+                            hi = hi.max(t);
+                        }
+                        let pad = 1e-6 * (hi - lo).max(1.0);
+                        ([lo - pad, hi + pad], false)
+                    }
+                };
+                let snap = |t: f64| snap_to_rim(&c.curve, t, &rims);
+                for r in clip(&c.curve, range, closed, &on_face, &snap) {
+                    out.curves.push(SilhouetteCurve {
+                        curve: c.curve.clone(),
+                        range: r,
+                        face: fi,
+                    });
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// arris `query::ray_fire` with every hit, on the exact faces: a ray
+    /// lying in a face is `in_face` with no hits.
+    fn ray_hits(
+        &self,
+        b: &ArrisBrep,
+        rays: &[Ray3],
+    ) -> Result<Vec<Result<CoreRayHits, EvalError>>, EvalError> {
+        use arris::ops::query::{ray_fire, Ray, RayHits};
+        use arris::ops::{QueryReason, Reason};
+        Ok(rays
+            .iter()
+            .map(|r| {
+                let ray = Ray {
+                    origin: pt(r.origin),
+                    direction: vec(r.dir),
+                };
+                match ray_fire(&b.model, b.body, &ray, RayHits::All) {
+                    Ok(hits) => Ok(CoreRayHits {
+                        hits: hits
+                            .iter()
+                            .map(|h| RayHit3 {
+                                t: h.t,
+                                tangent: h.tangent,
+                            })
+                            .collect(),
+                        in_face: false,
+                    }),
+                    Err(OpError::Degenerate {
+                        reason: Reason::Query(QueryReason::RayInFace),
+                        ..
+                    }) => Ok(CoreRayHits {
+                        hits: Vec::new(),
+                        in_face: true,
+                    }),
+                    Err(e) => Err(kernel_err::<OpError>(None)(e)),
+                }
+            })
+            .collect())
+    }
+}
+
+/// Two faces meet smoothly where their outward normals agree to this
+/// cosine (about 4.5e-5 rad).
+const SMOOTH_COS: f64 = 1.0 - 1e-9;
+
+/// Samples per silhouette candidate when it is clipped to a face.
+const CLIP_SAMPLES: usize = 256;
+
+/// Halvings of a bracket where a silhouette leaves its face.
+const CLIP_ITERATIONS: usize = 60;
+
+/// The outward unit normal of a surface at a point on it.
+fn outward_normal(
+    s: &Surface,
+    reversed: bool,
+    p: arris::math::Point3,
+) -> Option<arris::math::Vec3> {
+    let uv = s.project(p).ok()?.uv;
+    let n = s.normal(uv.x, uv.y)?.into_inner();
+    Some(if reversed { -n } else { n })
+}
+
+/// How far (mm) a bisected silhouette end may be from the face's boundary
+/// edge it is snapped to.
+const SNAP_REACH: f64 = 1e-4;
+
+/// A silhouette end found by bisection lies within the domain's tolerance
+/// band of the face's boundary, not on it. This moves it onto the boundary
+/// exactly: the nearest boundary edge that the silhouette crosses (not one
+/// it runs along) is found, and the closest points of the two exact curves
+/// are solved by Newton's method from there; for curves that cross, that is
+/// their intersection. Returns `t` unchanged when no edge qualifies or
+/// Newton does not land on the edge.
+fn snap_to_rim(curve: &Curve3, t: f64, rims: &[(&Curve, arris::math::Interval)]) -> f64 {
+    let q = pt(curve.point(t));
+    let dq = vec(curve.deriv(t));
+    let mut best: Option<(f64, &Curve, f64, arris::math::Interval)> = None;
+    for (c, r) in rims {
+        let Ok(proj) = c.project(q) else { continue };
+        let s = proj.t;
+        if proj.distance > SNAP_REACH {
+            continue;
+        }
+        let tangent = c.eval(s).d1;
+        let cross = tangent.cross(&dq).norm() / (tangent.norm() * dq.norm()).max(1e-300);
+        if cross < 1e-6 {
+            continue;
+        }
+        if best.as_ref().is_none_or(|b| proj.distance < b.0) {
+            best = Some((proj.distance, c, s, *r));
+        }
+    }
+    let Some((_, rim, mut s, range)) = best else {
+        return t;
+    };
+    let mut u = t;
+    for _ in 0..30 {
+        let (a, e) = (curve.point(u), rim.eval(s));
+        let f = pt(a) - e.point;
+        let (da, de) = (vec(curve.deriv(u)), e.d1);
+        // Normal equations of min |A(u) - E(s)|^2.
+        let (m11, m12, m22) = (da.dot(&da), -da.dot(&de), de.dot(&de));
+        let (r1, r2) = (-da.dot(&f), de.dot(&f));
+        let det = m11 * m22 - m12 * m12;
+        if det.abs() <= 1e-300 {
+            break;
+        }
+        let du = (r1 * m22 - m12 * r2) / det;
+        let ds = (m11 * r2 - m12 * r1) / det;
+        u += du;
+        s += ds;
+        if du.abs() <= 1e-16 * (1.0 + u.abs()) && ds.abs() <= 1e-16 * (1.0 + s.abs()) {
+            break;
+        }
+    }
+    let gap = (pt(curve.point(u)) - rim.point(s)).norm();
+    let period = rim.period();
+    let on_rim = match period {
+        Some(p) => {
+            let k = ((s - range.lo()) / p).floor();
+            let s = s - k * p;
+            s >= range.lo() - 1e-9 && s <= range.hi() + 1e-9
+        }
+        None => s >= range.lo() - 1e-9 && s <= range.hi() + 1e-9,
+    };
+    if gap <= 1e-9 && on_rim && (u - t).abs() <= 1e-3 * (1.0 + t.abs()) {
+        u
+    } else {
+        t
+    }
+}
+
+/// The parameter ranges of `curve` over `range` where `inside` holds:
+/// sampled, then each change refined by bisection and moved by `snap`
+/// (onto the face's boundary). `closed`: the range is a whole period, so a
+/// piece may run across its ends.
+fn clip(
+    curve: &Curve3,
+    range: [f64; 2],
+    closed: bool,
+    inside: &dyn Fn(Point3) -> bool,
+    snap: &dyn Fn(f64) -> f64,
+) -> Vec<[f64; 2]> {
+    let n = CLIP_SAMPLES;
+    let at = |i: usize| range[0] + (range[1] - range[0]) * i as f64 / n as f64;
+    let flags: Vec<bool> = (0..=n).map(|i| inside(curve.point(at(i)))).collect();
+    if flags.iter().all(|&f| f) {
+        return vec![range];
+    }
+    // The parameter between a and b where `inside` changes.
+    let edge = |mut a: f64, mut b: f64| {
+        let fa = inside(curve.point(a));
+        for _ in 0..CLIP_ITERATIONS {
+            let mid = 0.5 * (a + b);
+            if mid <= a.min(b) || mid >= a.max(b) {
+                break;
+            }
+            if inside(curve.point(mid)) == fa {
+                a = mid;
+            } else {
+                b = mid;
+            }
+        }
+        snap(if fa { a } else { b })
+    };
+    let mut pieces: Vec<[f64; 2]> = Vec::new();
+    let mut start: Option<f64> = if flags[0] { Some(range[0]) } else { None };
+    for i in 1..=n {
+        match (flags[i - 1], flags[i]) {
+            (false, true) => start = Some(edge(at(i), at(i - 1))),
+            (true, false) => {
+                if let Some(s) = start.take() {
+                    pieces.push([s, edge(at(i - 1), at(i))]);
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(s) = start {
+        pieces.push([s, range[1]]);
+    }
+    // A closed curve whose piece runs across the range's ends is one
+    // piece past the end of the period.
+    if closed && pieces.len() >= 2 && flags[0] && flags[n] {
+        let first = pieces.remove(0);
+        let last = pieces.last_mut().expect("two pieces");
+        last[1] = first[1] + (range[1] - range[0]);
+    }
+    pieces.retain(|p| p[1] > p[0]);
+    pieces
+}
+
+fn v3(v: arris::math::Vec3) -> Vec3 {
+    Vec3::new(v.x, v.y, v.z)
+}
+
+/// An arris surface in the core's closed form.
+fn surface3(s: &Surface) -> Surface3 {
+    let o = |f: &Frame| p3(f.origin());
+    let x = |f: &Frame| v3(f.x().into_inner());
+    let z = |f: &Frame| v3(f.z().into_inner());
+    match s {
+        Surface::Plane { frame } => Surface3::Plane {
+            origin: o(frame),
+            normal: z(frame),
+        },
+        Surface::Cylinder { frame, radius } => Surface3::Cylinder {
+            origin: o(frame),
+            axis: z(frame),
+            x: x(frame),
+            radius: *radius,
+        },
+        Surface::EllipticCylinder {
+            frame,
+            major_radius,
+            minor_radius,
+        } => Surface3::EllipticCylinder {
+            origin: o(frame),
+            axis: z(frame),
+            x: x(frame),
+            a: *major_radius,
+            b: *minor_radius,
+        },
+        Surface::Cone {
+            frame,
+            radius,
+            half_angle,
+        } => Surface3::Cone {
+            origin: o(frame),
+            axis: z(frame),
+            x: x(frame),
+            radius: *radius,
+            half_angle: *half_angle,
+        },
+        Surface::Sphere { frame, radius } => Surface3::Sphere {
+            center: o(frame),
+            radius: *radius,
+        },
+        Surface::Torus {
+            frame,
+            major_radius,
+            minor_radius,
+        } => Surface3::Torus {
+            origin: o(frame),
+            axis: z(frame),
+            x: x(frame),
+            major: *major_radius,
+            minor: *minor_radius,
+        },
+        Surface::Nurbs(_) => Surface3::Other {
+            kind: "B-spline surface".into(),
+        },
+    }
+}
+
+/// An arris curve in the core's closed form (the same parameter).
+fn curve3(c: &Curve) -> Curve3 {
+    match c {
+        Curve::Line { origin, direction } => Curve3::Line {
+            origin: p3(*origin),
+            dir: v3(direction.into_inner()),
+        },
+        Curve::Circle { frame, radius } => Curve3::Circle {
+            center: p3(frame.origin()),
+            x: v3(frame.x().into_inner()),
+            y: v3(frame.y().into_inner()),
+            radius: *radius,
+        },
+        Curve::Ellipse {
+            frame,
+            major_radius,
+            minor_radius,
+        } => Curve3::Ellipse {
+            center: p3(frame.origin()),
+            x: v3(frame.x().into_inner()),
+            y: v3(frame.y().into_inner()),
+            a: *major_radius,
+            b: *minor_radius,
+        },
+        Curve::Nurbs(n) => Curve3::Nurbs {
+            degree: n.degree(),
+            knots: n.knots().to_vec(),
+            points: n.control_points().iter().map(|p| p3(*p)).collect(),
+            weights: n.weights().to_vec(),
+        },
     }
 }
 

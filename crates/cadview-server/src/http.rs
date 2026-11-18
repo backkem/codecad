@@ -23,6 +23,7 @@ pub fn router(state: Arc<HttpState>) -> Router {
     Router::new()
         .route("/api/documents", get(documents_handler))
         .route("/api/run", post(run_handler))
+        .route("/api/bake3d", get(bake3d_handler))
         .route("/", get(index_handler))
         .route("/{*path}", get(static_handler))
         .with_state(state)
@@ -69,6 +70,58 @@ fn check_bearer(
         return Err((StatusCode::FORBIDDEN, "Invalid token".to_string()));
     }
     Ok(())
+}
+
+#[derive(serde::Deserialize)]
+struct BakeQuery {
+    /// Document key (default: the first available).
+    doc: Option<String>,
+    /// `cad.render`-style options as JSON (view, colours, materials, ...).
+    options: Option<String>,
+}
+
+/// `GET /api/bake3d?doc=<key>[&options=<json>]`: the document's parts as
+/// a prebaked 3D scene (the bytes `cad.bake3d` writes). The browser's 3D
+/// view shows it until the page evaluates parts itself.
+async fn bake3d_handler(
+    State(state): State<Arc<HttpState>>,
+    axum::extract::Query(q): axum::extract::Query<BakeQuery>,
+    req: axum::http::Request<axum::body::Body>,
+) -> impl IntoResponse {
+    if let Err(resp) = check_bearer(&state.token, &req) {
+        return resp.into_response();
+    }
+    let opts: serde_json::Value = match q.options.as_deref() {
+        None | Some("") => serde_json::json!({}),
+        Some(s) => match serde_json::from_str(s) {
+            Ok(v) => v,
+            Err(e) => return (StatusCode::BAD_REQUEST, format!("options: {e}")).into_response(),
+        },
+    };
+    let mut reg = state.registry.lock().await;
+    let key = match q.doc {
+        Some(k) => k,
+        None => reg
+            .list_available()
+            .first()
+            .map(|d| d.id.clone())
+            .unwrap_or_default(),
+    };
+    let slot = match reg.get_or_load(&key) {
+        Ok(s) => s,
+        Err(e) => return (StatusCode::NOT_FOUND, format!("{key}: {e}")).into_response(),
+    };
+    match crate::bake::bake_bytes(&slot.document, &opts) {
+        Ok((bytes, _)) => (
+            [
+                (header::CONTENT_TYPE, "application/octet-stream"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e).into_response(),
+    }
 }
 
 // ── Static file handlers ────────────────────────────────────────────

@@ -3,6 +3,12 @@
 // Usage:
 //   <script type="module" src="codecad-viewer.js"></script>
 //   <codecad-viewer src="drawing.dwg" style="width:800px;height:400px"></codecad-viewer>
+//   <codecad-viewer scene="part.bake3d" quality="working"></codecad-viewer>
+//
+// `src` shows a DWG in 2D. `scene` shows a prebaked 3D scene (made by
+// `cad.bake3d` on a server with a kernel) in 3D, with a switch between the
+// working render and the path-traced presentation render. No kernel is
+// downloaded: the scene holds the meshes, boxes and render options.
 //
 // Shadow DOM for full style encapsulation. Canvas element is passed
 // directly to start_renderer (no getElementById), so Shadow DOM works.
@@ -11,12 +17,26 @@ import {
   cad_call,
   session_create,
   session_destroy,
+  session_load_bake,
   session_load_dwg,
   session_use,
   start_renderer,
+  start_view3d,
   stop_renderer,
+  view3d_command,
+  view3d_stats,
 } from "cadview-wasm";
-import { initCadEmbed, setLoadProgressCallback } from "./cad";
+import {
+  hasWebGpu,
+  initCadEmbed,
+  NO_WEBGPU_3D,
+  setLoadProgressCallback,
+} from "./cad";
+import { setKernelBase } from "./kernel";
+
+// The kernel module (if a build ships one) sits next to this file. A viewer
+// of prebaked scenes never loads it.
+setKernelBase(new URL("./kernel/", import.meta.url));
 
 let wasmReady: Promise<void> | null = null;
 let viewerCount = 0;
@@ -34,6 +54,7 @@ canvas {
   height: 100%;
   cursor: crosshair;
 }
+:host([scene]) canvas { cursor: grab; }
 .badge {
   position: absolute;
   bottom: 6px;
@@ -117,23 +138,67 @@ canvas {
   display: flex;
   align-items: center;
   justify-content: center;
-  font: 11px/1 "JetBrains Mono", monospace;
+  font: 11px/1.4 "JetBrains Mono", monospace;
   color: #6b7280;
   padding: 16px;
   text-align: center;
 }
+.modes {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: none;
+  z-index: 1;
+  background: rgba(14, 18, 26, 0.92);
+  border: 1px solid #6b7280;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.modes.show { display: flex; }
+.modes button {
+  background: none;
+  border: none;
+  color: #6b7280;
+  font: 11px/1.3 "JetBrains Mono", monospace;
+  padding: 4px 9px;
+  cursor: pointer;
+}
+.modes button + button { border-left: 1px solid #1e2430; }
+.modes button:hover { color: #e8e8e8; }
+.modes button[aria-checked="true"] {
+  color: #e8e8e8;
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 -2px 0 #ffb000;
+}
+.samples {
+  position: absolute;
+  bottom: 6px;
+  left: 8px;
+  font: 10px/1 "JetBrains Mono", monospace;
+  color: #e8e8e8;
+  background: rgba(10, 14, 20, 0.85);
+  padding: 3px 6px;
+  border-radius: 3px;
+  display: none;
+  z-index: 1;
+  pointer-events: none;
+}
+.samples.show { display: block; }
 `;
 
 class CodecadViewer extends HTMLElement {
-  static observedAttributes = ["src"];
+  static observedAttributes = ["src", "scene"];
 
   private shadow: ShadowRoot;
   private canvas: HTMLCanvasElement;
   private hint: HTMLElement;
   private loadingEl: HTMLElement;
+  private modes: HTMLElement;
+  private samples: HTMLElement;
   private sessionId = "";
   private rendererKey = "";
   private observer: IntersectionObserver | null = null;
+  private poll: ReturnType<typeof setInterval> | null = null;
   private initialized = false;
   private hintShown = false;
 
@@ -155,7 +220,7 @@ class CodecadViewer extends HTMLElement {
 
     this.hint = document.createElement("div");
     this.hint.className = "hint";
-    this.hint.textContent = "drag to pan \u00b7 scroll to zoom";
+    this.hint.textContent = "drag to pan · scroll to zoom";
 
     this.loadingEl = document.createElement("div");
     this.loadingEl.className = "loading";
@@ -166,7 +231,34 @@ class CodecadViewer extends HTMLElement {
       '<circle cx="40" cy="40" r="10" class="lc"/>' +
       "</svg><span>loading</span>";
 
-    this.shadow.append(style, this.canvas, badge, this.hint, this.loadingEl);
+    this.modes = document.createElement("div");
+    this.modes.className = "modes";
+    this.modes.setAttribute("role", "radiogroup");
+    for (const [q, label] of [
+      ["working", "Working"],
+      ["presentation", "Presentation"],
+    ]) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.setAttribute("role", "radio");
+      b.dataset.quality = q;
+      b.textContent = label;
+      b.addEventListener("click", () => this.setQuality(q));
+      this.modes.append(b);
+    }
+
+    this.samples = document.createElement("div");
+    this.samples.className = "samples";
+
+    this.shadow.append(
+      style,
+      this.canvas,
+      badge,
+      this.hint,
+      this.loadingEl,
+      this.modes,
+      this.samples,
+    );
   }
 
   connectedCallback() {
@@ -175,7 +267,7 @@ class CodecadViewer extends HTMLElement {
     // Show hint on first mouse enter
     this.addEventListener("mouseenter", this.onFirstHover, { once: true });
 
-    // Lazy-init: only load WASM + DWG when viewer is near the viewport
+    // Lazy-init: only load WASM + the file when the viewer is near the viewport
     this.observer = new IntersectionObserver(
       (entries) => {
         if (entries[0]?.isIntersecting) {
@@ -200,9 +292,9 @@ class CodecadViewer extends HTMLElement {
     oldVal: string | null,
     newVal: string | null,
   ) {
-    if (name === "src" && oldVal !== newVal && this.initialized) {
-      this.loadSrc(newVal);
-    }
+    if (oldVal === newVal || !this.initialized) return;
+    if (name === "src" && !this.hasAttribute("scene")) this.loadSrc(newVal);
+    if (name === "scene") this.loadScene(newVal);
   }
 
   private onFirstHover = () => {
@@ -225,6 +317,13 @@ class CodecadViewer extends HTMLElement {
 
     session_create(this.sessionId);
     session_use(this.sessionId);
+    this.initialized = true;
+
+    const scene = this.getAttribute("scene");
+    if (scene) {
+      await this.loadScene(scene);
+      return;
+    }
 
     const result = JSON.parse(
       start_renderer(this.canvas, this.sessionId, "vello"),
@@ -239,7 +338,6 @@ class CodecadViewer extends HTMLElement {
       this.rendererKey = result.key;
     }
 
-    this.initialized = true;
     await this.loadSrc(this.getAttribute("src"));
   }
 
@@ -258,12 +356,84 @@ class CodecadViewer extends HTMLElement {
       cad_call("fitView", "{}");
       this.loadingEl.style.display = "none";
     } catch (e) {
-      this.loadingEl.className = "error";
-      this.loadingEl.textContent = `Failed to load: ${e}`;
+      this.showError(`Failed to load: ${e}`);
     }
   }
 
+  /** A prebaked 3D scene: no kernel, WebGPU only. */
+  private async loadScene(url: string | null) {
+    if (!url) return;
+    this.hint.textContent =
+      "drag to orbit · right-drag to pan · scroll to zoom";
+    this.loadingEl.style.display = "flex";
+    if (!(await hasWebGpu())) {
+      this.showError(NO_WEBGPU_3D);
+      return;
+    }
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+      const bytes = new Uint8Array(await resp.arrayBuffer());
+      const r = JSON.parse(session_load_bake(this.sessionId, bytes, true));
+      if (r.error) throw new Error(r.error);
+      const quality = this.getAttribute("quality") ?? "working";
+      if (!this.rendererKey) {
+        const s = JSON.parse(
+          start_view3d(
+            this.canvas,
+            this.sessionId,
+            JSON.stringify({ quality }),
+          ),
+        );
+        if (s.error) throw new Error(s.error);
+        this.rendererKey = s.key;
+      }
+      this.markQuality(quality);
+      this.modes.classList.add("show");
+      this.startPoll();
+      this.loadingEl.style.display = "none";
+    } catch (e) {
+      this.showError(`Failed to load: ${e}`);
+    }
+  }
+
+  private setQuality(q: string) {
+    if (!this.rendererKey) return;
+    view3d_command(this.rendererKey, JSON.stringify({ quality: q }));
+    this.markQuality(q);
+  }
+
+  private markQuality(q: string) {
+    for (const b of this.modes.querySelectorAll("button")) {
+      b.setAttribute("aria-checked", String(b.dataset.quality === q));
+    }
+    this.samples.classList.toggle("show", q === "presentation");
+  }
+
+  private startPoll() {
+    if (this.poll) return;
+    this.poll = setInterval(() => {
+      if (!this.rendererKey) return;
+      const s = JSON.parse(view3d_stats(this.rendererKey));
+      if (s.error && !s.frames) {
+        this.showError(s.error);
+        return;
+      }
+      this.samples.textContent = `${s.samples} / ${s.target} spp${s.traceScale > 1 ? " · half res" : ""}`;
+    }, 250);
+  }
+
+  private showError(msg: string) {
+    this.loadingEl.style.display = "flex";
+    this.loadingEl.className = "error";
+    this.loadingEl.textContent = msg;
+  }
+
   private cleanup() {
+    if (this.poll) {
+      clearInterval(this.poll);
+      this.poll = null;
+    }
     if (this.rendererKey) {
       try {
         stop_renderer(this.rendererKey);

@@ -454,6 +454,7 @@ fn rpc_call(state: &mut RunState, method: &str, args: &str) -> Result<String, St
         "render" => {
             crate::render::render_to_file(doc, args, &state.write_base).map(|v| v.to_string())
         }
+        "bake3d" => crate::bake::bake_to_file(doc, args, &state.write_base).map(|v| v.to_string()),
         "loadDwg" => {
             let a: Value = serde_json::from_str(args).map_err(|e| e.to_string())?;
             let path_str = a["path"].as_str().ok_or("loadDwg: path required")?;
@@ -1403,6 +1404,59 @@ mod tests {
         }
     }
 
+    /// `cad.bake3d` writes a prebaked scene that answers `parts()` with the
+    /// kernel's numbers, bit for bit, without a kernel.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_bake_answers_parts_like_the_kernel() {
+        let (dir, registry) = registry();
+        assembly(&registry).await;
+        let out = dir.path().join("baked/assembly.bake3d");
+        let program_text = format!(
+            "return cad.bake3d({});",
+            serde_json::json!({"out": out.to_string_lossy(), "view": "iso", "colorBy": {"attr": "group"}})
+        );
+        let r = value(
+            &run_script(&SANDBOX, &registry, "doc", &program_text, dir.path(), None)
+                .await
+                .unwrap(),
+        );
+        assert_eq!(
+            (r["ok"].as_bool(), r["parts"].as_u64()),
+            (Some(true), Some(12)),
+            "{r}"
+        );
+        assert_eq!(r["solids"], 5, "{r}");
+        let bytes = std::fs::read(&out).unwrap();
+        assert_eq!(r["bytes"].as_u64(), Some(bytes.len() as u64));
+        let baked = cadview_core::solid::baked::Baked::from_bytes(&bytes).unwrap();
+        assert_eq!(baked.options["view"], "iso");
+        let mut viewer = baked.document();
+        let reg = registry.lock().await;
+        let mut doc = reg.get("doc").unwrap().document.clone();
+        let parts = |d: &mut Document| cadview_core::cad_call(d, "parts", "{}").unwrap();
+        assert_eq!(parts(&mut viewer), parts(&mut doc));
+        // Anything new needs the kernel, and says so.
+        let e = cadview_core::cad_call(
+            &mut viewer,
+            "extrude",
+            r#"{"profile": {"min": [0, 0], "max": [5, 5]}, "distance": 5}"#,
+        )
+        .unwrap_err();
+        assert!(e.contains(cadview_core::solid::baked::NEEDS_KERNEL), "{e}");
+        // Without parts there is nothing to bake.
+        drop(reg);
+        let empty = run_script(
+            &SANDBOX,
+            &registry,
+            "doc",
+            "cad.clear(); return cad.bake3d({out: 'x.bake3d'});",
+            dir.path(),
+            None,
+        )
+        .await;
+        assert!(format!("{empty:?}").contains("bake3d"), "{empty:?}");
+    }
+
     /// Every example loads `lib/drafting.js` through `cad.use` and runs.
     #[tokio::test(flavor = "multi_thread")]
     async fn the_examples_run_with_their_library() {
@@ -1600,5 +1654,73 @@ mod tests {
         );
         assert!(rel_err(volume, closed) <= 1e-6, "{volume} vs {closed}");
         assert_eq!(out["one"]["skipped"], serde_json::json!([]), "{out}");
+    }
+
+    // ── Projected views (rung 3D3a) ──────────────────────────────────
+
+    /// The ladder's gate, through the script entry: four views of the
+    /// bookshelf example saved to DWG and loaded back hold only LINE, ARC,
+    /// CIRCLE and ELLIPSE in their blocks, as many as were drawn, each with
+    /// the part it came from.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn bookshelf_views_survive_dwg_as_lines_arcs_circles_ellipses() {
+        let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/3d");
+        let (dir, registry) = registry();
+        let program_text = "globalThis.EXAMPLE_RENDER = false;\n".to_string()
+            + &std::fs::read_to_string(folder.join("03-bookshelf.js")).unwrap();
+        run_script(&SANDBOX, &registry, "doc", &program_text, &folder, None)
+            .await
+            .unwrap_or_else(|e| panic!("03-bookshelf: {e}"));
+        let dwg = serde_json::to_string(&dir.path().join("views.dwg").to_string_lossy()).unwrap();
+        let out = program(
+            &folder,
+            &registry,
+            &format!(
+                "const project = (o) => cad.project(o);\n\
+                 const at ={{ front: [0, 0], left: [120, 0], top: [0, -60], iso: [140, -80] }};\n\
+                 const views = Object.entries(at).map(([view, p]) => project({{ view, at: p, scale: 0.1 }}));\n\
+                 cad.saveDwg({dwg});\n\
+                 cad.clear({{ all: true }});\n\
+                 cad.loadDwg({dwg});\n\
+                 return views.map((v) => ({{ block: v.block, entities: v.entities, counts: v.counts, ms: v.ms, open: v.open }}));"
+            ),
+        )
+        .await;
+        let reg = registry.lock().await;
+        let doc = &reg.get("doc").unwrap().document;
+        for v in out.as_array().unwrap() {
+            let name = v["block"].as_str().unwrap();
+            let block = doc
+                .blocks
+                .get(name)
+                .unwrap_or_else(|| panic!("{name} is not in the reloaded DWG"));
+            let mut kinds = std::collections::BTreeMap::<&str, usize>::new();
+            for (s, _, _) in &block.shapes {
+                *kinds
+                    .entry(match s {
+                        cadview_core::types::Shape::Line(_) => "LINE",
+                        cadview_core::types::Shape::Arc { .. } => "ARC",
+                        cadview_core::types::Shape::Circle(_) => "CIRCLE",
+                        cadview_core::types::Shape::Ellipse { .. } => "ELLIPSE",
+                        _ => "other",
+                    })
+                    .or_default() += 1;
+            }
+            let linked = (0..block.shapes.len())
+                .filter(|&i| block.shape_attrs(i).contains_key("partId"))
+                .count();
+            eprintln!(
+                "bookshelf {name}: drawn {} ({}), reloaded {kinds:?}, {linked} with partId; ms {}",
+                v["entities"], v["counts"], v["ms"]
+            );
+            assert!(!kinds.contains_key("other"), "{name}: {kinds:?}");
+            assert_eq!(
+                block.shapes.len() as u64,
+                v["entities"].as_u64().unwrap(),
+                "{name}"
+            );
+            assert_eq!(linked, block.shapes.len(), "{name}");
+            assert_eq!(v["open"], serde_json::json!([]), "{name}");
+        }
     }
 }

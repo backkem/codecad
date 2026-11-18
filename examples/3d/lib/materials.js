@@ -58,6 +58,11 @@ function plastic(color, { roughness = 0.38 } = {}) {
   return { color, roughness, ior: 1.46 };
 }
 
+// Glazed ceramic: a coloured body under a smooth, thick glaze.
+function glazed(color, { roughness = 0.45, gloss = 0.03 } = {}) {
+  return { color, roughness, clearcoat: 1, clearcoatRoughness: gloss };
+}
+
 const presets = {
   oak: wood("#b8894f", "#7a5530"),
   walnut: wood("#6e4a2e", "#3e2716", { spacing: 3 }),
@@ -81,6 +86,16 @@ const presets = {
   "red paint": painted("#b3261e", { gloss: true }),
   "green paint": painted("#2f6b3a", { gloss: true }),
   rubber: { color: "#202020", roughness: 0.9 },
+  "white glaze": glazed("#ece8de"),
+  "blue glaze": glazed("#2f5d8a"),
+  // A lawn, for a ground: rough green with soft, metre-sized patches of
+  // drier grass.
+  lawn: {
+    color: "#557f36", roughness: 0.95,
+    pattern: { kind: "mottle", scale: 1800, strength: 0.6, color: "#8c9241" },
+  },
+  // Polished steel: a mirror finish with fine circular polishing marks.
+  "polished steel": turned("#d4d6d8", 0.08, { anisotropy: 0.3, streaks: 0.25 }),
 };
 
 // The `materials` option for cad.render: every preset, plus `extra`
@@ -89,4 +104,4 @@ function option(extra = {}, attr = "material") {
   return { attr, map: { ...presets, ...extra } };
 }
 
-return { presets, option, wood, brushed, turned, painted, plastic };
+return { presets, option, wood, brushed, turned, painted, plastic, glazed };

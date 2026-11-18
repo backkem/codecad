@@ -17,18 +17,34 @@
 //! - [`eval`]: the evaluator a shell supplies, and the content-keyed
 //!   evaluation cache.
 //! - [`scene`]: the document's parts as a `Scene3d` for `cad.render`.
+//! - [`baked`]: prebaked scenes (the answers a viewer needs, as a file)
+//!   and the evaluator that answers from one; [`wire`]: kernel answers as
+//!   serializable data.
+//!
+//! - Projection (rung 3D3a): [`curves`] (evaluating exact curves),
+//!   [`silhouette`] (closed-form silhouettes), [`hlr`] (hidden lines on
+//!   exact curves), [`oracle`] (the visibility oracle), [`project`]
+//!   (`cad.project` and `cad.viewPoints`).
 //!
 //! The `cad_call` methods for parts are in `dispatch_3d.rs`, their Yrs maps
-//! in `sync.rs`. Not here yet: projection.
+//! in `sync.rs`.
 
+pub mod baked;
 pub mod corpus;
+pub mod curves;
 pub mod eval;
+pub mod hlr;
 pub mod kernel;
 pub mod mesh;
+pub mod oracle;
 pub mod part;
+pub mod project;
+pub mod remote;
 pub mod scene;
 pub mod select;
+pub mod silhouette;
 pub mod types;
+pub mod wire;
 
 #[cfg(test)]
 mod fake;

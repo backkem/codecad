@@ -25,6 +25,28 @@ declare module "cadview-wasm" {
   ): string;
   export function stop_renderer(renderer_key: string): string;
 
+  // 3D view (WebGPU only); stopped with stop_renderer
+  export function start_view3d(
+    canvas: HTMLCanvasElement,
+    session_id: string,
+    options_json: string,
+  ): string;
+  export function view3d_command(key: string, command_json: string): string;
+  export function view3d_stats(key: string): string;
+  /** A prebaked 3D scene; adopt: the session takes its parts. */
+  export function session_load_bake(
+    session_id: string,
+    data: Uint8Array,
+    adopt: boolean,
+  ): string;
+  export function gpu_devices_created(): number;
+
+  // The solid kernel module (loaded on demand by kernel.ts)
+  export function kernel_wire_version(): number;
+  export function kernel_expect(hint: string): void;
+  export function kernel_connect(): string;
+  export function kernel_status(): string;
+
   // Binary export (returns bytes for browser download)
   export function export_dwg_bytes(session_id: string): Uint8Array;
   /** opts_json: JSON of SavePdfOptions; throws on an unknown `colors`. */

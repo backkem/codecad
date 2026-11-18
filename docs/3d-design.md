@@ -530,6 +530,44 @@ Rules:
 `cad.project` writes ordinary 2D entities into the `Document`, so
 dimensions, title block, PDF and DWG export work unchanged.
 
+### 7.0 Revision (2026-11-18, rung 3D3a): what was built differs
+
+Where the sections below disagree, this wins (`docs/api-surface.md`,
+"Projected views", has the details):
+
+- **No standard layers.** The `3D_*` table in 7.1 gave layer names meaning
+  in the core, which the generic-core rule forbids. The script names the
+  layers for visible, hidden and silhouette curves (plain defaults
+  `visible` and `hidden`); centre lines, section and note layers are
+  script work. Blocks are named `view-<view>` (a script picks another), not
+  the anonymous `*V_<name>`. First- or third-angle arrangement is a script
+  library, not an option.
+- **Splits are crossings, not bisection.** Visibility along a curve can
+  only change where, in the view, it crosses another projected edge or
+  silhouette, where another curve ends on it, or where a conic seen edge on
+  folds back. HLR splits there, at exact parameters (closed form where one
+  curve is straight, Newton's method otherwise), and asks the oracle once
+  per piece. Bisection remains a fallback when a long piece's samples
+  disagree.
+- **The oracle trusts the mesh only away from its outline.** A mesh hit
+  near a triangle side where the mesh's facing turns (its outline in the
+  view), within 50 chords of the point, or at a grazing angle is unsure;
+  four rays 8 chords to the side then decide (visible if any escapes), and
+  the kernel's exact `ray_fire` only when those are unsure too. arris
+  rebuilds its face index per ray (about 55 ms on a part with B-spline
+  edges), so the exact rays are a last resort, not the fallback for every
+  near graze.
+- **Silhouettes** are closed forms in `solid/silhouette.rs` (core,
+  kernel-neutral); the kernel clips them to its faces (`silhouettes`). Tori
+  are closed form only seen along or across their axis; seen obliquely,
+  and on B-spline faces, they are listed as open, not fitted.
+- **Smooth edges** (round boundaries) are drawn where they lie on the
+  outline of the view (the faces' normal across the view along the edge),
+  and everywhere with `smooth: true`.
+- **B-spline edges** lying on a line, circle or ellipse of the view (a curve
+  on a cylinder seen along its axis) are drawn as that conic; others as a
+  cubic spline (Hermite pieces) within 0.01 mm.
+
 ### 7.1 Views
 
 `ViewSpec { dir, up, kind: Ortho | Iso | Section(plane), scale, at: [x, y], parts: filter, hidden: bool, tangent_edges: bool }`.
@@ -813,6 +851,14 @@ irradiance), `exposure_scale` and `tone_map`. The working render ignores
 transmission, emission, the coat, the pattern, the environment and the
 exposure.
 
+Second slice (see LADDER-3D.md, "3D5a, second slice"): paths now end after
+64 events, not 16; the dome is also sampled directly through `Portal`
+rectangles; sun shadow rays pass through glass (attenuated, not bent);
+rough glass keeps its energy along the lobe; and an edge-aware a-trous
+denoiser (`denoise.wgsl`), guided by first-hit albedo, normal and
+position, is on by default in `cad.render`. `Environment::sweep` and
+`Scene3d::portals` join the decisions a second backend must agree on.
+
 ### 9.1 Layers
 
 ```
@@ -839,7 +885,7 @@ exposure.
   headless; 256 is the browser's aim). Any camera move resets the
   accumulation (`Renderer3d::reset`, or a changed frame). Rendering stops
   as soon as the target is reached, which keeps the zero-idle-frames
-  property. No denoiser yet.
+  property. An edge-aware denoiser runs on each resolve (second slice).
 
 Tone mapping is AgX by default for renders and Khronos PBR Neutral for
 Shaded mode (more faithful colours for checking materials). Exposure is an
@@ -1091,6 +1137,9 @@ except through `cad_call` or core's public query functions.
 1. Should evaluation run in a Web Worker (a second wasm instance with its
    own `Document` replica fed by Yrs updates)? That would keep the UI fluid
    for heavy parts but doubles memory. Decide after rung 3D0b timings.
+   Answered for now in section 14.2: the kernel module runs on the page's
+   thread, so the script API stays synchronous; a Worker needs
+   cross-origin isolation or JSPI.
 2. STEP export of parts (arris and Truck both write STEP), for CNC shops.
    It is cheap to expose. Should it be a rung or a one-liner later?
 3. Should a section's hatch respect wood grain direction per part
@@ -1103,3 +1152,239 @@ except through `cad_call` or core's public query functions.
 6. Should Kiss3d's HW ray-query backend be used on native desktop
    (LADDER-NATIVE) by default? It makes renders faster and gives the same
    images in principle. Verify equivalence in 3D5b.
+
+## 14. 3D in the browser
+
+Status: built (2026-11-18), phase 1 and phase 2 below. The browser runs the
+same core code as the server for parts: the same scene builder
+(`solid::scene::parts_scene`), the same evaluation cache (`solid::eval`),
+the same raster and path tracer (`cadview-render3d`). What differs is
+where the kernel's answers come from: a prebaked file, the server, or a
+kernel module the page loads itself.
+
+### 14.1 The split: what loads when
+
+| Piece | File | Size raw / gzip | Fetched | Cached, versioned |
+|---|---|---|---|---|
+| Main module: 2D (Vello, egui), core, the 3D view (raster and path tracer), the bake reader, the kernel proxy | `cadview-web_bg-<hash>.wasm` | 25.94 / 8.71 MB (before this work 25.33 / 8.53 MB) | page load | Vite's content hash in the name |
+| A prebaked scene | `<name>.bake3d` | 17 to 139 KB / 3 to 58 KB for the gallery | when a viewer shows it | the page names it; a format version in its header, refused when it differs |
+| The kernel module | `kernel/cadview-kernel-<sha256 prefix>.wasm` and `kernel/manifest.json` | 4.33 / 1.42 MB | the first call that needs geometry, or `cad.loadKernel()` | content hash in the name (cache forever); the manifest is fetched fresh; a wire version in the manifest and in the module, checked against the main module's |
+
+- **The 3D renderers stay in the main module.** Together with the view, the
+  bake reader and the kernel proxy they add 608 KB raw and 177 KB gzipped
+  (2 % of the module); the path tracer alone is 97 KB raw and 29 KB
+  gzipped of that (measured by building the view without it). A split
+  would not pay even if it were bigger: the tracer must draw on the
+  page's one GPU device, which lives in the main module's memory as a
+  `wgpu::Device`. A second module would bring its own wgpu and open its own
+  device (breaking one device per page), and wgpu has no way to share a
+  device between two modules through JavaScript.
+- **Prebaked scenes are data files**, fetched by whoever shows them. Their
+  format is versioned on its own (section 14.3).
+- **The kernel is a second WebAssembly module** (crate
+  `cadview-kernel-wasm`): arris through `cadview-solid`, behind core's byte
+  interface (section 14.2). `just build-kernel` writes it with a manifest:
+  `{file, wire, bytes, sha256}`. The page fetches the manifest with
+  `cache: no-cache`, refuses a wire version other than its own, then
+  compiles the module from a streaming fetch (`compileStreaming`, so the
+  browser's code cache keeps the compiled code across visits), checks the
+  module's own `ck_wire()` and says hello over the interface, which checks
+  the version a third time. A piece built for another wire version is
+  never used: its manifest names that version, and the module answers
+  with it.
+- **Linking the kernel small.** rustc exports every `#[no_mangle]` symbol of
+  the dependency tree from a wasm module. cadview-core links printpdf, whose
+  wasm-bindgen API is exported on wasm unconditionally; as exports those
+  functions are roots, and they keep about 10 MB of code and data the
+  kernel never calls (the PDF reader and the HTML layout engine with its
+  fonts). `crates/cadview-kernel-wasm/link.sh` drops every export but the
+  module's own, so the linker can drop the rest: 15.4 MB (5.5 MB gzipped)
+  became 4.33 MB (1.42 MB gzipped; symbol names stripped too), with no
+  imports. The main module carries the same printpdf weight; whether core needs printpdf's default `html`
+  feature is worth a look (not changed here).
+
+### 14.2 The kernel boundary
+
+Core gets its kernel through the object-safe `Evaluator` (solid/eval.rs).
+In the browser that evaluator is a proxy, `RemoteEvaluator`
+(`cadview-core/src/solid/remote.rs`), and the kernel module runs a
+`KernelServer` over the real one. Both are the same file.
+
+- **One request type, one reply type.** `Request` has a variant per
+  `Evaluator` and `Solid` method (`Evaluate`, `EvaluateFrom`, `Distances`,
+  `Interferences`, `Mass`, `Bbox`, `Check`, `Tessellate`, and since 3D3a
+  `Topology`, `Silhouettes`, `RayHits`) plus `Hello` and `Release`;
+  `Reply` carries the answers as the serializable mirrors in
+  `solid/wire.rs`, or as the kernel types themselves where they derive
+  serde (the 3D3a ones do). Both are bincode, wire version 2. Definitions travel with every tool
+  definition they reach (the page's resolver, flattened), so the module
+  needs no copy of the document.
+- **Solids stay in the module.** A reply names a solid by a handle. The
+  page's evaluation cache (`Solids`) keys handles by content, as it keys
+  B-reps natively, and caches boxes, volumes and meshes on the page, so each
+  is asked across the boundary once. `evaluate_from` continues a cached
+  prefix by its handle, so a modifying call costs about one feature here
+  too. When the cache drops a solid, its handle is released with the next
+  request (a drop never makes a call of its own); when the environment is
+  dropped, all of its handles are released.
+- **It cannot fall out of step silently.** `COVERAGE` lists which request
+  each trait method becomes, and `every_trait_method_crosses_the_boundary`
+  reads eval.rs: a method of `Solid` or `Evaluator` without an entry, or
+  without a proxy method in remote.rs (which would fall back to the trait's
+  default in the browser), fails the test. Kernel answers are mirrored in
+  wire.rs by destructuring, so a field added to a kernel type fails to
+  compile there. The wire types use their own `Wire` trait, not `From`:
+  `From` impls between them and the kernel types made `?` ambiguous in the
+  arris adapter.
+- **Synchronous, like the script API.** The module runs on the page's
+  thread; the main module calls `globalThis.__codecadKernel.call(bytes)`
+  and gets the reply bytes back in the same call, so `cad.parts()` and every
+  modifying call stay synchronous, as on the server. A Worker would need
+  either `Atomics.wait` on shared memory (cross-origin isolation: COOP and
+  COEP headers, which GitHub Pages cannot send without a service-worker
+  shim) or JSPI (Chromium only) to keep that API; open question 1 of
+  section 13 is answered "not now".
+- **Before the module is loaded.** A page that can load a kernel puts a
+  placeholder evaluator (`NotLoaded`) on its documents. A call that needs
+  geometry fails with: "the solid kernel is not loaded in this page yet: run
+  `await cad.loadKernel()` once (about 1.5 MB), then call again", and that
+  failed call starts the fetch, once. A script that builds parts awaits
+  `cad.loadKernel()` first; the 3D view loads it itself when it has neither
+  a bake nor a server to ask. Without a kernel module in the build the
+  message stays and `cad.loadKernel()` says the build has none. Parts that
+  arrive by sync are stored as before; only geometry needs the kernel.
+- **How long a call blocks.** Measured in headless Chromium on the 3D1a
+  assembly (section 14.5): 2.5 s for the whole script (22 part calls
+  and three set queries), the slowest call `overlapping3d` over the
+  twelve parts at 1.3 s, then `distance3d` at 0.6 s and a cut at 0.15 s
+  (a debug server, whose arris is optimised, took 1.5 and 0.7 s for the
+  two queries). 3D0b measured wasm at about 1.5 times native for
+  evaluation, so the gallery's heaviest call (a feature on the enclosure
+  base, 57 + 71 + 23 ms natively in release) is about a quarter of a second
+  in the page. The 3D view keeps its last image while a call runs; nothing
+  else is done about it yet.
+- **A trap.** wasm32 aborts on panic. The loader then starts a fresh
+  instance (its solids are gone) and the call fails with a message asking
+  for `cad.loadKernel()` again, which installs a fresh environment.
+
+**From the sibling repositories** (ideas only, nothing taken as code):
+wasmnet's browser ladder and decisions 0053 and 0065 name modules by the
+hash of their bytes and serve them cache-forever with a small manifest,
+compile from a real fetch so the engine's code cache holds, and cross the
+module boundary with plain alloc, call and free exports over bytes. Their
+open item "no version handshake between the two sides" is why this
+boundary checks the wire version three times. codelib's browser host kit
+runs a module in a Worker with a wall-clock deadline and stubs imports a
+module declares but never calls; the stubs are used here, the Worker is
+the model for a later non-blocking kernel.
+
+### 14.3 Prebaked scenes
+
+A bake is a snapshot of the evaluation cache, not a picture. Written by a
+peer with a kernel (`cad.bake3d({out, ...render options})` in a script,
+`GET /api/bake3d?doc=<key>` for the app), read by any page
+(`solid::baked::Baked`).
+
+- **Contents.** The document's definitions and parts (placements,
+  attributes) as JSON text, so a file survives a new optional field in the
+  feature tree; the render options it was baked with (view and projection,
+  the default camera; colours, materials, environment, ground); and per
+  distinct solid (definitions with equal features count once, shared
+  definitions once) its mesh at one chord, its exact box in its own frame
+  and at every placement a part gives it, and its mass properties.
+  Positions are f32 (what the GPU draws); boxes and volumes stay f64.
+- **Format.** `CCB3`, a u32 format version, then bincode. A reader
+  refuses another magic or version and says to bake again.
+- **Loaded, it is an evaluator.** `BakedEvaluator` answers `evaluate` by
+  content key, and its solids answer mass, box (at a baked placement) and
+  mesh from the file. So a viewer builds its scene with the server's code,
+  and `cad.parts()` on a bake returns the kernel's numbers bit for bit.
+  Anything else (a new or edited definition, a new placement, a query
+  between parts) fails with "the prebaked scene does not hold this answer
+  ... it needs the solid kernel": the moment to load it.
+- **Chord.** A quarter pixel at 1280 px (`BAKE_PIXELS`), the rule
+  `cad.render` uses, so views up to about twice that size show no facet
+  wider than half a pixel. Where the kernel refuses that chord for a solid
+  (the enclosure's lid does), the bake doubles it up to three times and
+  reports `coarser`.
+- **Sizes**, the gallery baked with its isometric view and the material
+  presets:
+
+  | Example | Parts | Solids | Triangles | Chord (mm) | Raw | Gzip |
+  |---|---:|---:|---:|---:|---:|---:|
+  | 01 pipe flange | 1 | 1 | 2 454 | 0.031 | 48 486 | 18 341 |
+  | 02 mounting bracket | 1 | 1 | 1 344 | 0.016 | 30 029 | 10 701 |
+  | 03 bookshelf | 12 | 8 | 296 | 0.25 | 17 448 | 3 339 |
+  | 04 enclosure | 9 | 8 | 3 840 | 0.016 (one solid coarser) | 90 581 | 27 804 |
+  | 05 piston and rod | 3 | 3 | 5 424 | 0.031 | 105 163 | 38 761 |
+  | 06 spur gears | 2 | 2 | 3 782 | 0.031 | 137 613 | 41 899 |
+  | 07 pipe spool | 7 | 5 | 6 154 | 0.25 | 120 000 | 53 301 |
+  | 08 turned stool | 7 | 3 | 7 298 | 0.125 | 139 121 | 57 540 |
+  | 11 play tower frame | 63 | 17 | 236 | 1 | 41 632 | 6 915 |
+
+- **Where they would live.** About 0.73 MB raw for the nine; small enough to
+  commit next to the examples (`examples/3d/*.bake3d`), made by the same
+  export step that writes the example PNGs. Not committed in this change.
+
+### 14.4 The viewport
+
+`cadview-web/src/view3d.rs`: a canvas with its own surface on the page's
+shared `GpuContext` (never a second device), a render target in the
+renderers' sRGB format with a plain view for the blit, and the frame loop.
+
+- **Demand-driven.** A frame is drawn when the camera, the scene, the
+  options or the canvas size change; none while idle. Input: drag to
+  orbit, right-drag or shift-drag to pan, wheel to zoom; named views, fit,
+  orthographic and perspective through `view3d_command`.
+- **Working:** the raster backend, one frame per change.
+- **Presentation:** the path tracer. While the camera moves the view draws
+  the working render; once it has been still for 150 ms it adds samples in
+  batches. A batch is submitted only when the GPU reported the previous one
+  done (`on_submitted_work_done`), and sized from the measured GPU time per
+  sample to about 24 ms, so the page never queues more than one batch.
+  Accumulation restarts when the camera, scene or size change and stops at
+  the target. Every image shown goes through the tracer's denoiser unless
+  the options say `denoise: false`, as in `cad.render`; a camera the
+  options place (`camera`) is used as given, a named view is fitted.
+- **A slow GPU.** If the first sample at full resolution takes longer than
+  40 ms, the view traces at half resolution (the blit scales up), and it
+  lowers the sample target so the image converges in about 30 s: the
+  target is 30 s divided by the measured time per sample, between 16 and
+  256 (3D5a's browser aim). On the test browser's software GPU that gave
+  half resolution and a target of 38 to 64 samples, reached in 18 to 28 s,
+  across runs, for the bookshelf.
+- **No WebGPU, no 3D.** The view and the embed viewer say so in words; 2D
+  keeps its egui fallback.
+- **The scene's source**, in order: the page's kernel, when loaded; else a
+  bake the session holds; else, in the app with a server, the server's
+  bake of the document, fetched again when the document's parts change.
+  The server bake is an interim source until pages load the kernel by
+  default; it keeps the app's 3D view working without the 1.5 MB download.
+
+### 14.5 Equivalence, honestly
+
+What the browser does now, from the same core code:
+
+- show parts in both render modes, from a bake (no kernel), from the
+  server's bake, or from its own kernel;
+- with the kernel module loaded: every part call (`extrude` ... `fillet3d`,
+  `move3d`, `copy3d`, `mirror3d`), `parts()`, `part()`, the set queries
+  (`overlapping3d`, `pairsWithin3d`, `inside3d`, `distance3d`) and their
+  refusals, with the server's numbers. On the 3D1a assembly all 120
+  numbers (volume, box and centroid of twelve parts) are bit-identical to
+  the server's, and so are the ids, `describe()` and the results of
+  `overlapping3d`, `pairsWithin3d` and `distance3d`;
+- `cad.project` through the page's kernel (topology, silhouettes and ray
+  hits cross the boundary): the same entities as the server, number for
+  number;
+- with a bake only: `parts()` (bit for bit) and the views.
+
+What only the server does, and why:
+
+- `cad.render` and `cad.bake3d` write files, and scripts read libraries
+  (`cad.use`) from the server's disk: the page has no file system. The
+  page's own images are on screen; a PNG is a screenshot away.
+- Running scripts in the sandbox with time and memory limits; in the page a
+  script is the page's own JavaScript.
+- Bit-identical numbers are not promised: the kernel's floating-point code
+  is the same, but wasm's math library is not the platform's.

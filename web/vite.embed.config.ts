@@ -1,6 +1,6 @@
 import { defineConfig, type Plugin } from "vite";
 import { resolve } from "path";
-import { copyFileSync } from "fs";
+import { copyFileSync, cpSync, existsSync } from "fs";
 
 const distDir = resolve(__dirname, "../dist");
 const outDir = resolve(__dirname, "../dist-embed");
@@ -18,6 +18,13 @@ function copyWasmFiles(): Plugin {
         resolve(distDir, "cadview-web_bg.wasm"),
         resolve(outDir, "cadview-web_bg.wasm"),
       );
+      // The solid kernel module, when `just build-kernel` made one: loaded
+      // only by a page that evaluates parts, never by a prebaked view.
+      if (existsSync(resolve(distDir, "kernel"))) {
+        cpSync(resolve(distDir, "kernel"), resolve(outDir, "kernel"), {
+          recursive: true,
+        });
+      }
     },
   };
 }

@@ -110,6 +110,13 @@ fn render_3d(
                 .ok_or_else(|| format!("render: {key} must be a whole number >= 0")),
         }
     };
+    // The denoiser is on for presentation renders unless the script says
+    // `denoise: false` (to see the raw estimate).
+    let denoise = match a.get("denoise") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err("render: denoise is true or false".into()),
+    };
     let opts3 = RenderOptions3d {
         size: opts.size,
         pixel_ratio: opts.pixel_ratio,
@@ -118,10 +125,16 @@ fn render_3d(
         fit: true,
         spp: count("spp", cadview_render3d::trace::DEFAULT_SPP)?,
         seed: count("seed", 0)?,
+        denoise,
     };
     opts3.validate().map_err(|e| format!("render: {e}"))?;
     let built = cadview_core::solid::scene::parts_scene(doc, a, opts3.pixel_size())
         .map_err(|e| format!("render: {e}"))?;
+    // A camera placed by the options is used as given.
+    let opts3 = RenderOptions3d {
+        fit: built.fit,
+        ..opts3
+    };
     let rendered =
         cadview_render3d::render_png(&built.scene, &opts3).map_err(|e| format!("render: {e}"))?;
     let path = write_png(out, base, &rendered.png)?;
@@ -171,6 +184,7 @@ fn render_3d(
     });
     if let Some(t) = trace {
         v["samples"] = t["samples"].clone();
+        v["denoised"] = json!(denoise);
         v["trace"] = t;
     }
     Ok(v)
@@ -227,6 +241,7 @@ mod tests {
             r#"{"mode":"3d","quality":"presentation","spp":0}"#,
             r#"{"mode":"3d","quality":"presentation","spp":-4}"#,
             r#"{"mode":"3d","quality":"presentation","seed":1.5}"#,
+            r#"{"mode":"3d","quality":"presentation","denoise":"yes"}"#,
         ] {
             let e = render_to_file(&doc, bad, dir.path()).unwrap_err();
             assert!(e.starts_with("render: "), "{bad}: {e}");

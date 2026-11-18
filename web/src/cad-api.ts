@@ -261,12 +261,18 @@ export interface RenderOptions {
   /** Device pixels per CSS pixel; scales size and stroke width. Default 1. */
   pixelRatio?: number;
   /**
-   * 3D presentation renders: samples per pixel (1 to 65536). Default 1024,
-   * which leaves noise only inside polished metal bores at 960 x 640.
+   * 3D presentation renders: samples per pixel (1 to 65536). Default 1024;
+   * with the denoiser most scenes look converged at 256.
    */
   spp?: number;
   /** 3D presentation renders: seed of the random numbers. Default 0; the same scene, spp and seed give the same bytes. */
   seed?: number;
+  /**
+   * 3D presentation renders: filter the image with the edge-aware denoiser
+   * (guided by the first surface's albedo, normal and position). Default
+   * true; false shows the raw estimate.
+   */
+  denoise?: boolean;
 
   // ── 3D: the document's solid parts (server with a kernel and a GPU) ──
   /**
@@ -291,8 +297,24 @@ export interface RenderOptions {
     | "right"
     | "top"
     | "bottom";
-  /** Default "orthographic". */
+  /** Default "orthographic" ("perspective" with a `camera`). */
   projection?: "orthographic" | "perspective";
+  /**
+   * A camera placed by hand instead of a named view: eye and target in mm.
+   * Perspective with `fov`, the vertical field of view in degrees (default
+   * 30); orthographic with `height`, the view's height in mm (or with
+   * `projection: "orthographic"`). `up` is the world direction shown as up
+   * (default [0, 0, 1]). Used as given unless `fit` is true.
+   */
+  camera?: {
+    eye: Point3;
+    target: Point3;
+    fov?: number;
+    height?: number;
+    up?: Point3;
+  };
+  /** Fit the camera to the parts: default true for a named view, false for a `camera`. */
+  fit?: boolean;
   /** Which parts to draw (default all). */
   select?: PartTarget | null;
   /**
@@ -314,7 +336,16 @@ export interface RenderOptions {
    */
   ground?:
     | boolean
-    | { height?: number; color?: [number, number, number] | string };
+    | {
+        height?: number;
+        color?: [number, number, number] | string;
+        /**
+         * Presentation renders: a material like a part's, over `color`
+         * (e.g. a lawn: a rough green with a "mottle" pattern). The working
+         * render draws its colour.
+         */
+        material?: MaterialSpec;
+      };
   /** [r, g, b], "#rrggbb", "light" (default) or "viewer" (the 2D viewer's dark). */
   background?: [number, number, number] | string;
   /** Cutaway: up to 4 planes; each removes the side its normal points into. */
@@ -364,6 +395,18 @@ export interface RenderOptions {
         ground?: [number, number, number] | string;
         /** Scales dome and sun together. Default 1. */
         intensity?: number;
+        /**
+         * A studio backdrop: what is seen just above the horizon blends up
+         * from the lit ground into the dome, so a level view shows no line
+         * where the floor meets it. Default true for "studio", false for "sky".
+         */
+        sweep?: boolean;
+        /**
+         * Aerial haze (mm): the ground seen at distance t blends toward the
+         * horizon colour by 1 - exp(-t / haze), so it meets the sky softly.
+         * Default 150000 for "sky", 0 (none) for "studio".
+         */
+        haze?: number;
         /** A distant disc light, or false for none. */
         sun?:
           | false
@@ -380,6 +423,13 @@ export interface RenderOptions {
       };
   /** Presentation renders: exposure in stops (+1 doubles the light). Default 0. */
   exposure?: number;
+  /**
+   * Presentation renders: up to 4 openings (windows, doors) through which
+   * the dome lights an interior, each a rectangle: a corner and two
+   * perpendicular edges (mm). The tracer samples the sky through them
+   * directly; the image converges faster, to the same result.
+   */
+  portals?: { origin: Point3; u: Point3; v: Point3 }[];
 }
 
 /**
@@ -409,11 +459,14 @@ export interface MaterialSpec {
    * "bands": rings about an axis, seen as grain along it (wood).
    * "brushed": streaks along the axis, or in circles about it with
    * `circular` (turned metal), and highlights stretched across them.
+   * "mottle": soft patches about `scale` mm across (default 500), up to
+   * `strength` (default 0.5) of the way toward `color` (default darker),
+   * so an even surface such as a lawn is not flat.
    * `axis`: "long" (default, the part's longest direction), "short",
    * "symmetry" (a turned part's axis) or a vector.
    */
   pattern?: {
-    kind: "flat" | "bands" | "brushed";
+    kind: "flat" | "bands" | "brushed" | "mottle";
     axis?: "long" | "short" | "symmetry" | Point3;
     /** bands: mm between rings (default 4); ring colour; 0..1 strength; mm of wander; mm from the part's centre to the ring axis. */
     spacing?: number;
@@ -452,6 +505,8 @@ export interface RenderResult {
   kernel?: string;
   /** Presentation renders: samples per pixel reached, and where the time went (ms). */
   samples?: number;
+  /** Presentation renders: whether the image was denoised. */
+  denoised?: boolean;
   trace?: {
     samples: number;
     passes: number;
@@ -464,6 +519,31 @@ export interface RenderResult {
     traceMs: number;
     pngMs: number;
   };
+}
+
+/** Options for `cad.bake3d`: the 3D `cad.render` options a viewer starts from, and the file. */
+export interface Bake3dOptions
+  extends Omit<RenderOptions, "size" | "pixelRatio" | "backend" | "mode"> {
+  /** Output path, relative to the server's working directory. Default "scene.bake3d". */
+  out?: string;
+}
+
+export interface Bake3dResult {
+  ok: boolean;
+  path: string;
+  bytes: number;
+  parts: number;
+  defs: number;
+  /** Distinct solids (definitions with equal features count once). */
+  solids: number;
+  triangles: number;
+  chord: number;
+  /** Solids whose mesh the kernel would only make at a coarser chord. */
+  coarser: number;
+  kernel: string;
+  /** The file format version. */
+  format: number;
+  ms: number;
 }
 
 // ── Solid parts ──────────────────────────────────────────────────────
@@ -633,6 +713,110 @@ export interface PartSetResult<P> {
   skipped: { a: string; b: string; reason: string }[];
   /** More pairs than `limit` (default 100 000). */
   truncated?: boolean;
+}
+
+/** A named view, as `cad.render` names them. */
+export type ViewName =
+  | "front"
+  | "back"
+  | "left"
+  | "right"
+  | "top"
+  | "bottom"
+  | "iso"
+  | "isometric"
+  | "iso-se"
+  | "iso-sw"
+  | "iso-ne"
+  | "iso-nw";
+
+/** Which view, which parts, and where the view goes on the sheet. */
+export interface ViewOpts {
+  /** A named view; or give `from` instead. */
+  view?: ViewName;
+  /** The direction toward the eye (the viewer looks along -from). */
+  from?: Point3;
+  /** With `from`: which way is up on the sheet (default world Z, or Y when looking along Z). */
+  up?: Point3;
+  /** Which parts (default all). */
+  parts?: PartTarget | null;
+  /** The 3D point drawn at `at` (default the centre of the parts' box). */
+  origin?: Point3;
+  /** Where the view's origin goes on the sheet. Default [0, 0]. */
+  at?: Point2;
+  /** Sheet units per mm. Default 1. */
+  scale?: number;
+}
+
+/** Options for `cad.project`. */
+export interface ProjectOpts extends ViewOpts {
+  /** Block name. Default "view-<view>" ("view-view" for a direction). Projecting again replaces it. */
+  name?: string;
+  /** Draw hidden edges. Default true. */
+  hidden?: boolean;
+  /** Draw silhouettes of curved faces. Default true. */
+  silhouettes?: boolean;
+  /** Draw edges where faces meet smoothly (round boundaries) even off the outline. Default false. */
+  smooth?: boolean;
+  /** Layers per class of curve; silhouettes default to the visible and hidden layers. */
+  layers?: {
+    visible?: string;
+    hidden?: string;
+    silhouette?: string;
+    hiddenSilhouette?: string;
+  };
+  /** Copy each part's attributes onto its entities too. Default false. */
+  partAttrs?: boolean;
+  /** Place an insert of the block (or move the existing one). Default true. */
+  place?: boolean;
+  /** Ask the kernel's exact ray hits where the mesh oracle is unsure. Default true. */
+  exact?: boolean;
+  /** Chord (mm) of the oracle's mesh. Default max(0.01, 1e-5 x the parts' size). */
+  chord?: number;
+}
+
+/** What `cad.project` made. */
+export interface ProjectResult {
+  block: string;
+  /** The insert's entity id, or null with place: false. */
+  insert: string | null;
+  view: string;
+  /** Unit vectors: toward the eye, sheet right, sheet up. */
+  from: Point3;
+  right: Point3;
+  up: Point3;
+  origin: Point3;
+  at: Point2;
+  scale: number;
+  parts: number;
+  entities: number;
+  /** By type (line, arc, circle, ellipse, spline) and by class (visible, hidden). */
+  counts: Record<string, number>;
+  /** The view's extent on the sheet, or null when it is empty. */
+  bounds: { min: Point2; max: Point2 } | null;
+  /** Faces whose silhouette has no closed form here, and parts without an oracle mesh. */
+  open: { part: string; face?: number; reason: string }[];
+  stats: Record<string, number>;
+  oracle: Record<string, number>;
+  ms: Record<string, number>;
+  /** A 3D point's position on the sheet in this view. */
+  toSheet: (p: Point3) => Point2;
+}
+
+/** `toSheet` for a projection result: plain arithmetic on its frame. */
+function withToSheet(v: Omit<ProjectResult, "toSheet">): ProjectResult {
+  const dot = (a: number[], b: number[]) =>
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  return {
+    ...v,
+    toSheet: (p: Point3) => {
+      const d = [p[0] - v.origin[0], p[1] - v.origin[1], p[2] - v.origin[2]];
+      return [
+        v.at[0] + v.scale * dot(d, v.right),
+        v.at[1] + v.scale * dot(d, v.up),
+      ];
+    },
+  };
 }
 
 function normalizeParts(
@@ -1146,6 +1330,31 @@ export function buildCadApi({
         pb: Point3;
       },
 
+    // Projected views (needs a kernel): a block of exact 2D lines, arcs,
+    // circles and ellipses per view, visible and hidden, with an insert.
+    /**
+     * Projects the parts in a view: one block (true size) and one insert
+     * at `at` scaled by `scale`. Each entity carries partId, edge
+     * ("visible" | "hidden") and curve ("edge" | "silhouette").
+     */
+    project: (opts: ProjectOpts) =>
+      withToSheet(
+        call("project", {
+          ...opts,
+          ...(opts.parts !== undefined
+            ? { parts: normalizeParts(opts.parts) }
+            : {}),
+        }) as Omit<ProjectResult, "toSheet">,
+      ),
+    /** Where 3D points land on the sheet in the view these options describe. */
+    viewPoints: (opts: ViewOpts & { points: Point3[] }) =>
+      call("viewPoints", {
+        ...opts,
+        ...(opts.parts !== undefined
+          ? { parts: normalizeParts(opts.parts) }
+          : {}),
+      }) as Point2[],
+
     // Topology
     connectedTo: (id: string | EntityJson, tolerance?: number) =>
       call("connectedTo", {
@@ -1555,6 +1764,17 @@ export function buildCadApi({
       rpc("render", { out: "render.png", ...opts }) as
         | RenderResult
         | Promise<RenderResult>,
+    /**
+     * Write the document's parts as a prebaked 3D scene (server, needs the
+     * kernel): meshes, exact boxes and volumes, placements, attributes and
+     * the given render options (view, colours, materials, light), for a
+     * viewer that has no kernel. `chord` defaults to a quarter pixel at
+     * 1280 px.
+     */
+    bake3d: (opts: Bake3dOptions = {}) =>
+      rpc("bake3d", { out: "scene.bake3d", ...opts }) as
+        | Bake3dResult
+        | Promise<Bake3dResult>,
     loadDwg: (path: string) => rpc("loadDwg", { path }),
     loadElmt: (
       path: string,

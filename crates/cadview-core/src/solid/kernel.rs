@@ -7,7 +7,9 @@
 
 use std::fmt;
 
-use super::types::{DefId, FeatId, PartDef, Placement, Point3};
+use serde::{Deserialize, Serialize};
+
+use super::types::{DefId, FeatId, PartDef, Placement, Point3, Vec3};
 
 /// Resolves the tool bodies a [`PartDef`] refers to
 /// ([`ToolRef`](super::ToolRef)).
@@ -305,6 +307,159 @@ pub struct TriMesh {
     pub triangles: Vec<[u32; 3]>,
 }
 
+// ── Exact boundary geometry (rung 3D3a: projection) ───────────────────
+
+/// An exact curve in 3D (mm), with the meaning of its parameter `t`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Curve3 {
+    /// `origin + t dir`, `dir` a unit vector: `t` is arc length.
+    Line { origin: Point3, dir: Vec3 },
+    /// `center + radius (cos t x + sin t y)`, `x` and `y` orthonormal.
+    Circle {
+        center: Point3,
+        x: Vec3,
+        y: Vec3,
+        radius: f64,
+    },
+    /// `center + a cos t x + b sin t y`, `x` and `y` orthonormal, `a >= b`.
+    Ellipse {
+        center: Point3,
+        x: Vec3,
+        y: Vec3,
+        a: f64,
+        b: f64,
+    },
+    /// A rational B-spline of `degree` over `knots` (`points.len() +
+    /// degree + 1` of them), one weight per control point.
+    Nurbs {
+        degree: usize,
+        knots: Vec<f64>,
+        points: Vec<Point3>,
+        weights: Vec<f64>,
+    },
+}
+
+/// A kernel surface in closed form, as far as the projection needs it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Surface3 {
+    /// The plane through `origin` with unit `normal`.
+    Plane { origin: Point3, normal: Vec3 },
+    /// `origin + radius (cos u x + sin u (axis x x)) + v axis`.
+    Cylinder {
+        origin: Point3,
+        axis: Vec3,
+        x: Vec3,
+        radius: f64,
+    },
+    /// `origin + a cos u x + b sin u (axis x x) + v axis`, `a >= b`.
+    EllipticCylinder {
+        origin: Point3,
+        axis: Vec3,
+        x: Vec3,
+        a: f64,
+        b: f64,
+    },
+    /// `origin + (radius + v sin h)(cos u x + sin u (axis x x)) + v cos h
+    /// axis`, `h` the half angle in (0, pi/2).
+    Cone {
+        origin: Point3,
+        axis: Vec3,
+        x: Vec3,
+        radius: f64,
+        half_angle: f64,
+    },
+    /// The sphere about `center`.
+    Sphere { center: Point3, radius: f64 },
+    /// `origin + (major + minor cos v)(cos u x + sin u (axis x x)) + minor
+    /// sin v axis`.
+    Torus {
+        origin: Point3,
+        axis: Vec3,
+        x: Vec3,
+        major: f64,
+        minor: f64,
+    },
+    /// A surface without a closed form here (a B-spline surface); `kind`
+    /// names it for reports.
+    Other { kind: String },
+}
+
+/// One face of a solid: its surface, and whether the face's outward normal
+/// is the surface's normal turned around.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BrepFace {
+    pub surface: Surface3,
+    pub reversed: bool,
+}
+
+/// One edge of a solid: its exact curve over `range` (`range[0] <
+/// range[1]`), the faces it bounds (indices into [`BrepTopology::faces`]),
+/// and two flags about how they meet there.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BrepEdge {
+    pub curve: Curve3,
+    pub range: [f64; 2],
+    pub faces: Vec<usize>,
+    /// Both sides belong to one face: a cut in a closed surface's
+    /// parameters (a cylinder's seam), not an edge of the shape.
+    pub seam: bool,
+    /// The two faces meet tangentially along the edge (the outward normals
+    /// agree where the kernel sampled them): a round's boundary.
+    pub smooth: bool,
+}
+
+/// The faces and edges of a solid, in the part's own frame.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct BrepTopology {
+    pub faces: Vec<BrepFace>,
+    pub edges: Vec<BrepEdge>,
+}
+
+/// A silhouette piece: a curve on face `face` where the surface turns away
+/// from the viewer (its normal is perpendicular to the view direction),
+/// over `range`, clipped to the face.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SilhouetteCurve {
+    pub curve: Curve3,
+    pub range: [f64; 2],
+    pub face: usize,
+}
+
+/// The silhouettes of a solid for one view direction, and the faces whose
+/// silhouette the kernel could not give in closed form (face index and
+/// reason), so a caller can say what is missing.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct Silhouettes {
+    pub curves: Vec<SilhouetteCurve>,
+    pub skipped: Vec<(usize, String)>,
+}
+
+/// A half-line `origin + t dir`, `t >= 0`; `dir` need not be unit, but
+/// hits measure `t` along its unit direction.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Ray3 {
+    pub origin: Point3,
+    pub dir: Vec3,
+}
+
+/// One place a ray meets a solid's boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct RayHit3 {
+    /// Distance from the ray's origin (mm), never negative.
+    pub t: f64,
+    /// The ray touches the surface without crossing it (a graze).
+    pub tangent: bool,
+}
+
+/// Every hit of one ray against one solid, by ascending `t`. `in_face`:
+/// the ray runs inside one of the solid's faces (a face seen edge on), so
+/// the kernel gives no hits for it.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct RayHits {
+    pub hits: Vec<RayHit3>,
+    pub in_face: bool,
+}
+
 /// A solid-modelling backend.
 ///
 /// Required: evaluation, mass properties, bounding box and a validity
@@ -314,9 +469,11 @@ pub struct TriMesh {
 /// never as a pass. Optional today: [`Self::tessellate`],
 /// [`Self::evaluate_from`] (falls back to [`Self::evaluate`]),
 /// [`Self::bbox_within`] (falls back to [`Self::bbox`]),
-/// [`Self::distances`] and [`Self::interferences`]. The rest of the
-/// designed trait (`edges`, `project`, `section`, and the face/edge tags
-/// on [`Evaluated`]) arrives with the rungs that need it (3D3a, 3D4a).
+/// [`Self::distances`], [`Self::interferences`], and for projection
+/// (rung 3D3a) [`Self::topology`], [`Self::silhouettes`] and
+/// [`Self::ray_hits`]. The rest of the designed trait (`section`, and the
+/// face/edge tags on [`Evaluated`]) arrives with the rungs that need it
+/// (3D4a).
 pub trait SolidKernel {
     /// The kernel's B-rep. Derived data: never synced or stored.
     type Brep: Clone;
@@ -405,5 +562,34 @@ pub trait SolidKernel {
     fn tessellate(&self, brep: &Self::Brep, chord: f64) -> Result<TriMesh, EvalError> {
         let _ = (brep, chord);
         Err(EvalError::unsupported(None, "tessellation"))
+    }
+
+    /// Optional capability: the exact faces and edges of `brep` in the
+    /// part's own frame. The default says the kernel cannot do it.
+    fn topology(&self, brep: &Self::Brep) -> Result<BrepTopology, EvalError> {
+        let _ = brep;
+        Err(EvalError::unsupported(None, "edge and face geometry"))
+    }
+
+    /// Optional capability: the silhouette curves of `brep`'s curved faces
+    /// for a viewer looking along `-view` (part frame; `view` points toward
+    /// the eye), exact and clipped to the faces. The closed forms are
+    /// [`super::silhouette::candidates`]; a face without one is listed in
+    /// [`Silhouettes::skipped`]. The default says the kernel cannot do it.
+    fn silhouettes(&self, brep: &Self::Brep, view: Vec3) -> Result<Silhouettes, EvalError> {
+        let _ = (brep, view);
+        Err(EvalError::unsupported(None, "silhouettes"))
+    }
+
+    /// Optional capability: the exact hits of each ray (part frame) on
+    /// `brep`'s faces, no mesh involved; one result per ray. The default
+    /// says the kernel cannot do it.
+    fn ray_hits(
+        &self,
+        brep: &Self::Brep,
+        rays: &[Ray3],
+    ) -> Result<Vec<Result<RayHits, EvalError>>, EvalError> {
+        let _ = (brep, rays);
+        Err(EvalError::unsupported(None, "ray hits"))
     }
 }

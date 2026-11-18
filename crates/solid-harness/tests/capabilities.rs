@@ -11,14 +11,236 @@
 //!   place shares its whole volume; moved past its own box it is apart, at
 //!   least the gap away, with closest points that are that far apart.
 //!
+//! - `topology`, `silhouettes` and `ray_hits` (rung 3D3a, projection),
+//!   against the certified reference meaning of each part: every edge
+//!   and every silhouette lies on the boundary; a silhouette's normal
+//!   (closed form, from its face's surface) is across the view; a ray's
+//!   hits lie on the boundary, and between them the ray is alternately
+//!   outside and inside.
+//!
 //! These capabilities are not scoreboard layers (the scoreboards are
 //! unchanged by them). `cargo test -p solid-harness --release --test
 //! capabilities -- --nocapture` prints the counts.
 
-use cadview_core::solid::kernel::{Interference, TightBox};
-use cadview_core::solid::{Placement, SolidKernel};
+use cadview_core::solid::kernel::{Curve3, Interference, Ray3, TightBox};
+use cadview_core::solid::{Placement, Point3, SolidKernel, Vec3};
 use solid_harness::cases::catalogue;
 use solid_harness::kernels::ArrisKernel;
+use solid_harness::reference::{Class, Reference};
+
+/// How far (mm) a point said to be on the boundary may be from it: the
+/// kernel's linear tolerance is 1e-7.
+const ON: f64 = 1e-6;
+
+/// Off the boundary by more than `ON`, certainly.
+fn off(r: &Reference, p: Point3) -> Option<f64> {
+    match r.classify(p) {
+        Class::Inside { margin } | Class::Outside { margin } if margin > ON => Some(margin),
+        _ => None,
+    }
+}
+
+fn samples(c: &Curve3, range: [f64; 2]) -> impl Iterator<Item = Point3> + '_ {
+    [0.0, 0.17, 0.5, 0.83, 1.0]
+        .into_iter()
+        .map(move |f| c.point(range[0] + (range[1] - range[0]) * f))
+}
+
+/// Every edge of every part lies on the part's boundary, at its ends and
+/// at three points between.
+#[test]
+fn edges_lie_on_the_boundary() {
+    let k = ArrisKernel;
+    let (mut parts, mut edges, mut seams, mut smooth) = (0, 0, 0, 0);
+    let mut kinds = std::collections::BTreeMap::<&str, usize>::new();
+    for case in catalogue().parts {
+        let (Ok(e), Ok(r)) = (
+            k.evaluate(&case.def, &case.tools),
+            Reference::build(&case.def, &case.tools),
+        ) else {
+            continue;
+        };
+        let t = k.topology(&e.brep).expect("arris gives edges");
+        parts += 1;
+        for edge in &t.edges {
+            edges += 1;
+            seams += usize::from(edge.seam);
+            smooth += usize::from(edge.smooth && !edge.seam);
+            *kinds.entry(edge.curve.kind()).or_default() += 1;
+            assert!(
+                (1..=2).contains(&edge.faces.len())
+                    && edge.faces.iter().all(|&f| f < t.faces.len()),
+                "{}: {edge:?}",
+                case.name
+            );
+            for p in samples(&edge.curve, edge.range) {
+                if let Some(m) = off(&r, p) {
+                    panic!(
+                        "{}: edge {:?} is {m:e} mm off at {p:?}",
+                        case.name, edge.curve
+                    );
+                }
+            }
+        }
+    }
+    println!(
+        "topology: {parts} parts, {edges} edges on the boundary ({kinds:?}), {seams} seams, \
+         {smooth} smooth"
+    );
+    assert!(parts > 100 && edges > 1000, "{parts} {edges}");
+}
+
+/// Silhouettes in four views lie on the boundary, and the normal of their
+/// face (closed form) is across the view there.
+#[test]
+fn silhouettes_lie_on_the_boundary_across_the_view() {
+    let k = ArrisKernel;
+    let s = 1.0 / 3f64.sqrt();
+    let views = [
+        Vec3::new(0.0, -1.0, 0.0),
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(s, -s, s),
+    ];
+    let (mut parts, mut curves, mut skipped) = (0, 0, 0);
+    let mut worst: f64 = 0.0;
+    let mut worst_at = String::new();
+    for case in catalogue().parts {
+        let (Ok(e), Ok(r)) = (
+            k.evaluate(&case.def, &case.tools),
+            Reference::build(&case.def, &case.tools),
+        ) else {
+            continue;
+        };
+        let t = k.topology(&e.brep).expect("edges");
+        parts += 1;
+        for v in views {
+            let sil = k.silhouettes(&e.brep, v).expect("silhouettes");
+            skipped += sil.skipped.len();
+            for c in &sil.curves {
+                curves += 1;
+                assert!(c.range[1] > c.range[0], "{}", case.name);
+                for p in samples(&c.curve, c.range) {
+                    if let Some(m) = off(&r, p) {
+                        panic!("{}: silhouette {:?} is {m:e} mm off", case.name, c.curve);
+                    }
+                    let n = t.faces[c.face]
+                        .surface
+                        .normal_at(p)
+                        .expect("a closed-form face");
+                    // In units of 1e-9 at coordinates up to 1 m; beyond,
+                    // the closed-form normal itself loses digits to
+                    // cancellation in proportion to the coordinates.
+                    let size = (p - Point3::ORIGIN).length().max(1e3) / 1e3;
+                    let dev = n.dot(v).abs() / size;
+                    if dev > worst {
+                        worst = dev;
+                        worst_at = format!("{} ({})", case.name, t.faces[c.face].surface.kind());
+                    }
+                }
+            }
+        }
+    }
+    println!(
+        "silhouettes: {parts} parts in 4 views, {curves} curves on the boundary, largest |n . v| \
+         {worst:e} ({worst_at}); {skipped} faces without a closed form (oblique tori, B-spline \
+         faces)"
+    );
+    assert!(worst <= 1e-9, "{worst:e}");
+    assert!(curves > 100, "{curves}");
+}
+
+/// Rays through a grid over each part's box from four directions: every
+/// hit lies on the boundary, and between hits that cross the surface the
+/// ray is outside, inside, outside... as the reference says.
+#[test]
+fn ray_hits_agree_with_the_reference() {
+    let k = ArrisKernel;
+    let s = 1.0 / 3f64.sqrt();
+    let dirs = [
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(0.0, 0.0, -1.0),
+        Vec3::new(-s, s, -s),
+    ];
+    // Fractions chosen to miss edges and vertices of the catalogue parts.
+    let fr = [0.1234, 0.3719, 0.5103, 0.6871, 0.9012];
+    let (mut rays, mut hits, mut segments, mut in_face) = (0, 0, 0, 0);
+    for case in catalogue().parts {
+        let (Ok(e), Ok(r)) = (
+            k.evaluate(&case.def, &case.tools),
+            Reference::build(&case.def, &case.tools),
+        ) else {
+            continue;
+        };
+        let Ok(b) = k.bbox_within(&e.brep, &Placement::IDENTITY, 1e-9) else {
+            continue;
+        };
+        let (lo, hi) = (b.aabb.min, b.aabb.max);
+        let size = (hi - lo).length();
+        let centre = Point3::new(
+            0.5 * (lo.x + hi.x),
+            0.5 * (lo.y + hi.y),
+            0.5 * (lo.z + hi.z),
+        );
+        let mut batch = Vec::new();
+        for d in dirs {
+            let a = cadview_core::solid::silhouette::perpendicular(d);
+            let c = d.cross(a);
+            for &u in &fr {
+                for &w in &fr {
+                    let off = a.scale((u - 0.5) * size) + c.scale((w - 0.5) * size);
+                    let o = Point3::new(
+                        centre.x + off.x - d.x * size,
+                        centre.y + off.y - d.y * size,
+                        centre.z + off.z - d.z * size,
+                    );
+                    batch.push(Ray3 { origin: o, dir: d });
+                }
+            }
+        }
+        let answers = k.ray_hits(&e.brep, &batch).expect("ray hits");
+        for (ray, ans) in batch.iter().zip(answers) {
+            let Ok(h) = ans else { continue };
+            rays += 1;
+            if h.in_face {
+                in_face += 1;
+                continue;
+            }
+            let at = |t: f64| {
+                Point3::new(
+                    ray.origin.x + ray.dir.x * t,
+                    ray.origin.y + ray.dir.y * t,
+                    ray.origin.z + ray.dir.z * t,
+                )
+            };
+            let mut crossings = Vec::new();
+            for x in &h.hits {
+                hits += 1;
+                if let Some(m) = off(&r, at(x.t)) {
+                    panic!("{}: a hit {m:e} mm off the boundary", case.name);
+                }
+                if !x.tangent {
+                    crossings.push(x.t);
+                }
+            }
+            for (i, w) in crossings.windows(2).enumerate() {
+                let inside_expected = i % 2 == 0;
+                match r.classify(at(0.5 * (w[0] + w[1]))) {
+                    Class::Inside { .. } => assert!(inside_expected, "{}", case.name),
+                    Class::Outside { .. } => assert!(!inside_expected, "{}", case.name),
+                    Class::Band => continue,
+                }
+                segments += 1;
+            }
+        }
+    }
+    println!(
+        "ray hits: {rays} rays, {hits} hits on the boundary, {segments} segments between crossings \
+         inside or outside as the reference says, {in_face} rays inside a face"
+    );
+    assert!(rays > 10_000 && segments > 2_000, "{rays} {segments}");
+}
 
 #[test]
 fn continued_evaluation_equals_from_scratch() {

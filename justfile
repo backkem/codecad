@@ -53,6 +53,25 @@ package tag="dev": build-wasm clean-dist build-web build-sandbox-api build-packe
     fi
     echo "release/$archive"
 
+# Build the solid kernel module the browser loads on demand (dist/kernel/:
+# a content-hashed .wasm and manifest.json with its wire version). Optional:
+# without it the page shows prebaked scenes and server bakes only.
+build-kernel:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # link.sh keeps only the module's own exports, so the linker drops the
+    # code of the dependency tree the kernel never calls.
+    cargo rustc -p cadview-kernel-wasm --lib --crate-type cdylib --target wasm32-unknown-unknown --release -- -C strip=symbols -C linker="$PWD/crates/cadview-kernel-wasm/link.sh"
+    src=target/wasm32-unknown-unknown/release/cadview_kernel_wasm.wasm
+    hash=$(sha256sum "$src" | cut -c1-64)
+    file="cadview-kernel-${hash:0:16}.wasm"
+    wire=$(sed -n 's/^pub const WIRE_VERSION: u32 = \([0-9]*\);/\1/p' crates/cadview-core/src/solid/remote.rs)
+    mkdir -p dist/kernel
+    rm -f dist/kernel/cadview-kernel-*.wasm
+    cp "$src" "dist/kernel/$file"
+    printf '{"file":"%s","wire":%s,"bytes":%s,"sha256":"%s"}\n' "$file" "$wire" "$(wc -c < "$src" | tr -d ' ')" "$hash" > dist/kernel/manifest.json
+    echo "dist/kernel/$file ($(wc -c < "$src" | tr -d ' ') bytes, wire $wire)"
+
 # Build embeddable viewer (ESM library, no React)
 build-embed:
     cd web && pnpm exec vite build --config vite.embed.config.ts

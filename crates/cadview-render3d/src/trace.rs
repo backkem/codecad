@@ -22,16 +22,30 @@
 //!   [`TraceSettings::clamp`] times the luminance of a white surface lit by
 //!   the open environment: that removes fireflies (rare paths to the sun
 //!   through glass or off glossy metal) and never touches direct light.
+//! - **Portals.** Where a scene names openings ([`cadview_core::scene3d::Portal`]),
+//!   the dome is also sampled directly through them, weighted against BSDF
+//!   sampling by the power heuristic: an interior lit through a window
+//!   converges instead of waiting for bounces to find the opening.
 //! - **Progress.** Each call adds a pass of samples to a per-pixel running
 //!   sum, one sample at a time in sample order, so the result does not
 //!   depend on how the samples are split into passes; random numbers come
 //!   from PCG hashes of (pixel, sample, seed). A full-screen pass then
 //!   divides by the sample count, applies the exposure and the core's tone
 //!   curve, and writes the target.
+//! - **Denoiser** ([`TraceSettings::denoise`], `denoise.wgsl`): the tracer
+//!   also sums, per pixel, guides it knows exactly for every sample
+//!   (first-hit albedo, normal and position, followed through mirrors and
+//!   clear glass); an edge-avoiding a-trous filter then smooths the
+//!   irradiance (radiance over albedo) where the guides agree and the
+//!   difference is within the pixel's own noise, and multiplies the albedo
+//!   back. Deterministic, a few milliseconds; the running sums are left
+//!   untouched, so [`PathTracer::radiance`] stays the unbiased estimate.
 
 use crate::bvh::{Aabb, Bvh, Node};
 use crate::{Gpu, Progress, Quality, Render3dError, Renderer3d, Target, TARGET_FORMAT};
-use cadview_core::scene3d::{mat_inverse, Frame3d, Mat4, Pattern, RenderMesh, MAX_CLIP_PLANES};
+use cadview_core::scene3d::{
+    mat_inverse, Frame3d, Mat4, Pattern, RenderMesh, MAX_CLIP_PLANES, MAX_PORTALS,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
@@ -55,6 +69,10 @@ pub struct TraceSettings {
     /// Indirect light is clamped at this many times the luminance of a
     /// white surface lit by the open environment; 0 turns the clamp off.
     pub clamp: f64,
+    /// Filter the image with the denoiser (see the module docs). Off by
+    /// default here, so tests see the raw estimate; `cad.render` turns it
+    /// on for presentation renders.
+    pub denoise: bool,
 }
 
 impl Default for TraceSettings {
@@ -62,11 +80,29 @@ impl Default for TraceSettings {
         TraceSettings {
             spp: DEFAULT_SPP,
             seed: 0,
-            max_bounces: 16,
+            // Russian roulette ends most paths long before this; the cap
+            // matters inside glass, where total internal reflection keeps
+            // light going: at 16, a rough glass sphere in the furnace lost
+            // 2 % of its light to the cap.
+            max_bounces: 64,
             clamp: 10.0,
+            denoise: false,
         }
     }
 }
+
+/// Scales of the a-trous filter: steps of 1, 2, 4, 8 and 16 pixels, so a
+/// pixel can draw on neighbours up to 62 pixels away where the guides agree.
+const DENOISE_SCALES: u32 = 5;
+/// The filter's edge-stopping widths: luminance difference in standard
+/// deviations of the two pixels' noise, normal and albedo differences
+/// (unit vectors and linear albedo), and distance from the pixel's tangent
+/// plane in pixel footprints per pixel of offset. The luminance width was
+/// chosen on the tests in `tests/present.rs` (1, 1.5, 2, 3, 4 tried): 1.5
+/// changed a converged image least for the most noise removed; wider ones
+/// steepen soft shadows more and blur more where the guides do not see an
+/// edge.
+const DENOISE_SIGMA: [f32; 4] = [1.5, 0.2, 0.2, 1.0];
 
 /// Where a render's time went.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -90,7 +126,9 @@ pub struct TraceStats {
 }
 
 /// Bytes of one item of `Globals` in `trace.wgsl`.
-const GLOBALS_SIZE: usize = (14 + MAX_CLIP_PLANES) * 16;
+const GLOBALS_SIZE: usize = (14 + MAX_CLIP_PLANES + 2 + 3 * MAX_PORTALS) * 16;
+/// Bytes of the denoiser's guides per pixel (three vec4).
+const AUX_SIZE: u64 = 48;
 const INSTANCE_SIZE: usize = 2 * 64 + 16;
 const MATERIAL_SIZE: usize = 9 * 16;
 const TRI_SIZE: usize = 48;
@@ -194,8 +232,29 @@ struct State {
     bind: wgpu::BindGroup,
     resolve_bind: wgpu::BindGroup,
     samples: u32,
+    /// The denoiser's buffers, when it is on.
+    denoise: Option<DenoiseState>,
     /// Keeps the scene buffers alive with the bind group.
     _buffers: Vec<wgpu::Buffer>,
+}
+
+/// The denoiser's passes for one accumulation: prepare, the a-trous scales,
+/// finish; each a bind group of its own (its own parameters, source and
+/// destination). The result lands in `out`.
+struct DenoiseState {
+    passes: Vec<(DenoiseStage, wgpu::BindGroup)>,
+    out: wgpu::Buffer,
+    /// The resolve pass reading `out`.
+    resolve_bind: wgpu::BindGroup,
+    /// Keeps the ping-pong and parameter buffers alive.
+    _buffers: Vec<wgpu::Buffer>,
+}
+
+#[derive(Clone, Copy)]
+enum DenoiseStage {
+    Prepare,
+    Atrous,
+    Finish,
 }
 
 /// The path tracer: pipelines, the cache of mesh hierarchies and the
@@ -205,6 +264,9 @@ pub struct PathTracer {
     resolve: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     resolve_layout: wgpu::BindGroupLayout,
+    denoise_layout: wgpu::BindGroupLayout,
+    /// prepare, atrous, finish
+    denoise_pipelines: [wgpu::ComputePipeline; 3],
     settings: TraceSettings,
     cache: HashMap<usize, MeshBvh>,
     frame_no: u64,
@@ -245,6 +307,46 @@ fn lum(c: [f64; 3]) -> f64 {
 
 fn mesh_key(m: &Arc<RenderMesh>) -> usize {
     Arc::as_ptr(m) as usize
+}
+
+/// The first `n` vec4 of `buf`, read back. Waits for the GPU.
+fn read_vec4(gpu: Gpu<'_>, buf: &wgpu::Buffer, n: u64) -> Result<Vec<[f32; 4]>, Render3dError> {
+    let size = n * 16;
+    let read = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("render3d_trace_readback"),
+        size,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut enc = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("render3d_trace_readback"),
+        });
+    enc.copy_buffer_to_buffer(buf, 0, &read, 0, size);
+    gpu.queue.submit(Some(enc.finish()));
+    let slice = read.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
+    gpu.device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .map_err(|e| Render3dError::Gpu(format!("poll: {e}")))?;
+    rx.recv()
+        .map_err(|e| Render3dError::Gpu(format!("readback: {e}")))?
+        .map_err(|e| Render3dError::Gpu(format!("readback map: {e}")))?;
+    let out = slice.get_mapped_range().map(|data| {
+        data.as_chunks::<16>()
+            .0
+            .iter()
+            .map(|c| {
+                std::array::from_fn(|k| f32::from_le_bytes(c[4 * k..4 * k + 4].try_into().unwrap()))
+            })
+            .collect::<Vec<_>>()
+    });
+    read.unmap();
+    out.map_err(|e| Render3dError::Gpu(format!("readback view: {e}")))
 }
 
 /// The world box of a mesh-frame box under `model`, padded for the f32
@@ -320,6 +422,17 @@ impl PathTracer {
                 storage(5, true, cs),
                 storage(6, true, cs),
                 storage(7, false, cs),
+                storage(8, false, cs),
+            ],
+        });
+        let denoise_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("render3d_denoise"),
+            entries: &[
+                uniform(cs),
+                storage(1, true, cs),
+                storage(2, true, cs),
+                storage(3, true, cs),
+                storage(4, false, cs),
             ],
         });
         let fs = wgpu::ShaderStages::FRAGMENT;
@@ -342,6 +455,22 @@ impl PathTracer {
             compilation_options: Default::default(),
             cache: None,
         });
+        let denoise_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("render3d_denoise"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("denoise.wgsl").into()),
+        });
+        let denoise_pl = pl(&denoise_layout);
+        let stage = |entry: &str| {
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("render3d_denoise"),
+                layout: Some(&denoise_pl),
+                module: &denoise_shader,
+                entry_point: Some(entry),
+                compilation_options: Default::default(),
+                cache: None,
+            })
+        };
+        let denoise_pipelines = [stage("prepare"), stage("atrous"), stage("finish")];
         let resolve = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("render3d_resolve"),
             layout: Some(&pl(&resolve_layout)),
@@ -372,6 +501,8 @@ impl PathTracer {
             resolve,
             layout,
             resolve_layout,
+            denoise_layout,
+            denoise_pipelines,
             settings: TraceSettings::default(),
             cache: HashMap::new(),
             frame_no: 0,
@@ -381,16 +512,18 @@ impl PathTracer {
         }
     }
 
-    /// The settings for the next frames. A new seed, bounce limit or clamp
-    /// starts the accumulation over; a new sample count only moves the
-    /// target.
+    /// The settings for the next frames. A new seed, bounce limit, clamp or
+    /// denoiser setting starts the accumulation over; a new sample count
+    /// only moves the target.
     pub fn set_settings(&mut self, s: TraceSettings) {
         let old = self.settings;
         self.settings = TraceSettings {
             spp: s.spp.max(1),
             ..s
         };
-        if (old.seed, old.max_bounces, old.clamp) != (s.seed, s.max_bounces, s.clamp) {
+        if (old.seed, old.max_bounces, old.clamp, old.denoise)
+            != (s.seed, s.max_bounces, s.clamp, s.denoise)
+        {
             self.reset();
         }
     }
@@ -421,44 +554,31 @@ impl PathTracer {
         let Some(st) = &self.state else {
             return Ok(Vec::new());
         };
-        let size = st.width as u64 * st.height as u64 * 16;
-        let read = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("render3d_trace_readback"),
-            size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let mut enc = gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("render3d_trace_readback"),
-            });
-        enc.copy_buffer_to_buffer(&st.accum, 0, &read, 0, size);
-        gpu.queue.submit(Some(enc.finish()));
-        let slice = read.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        gpu.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(|e| Render3dError::Gpu(format!("poll: {e}")))?;
-        rx.recv()
-            .map_err(|e| Render3dError::Gpu(format!("readback: {e}")))?
-            .map_err(|e| Render3dError::Gpu(format!("readback map: {e}")))?;
         let n = st.samples.max(1) as f32;
-        let out = slice.get_mapped_range().map(|data| {
-            data.as_chunks::<16>()
-                .0
-                .iter()
-                .map(|c| {
-                    let f = |k: usize| f32::from_le_bytes(c[4 * k..4 * k + 4].try_into().unwrap());
-                    [f(0) / n, f(1) / n, f(2) / n]
-                })
-                .collect::<Vec<_>>()
-        });
-        read.unmap();
-        out.map_err(|e| Render3dError::Gpu(format!("readback view: {e}")))
+        Ok(
+            read_vec4(gpu, &st.accum, st.width as u64 * st.height as u64)?
+                .into_iter()
+                .map(|c| [c[0] / n, c[1] / n, c[2] / n])
+                .collect(),
+        )
+    }
+
+    /// The denoised linear radiance per pixel of the last frame (before
+    /// exposure and tone curve), or `None` when the denoiser is off or no
+    /// frame was drawn. Waits for the GPU.
+    pub fn denoised_radiance(&self, gpu: Gpu<'_>) -> Result<Option<Vec<[f32; 3]>>, Render3dError> {
+        let Some(st) = &self.state else {
+            return Ok(None);
+        };
+        let Some(dn) = &st.denoise else {
+            return Ok(None);
+        };
+        Ok(Some(
+            read_vec4(gpu, &dn.out, st.width as u64 * st.height as u64)?
+                .into_iter()
+                .map(|c| [c[0], c[1], c[2]])
+                .collect(),
+        ))
     }
 
     /// Make sure every mesh of `frame` has its hierarchy; drop stale ones.
@@ -522,6 +642,28 @@ impl PathTracer {
         if frame.clip_mode == cadview_core::scene3d::ClipMode::All {
             flags |= 4;
         }
+        if self.settings.denoise {
+            flags |= 8;
+        }
+        let sweep_on = frame.ground.is_some() && frame.environment.dome.sweep;
+        if sweep_on {
+            flags |= 16;
+        }
+        let portals: Vec<_> = frame.portals.iter().take(MAX_PORTALS).collect();
+        if !portals.is_empty() {
+            flags |= 32;
+        }
+        // Shadow rays look through transmissive parts only if there are any.
+        if frame
+            .items
+            .iter()
+            .any(|it| it.material.transmission > 0.0 && it.material.metallic < 1.0)
+        {
+            flags |= 64;
+        }
+        if frame.ground.and_then(|gr| gr.material).is_some() {
+            flags |= 128;
+        }
         let clips = frame.clip_planes.len().min(MAX_CLIP_PLANES) as u32;
         push_u32(
             &mut g,
@@ -567,13 +709,20 @@ impl PathTracer {
         } else {
             0.0
         };
-        push_f32(&mut g, &[clamp as f32, 0.0, 0.0, 0.0]);
+        // y: aerial haze distance of the directly seen ground (0 for none).
+        let haze = if frame.ground.is_some() {
+            frame.environment.dome.haze.max(0.0)
+        } else {
+            0.0
+        };
+        push_f32(&mut g, &[clamp as f32, haze as f32, 0.0, 0.0]);
         let instances = frame
             .items
             .iter()
             .filter(|it| !it.mesh.triangles.is_empty())
             .count() as u32;
-        push_u32(&mut g, &[instances, 0, 0, 0]);
+        // y: the ground's material, after the items' (flag 128).
+        push_u32(&mut g, &[instances, frame.items.len() as u32, 0, 0]);
         for i in 0..MAX_CLIP_PLANES {
             let c = frame
                 .clip_planes
@@ -582,16 +731,52 @@ impl PathTracer {
                 .unwrap_or([0.0, 0.0, 0.0, -1.0]);
             push_f32(&mut g, &c.map(|v| v as f32));
         }
+        // The open ground's radiance: its albedo times the level
+        // irradiance `e` (dome and sun, closed form) over pi.
+        let sweep = if sweep_on {
+            let k = std::f64::consts::PI;
+            let gc = frame.ground.map_or([0.0; 3], |gr| gr.color);
+            v4(
+                std::array::from_fn(|i| gc[i].clamp(0.0, 1.0) * e[i] / k),
+                cadview_core::scene3d::SWEEP_ELEVATION_DEG
+                    .to_radians()
+                    .sin(),
+            )
+        } else {
+            [0.0; 4]
+        };
+        push_f32(&mut g, &sweep);
+        push_u32(&mut g, &[portals.len() as u32, 0, 0, 0]);
+        for i in 0..MAX_PORTALS {
+            match portals.get(i) {
+                Some(p) => {
+                    push_f32(&mut g, &v4([p.origin.x, p.origin.y, p.origin.z], p.area()));
+                    push_f32(&mut g, &v4([p.u.x, p.u.y, p.u.z], 0.0));
+                    push_f32(&mut g, &v4([p.v.x, p.v.y, p.v.z], 0.0));
+                }
+                None => push_f32(&mut g, &[0.0; 12]),
+            }
+        }
         debug_assert_eq!(g.len(), GLOBALS_SIZE);
         g
     }
 
     /// Per-item materials, in frame order.
+    /// Per-item materials, in frame order, then the ground's if it has one
+    /// (at index `frame.items.len()`).
     fn materials(frame: &Frame3d<'_>) -> Vec<u8> {
-        let mut out = Vec::with_capacity(frame.items.len().max(1) * MATERIAL_SIZE);
-        for it in &frame.items {
-            let m = it.material;
-            let pf = it.pattern;
+        let mut out = Vec::with_capacity((frame.items.len() + 1) * MATERIAL_SIZE);
+        let entries = frame
+            .items
+            .iter()
+            .map(|it| (it.material, it.pattern, it.section_color))
+            .chain(
+                frame
+                    .ground
+                    .and_then(|g| g.material)
+                    .map(|(m, pf)| (m, pf, [0.0; 3])),
+            );
+        for (m, pf, section) in entries {
             let (kind, scale, color, strength, warp, aniso, circular) = match m.pattern {
                 Pattern::Flat => (0.0, 1.0, [0.0; 3], 0.0, 0.0, 0.0, 0.0),
                 Pattern::Bands(b) => (1.0, b.spacing, b.color, b.strength, b.warp, 0.0, 0.0),
@@ -604,6 +789,7 @@ impl PathTracer {
                     b.anisotropy,
                     if b.circular { 1.0 } else { 0.0 },
                 ),
+                Pattern::Mottle(mo) => (3.0, mo.scale, mo.color, mo.strength, 0.0, 0.0, 0.0),
             };
             push_f32(&mut out, &v4(m.base_color, m.metallic));
             push_f32(
@@ -623,7 +809,7 @@ impl PathTracer {
             out.extend_from_slice(&pf.seed.to_le_bytes());
             push_f32(&mut out, &v4(color, strength));
             push_f32(&mut out, &[warp as f32, aniso as f32, circular, 0.0]);
-            push_f32(&mut out, &v4(it.section_color, 0.0));
+            push_f32(&mut out, &v4(section, 0.0));
         }
         if out.is_empty() {
             out.resize(MATERIAL_SIZE, 0);
@@ -760,6 +946,19 @@ impl PathTracer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let denoise = self.settings.denoise;
+        // The denoiser's guides: a placeholder when it is off (the shader
+        // does not touch it then).
+        let aux = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("render3d_trace_aux"),
+            size: if denoise {
+                w as u64 * h as u64 * AUX_SIZE
+            } else {
+                AUX_SIZE
+            },
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
         fn entry(binding: u32, b: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
             wgpu::BindGroupEntry {
                 binding,
@@ -778,12 +977,77 @@ impl PathTracer {
                 entry(5, &inst_buf),
                 entry(6, &mat_buf),
                 entry(7, &accum),
+                entry(8, &aux),
             ],
         });
         let resolve_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("render3d_resolve"),
             layout: &self.resolve_layout,
             entries: &[entry(0, &resolve_buf), entry(1, &accum)],
+        });
+        let denoise = denoise.then(|| {
+            let image = |label| {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: w as u64 * h as u64 * 16,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: false,
+                })
+            };
+            let (a, b) = (image("render3d_denoise_a"), image("render3d_denoise_b"));
+            // prepare -> a; scales alternate a -> b -> a ...; finish -> a.
+            let mut stages = vec![(DenoiseStage::Prepare, 0u32)];
+            stages.extend((0..DENOISE_SCALES).map(|k| (DenoiseStage::Atrous, 1u32 << k)));
+            stages.push((DenoiseStage::Finish, 0));
+            let mut params = Vec::new();
+            let mut passes = Vec::new();
+            let mut in_a = false; // where the latest result is
+            for (stage, step) in stages {
+                let mut p = Vec::with_capacity(32);
+                push_u32(&mut p, &[w, h, step, 0]);
+                push_f32(&mut p, &DENOISE_SIGMA);
+                let pb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("render3d_denoise_params"),
+                    contents: &p,
+                    usage: wgpu::BufferUsages::UNIFORM,
+                });
+                // The source is the latest result; prepare reads none (b is
+                // bound as a placeholder). Finish ends in a.
+                let to_a = match stage {
+                    DenoiseStage::Prepare => true,
+                    DenoiseStage::Atrous => !in_a,
+                    DenoiseStage::Finish => true,
+                };
+                let (src, dst) = if to_a { (&b, &a) } else { (&a, &b) };
+                // An odd number of scales ends in b, so finish reads b.
+                debug_assert!(!(matches!(stage, DenoiseStage::Finish) && in_a));
+                let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("render3d_denoise"),
+                    layout: &self.denoise_layout,
+                    entries: &[
+                        entry(0, &pb),
+                        entry(1, &accum),
+                        entry(2, &aux),
+                        entry(3, src),
+                        entry(4, dst),
+                    ],
+                });
+                in_a = to_a;
+                params.push(pb);
+                passes.push((stage, bg));
+            }
+            let resolve_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("render3d_resolve_denoised"),
+                layout: &self.resolve_layout,
+                entries: &[entry(0, &resolve_buf), entry(1, &a)],
+            });
+            params.push(b);
+            DenoiseState {
+                passes,
+                out: a,
+                resolve_bind,
+                _buffers: params,
+            }
         });
         #[cfg(not(target_arch = "wasm32"))]
         let upload_ms = t.elapsed().as_secs_f64() * 1e3;
@@ -811,7 +1075,16 @@ impl PathTracer {
             bind,
             resolve_bind,
             samples: 0,
-            _buffers: vec![tlas_buf, blas_buf, tris_buf, normals_buf, inst_buf, mat_buf],
+            denoise,
+            _buffers: vec![
+                tlas_buf,
+                blas_buf,
+                tris_buf,
+                normals_buf,
+                inst_buf,
+                mat_buf,
+                aux,
+            ],
         });
     }
 
@@ -866,7 +1139,8 @@ impl Renderer3d for PathTracer {
                 .map(|it| it.mesh.triangles.len())
                 .sum()
         };
-        if (tris * TRI_SIZE) as u64 > limit || w as u64 * h as u64 * 16 > limit {
+        let per_pixel = if self.settings.denoise { AUX_SIZE } else { 16 };
+        if (tris * TRI_SIZE) as u64 > limit || w as u64 * h as u64 * per_pixel > limit {
             return Err(Render3dError::InvalidOptions(format!(
                 "the scene ({tris} triangles at {w}x{h}) exceeds the device's {limit}-byte buffer limit"
             )));
@@ -918,10 +1192,15 @@ impl Renderer3d for PathTracer {
                 self.pass_spp = ((PASS_MS / per) as u32).clamp(1, MAX_PASS_SPP);
             }
         }
-        // Resolve: mean, exposure, tone curve.
+        // Resolve: mean, exposure, tone curve; from the denoiser's result
+        // (already a mean) when it is on.
         let mut r = Vec::with_capacity(32);
         push_u32(&mut r, &[w, h, 0, 0]);
-        let scale = frame.exposure / st.samples.max(1) as f64;
+        let scale = if st.denoise.is_some() {
+            frame.exposure
+        } else {
+            frame.exposure / st.samples.max(1) as f64
+        };
         push_f32(&mut r, &[scale as f32, 0.0, 0.0, 0.0]);
         gpu.queue.write_buffer(&st.resolve_buf, 0, &r);
         let mut enc = gpu
@@ -929,6 +1208,26 @@ impl Renderer3d for PathTracer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("render3d_resolve"),
             });
+        if let Some(dn) = &st.denoise {
+            for (stage, bg) in &dn.passes {
+                let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("render3d_denoise"),
+                    timestamp_writes: None,
+                });
+                let k = match stage {
+                    DenoiseStage::Prepare => 0,
+                    DenoiseStage::Atrous => 1,
+                    DenoiseStage::Finish => 2,
+                };
+                pass.set_pipeline(&self.denoise_pipelines[k]);
+                pass.set_bind_group(0, bg, &[]);
+                pass.dispatch_workgroups(w.div_ceil(8), h.div_ceil(8), 1);
+            }
+        }
+        let resolve_bind = st
+            .denoise
+            .as_ref()
+            .map_or(&st.resolve_bind, |dn| &dn.resolve_bind);
         {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("render3d_resolve"),
@@ -947,7 +1246,7 @@ impl Renderer3d for PathTracer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.resolve);
-            pass.set_bind_group(0, &st.resolve_bind, &[]);
+            pass.set_bind_group(0, resolve_bind, &[]);
             pass.draw(0..3, 0..1);
         }
         gpu.queue.submit(Some(enc.finish()));
@@ -972,7 +1271,7 @@ mod tests {
 
     #[test]
     fn layouts_match_the_shader() {
-        assert_eq!(GLOBALS_SIZE, 288);
+        assert_eq!(GLOBALS_SIZE, 512);
         assert_eq!(INSTANCE_SIZE, 144);
         assert_eq!(MATERIAL_SIZE, 144);
         assert_eq!(std::mem::size_of::<[f32; 12]>(), TRI_SIZE);

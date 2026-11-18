@@ -31,11 +31,11 @@ use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::kernel::{
-    Aabb3, Closest, EvalError, Interference, MassProps, SolidKernel, TightBox, ToolResolver,
-    TriMesh, Validity,
+    Aabb3, BrepTopology, Closest, EvalError, Interference, MassProps, Ray3, RayHits, Silhouettes,
+    SolidKernel, TightBox, ToolResolver, TriMesh, Validity,
 };
 use super::part::{def_to_bytes, tool_defs};
-use super::types::{DefId, Feature, PartDef, Placement};
+use super::types::{DefId, Feature, PartDef, Placement, Vec3};
 use crate::scene3d::{RenderMesh, DEFAULT_CREASE_DEG};
 
 /// The message of every geometry query in a build without a kernel.
@@ -61,6 +61,20 @@ pub trait Solid: Send + Sync {
     fn tessellate(&self, chord: f64) -> Result<TriMesh, EvalError>;
     /// For an evaluator to recognise its own solids.
     fn as_any(&self) -> &dyn Any;
+    /// Exact faces and edges ([`SolidKernel::topology`]).
+    fn topology(&self) -> Result<BrepTopology, EvalError> {
+        Err(EvalError::unsupported(None, "edge and face geometry"))
+    }
+    /// Silhouettes for a view ([`SolidKernel::silhouettes`]).
+    fn silhouettes(&self, view: Vec3) -> Result<Silhouettes, EvalError> {
+        let _ = view;
+        Err(EvalError::unsupported(None, "silhouettes"))
+    }
+    /// Exact ray hits ([`SolidKernel::ray_hits`]).
+    fn ray_hits(&self, rays: &[Ray3]) -> Result<Vec<Result<RayHits, EvalError>>, EvalError> {
+        let _ = rays;
+        Err(EvalError::unsupported(None, "ray hits"))
+    }
 }
 
 /// What a shell supplies: something that turns a definition into a
@@ -148,6 +162,15 @@ where
     }
     fn as_any(&self) -> &dyn Any {
         self
+    }
+    fn topology(&self) -> Result<BrepTopology, EvalError> {
+        self.kernel.topology(&self.brep)
+    }
+    fn silhouettes(&self, view: Vec3) -> Result<Silhouettes, EvalError> {
+        self.kernel.silhouettes(&self.brep, view)
+    }
+    fn ray_hits(&self, rays: &[Ray3]) -> Result<Vec<Result<RayHits, EvalError>>, EvalError> {
+        self.kernel.ray_hits(&self.brep, rays)
     }
 }
 
@@ -291,6 +314,10 @@ struct Entry {
     local_box: Option<Result<TightBox, EvalError>>,
     /// Meshes by chord (f64 bits).
     meshes: HashMap<u64, Result<Arc<RenderMesh>, EvalError>>,
+    /// Plain triangle meshes by chord (f64 bits), for numeric oracles.
+    trimeshes: HashMap<u64, Result<Arc<TriMesh>, EvalError>>,
+    /// Exact faces and edges.
+    topology: Option<Result<Arc<BrepTopology>, EvalError>>,
     used: u64,
 }
 
@@ -409,6 +436,8 @@ impl Solids {
                 mass: None,
                 local_box: None,
                 meshes: HashMap::new(),
+                trimeshes: HashMap::new(),
+                topology: None,
                 used,
             },
         );
@@ -500,6 +529,50 @@ impl Solids {
             e.meshes.insert(bits, m.clone());
         }
         m
+    }
+
+    /// The triangle mesh of `def` at `chord` in its own frame (cached per
+    /// chord), in double precision: what a numeric oracle casts rays at.
+    pub fn trimesh(
+        &self,
+        defs: &BTreeMap<DefId, PartDef>,
+        def: &PartDef,
+        chord: f64,
+    ) -> Result<Arc<TriMesh>, EvalError> {
+        let solid = self.solid(defs, def)?;
+        let key = content_key(defs, def);
+        let bits = chord.to_bits();
+        if let Some(Some(m)) = self
+            .lock()
+            .entries
+            .get(&key)
+            .map(|e| e.trimeshes.get(&bits).cloned())
+        {
+            return m;
+        }
+        let m = solid.tessellate(chord).map(Arc::new);
+        if let Some(e) = self.lock().entries.get_mut(&key) {
+            e.trimeshes.insert(bits, m.clone());
+        }
+        m
+    }
+
+    /// The exact faces and edges of `def` in its own frame (cached).
+    pub fn topology(
+        &self,
+        defs: &BTreeMap<DefId, PartDef>,
+        def: &PartDef,
+    ) -> Result<Arc<BrepTopology>, EvalError> {
+        let solid = self.solid(defs, def)?;
+        let key = content_key(defs, def);
+        if let Some(Some(t)) = self.lock().entries.get(&key).map(|e| e.topology.clone()) {
+            return t;
+        }
+        let t = solid.topology().map(Arc::new);
+        if let Some(e) = self.lock().entries.get_mut(&key) {
+            e.topology = Some(t.clone());
+        }
+        t
     }
 }
 

@@ -654,6 +654,288 @@ harness, the denoiser, HDRI environments, texture sets and the look gate
   Low-discrepancy sampling (independent random numbers today). The look
   gate against Cycles (3D5b). Examples 9 and 10.
 
+### 3D5a, second slice: what landed (2026-11-18)
+
+A denoiser, true rough glass, glass that lets the sun through, portals for
+interiors, a studio backdrop without a horizon line, a placed camera, and
+examples 9 (room) and 10 (still life). Evidence is in
+`cargo test -p cadview-render3d --release --test present` (one GPU
+machine); every first-slice test passes unchanged in substance.
+
+- **Denoiser** (`denoise.wgsl`, `TraceSettings::denoise`, render option
+  `denoise`, on by default in `cad.render`). The tracer sums per pixel what
+  it knows exactly for every sample: first-hit albedo, normal and
+  position, followed through mirrors and clear glass. An edge-avoiding
+  a-trous filter (5 scales, 1 to 16 px) smooths the irradiance (radiance
+  over albedo) where those agree and where the brightness difference is
+  within the two pixels' own noise, then multiplies the albedo back, so
+  grain and streak patterns stay exact. Deterministic; a few ms at
+  960 x 640. Tests: on a 4096-sample studio scene it changes 0.46 display
+  levels (root mean square), more than 2 levels on 0.4 % of pixels, and the
+  change brings the image closer to the truth (estimated from two other
+  references). At 64 samples, with direct light and sky, it cuts the error
+  against a 4096-sample reference 2.6 times; a box edge stays 0.77 px wide
+  (10 to 90 %), and a soft shadow edge goes from 1.74 to 1.61 px (it
+  steepens a little, never blurs). On the small studio scene with a polished
+  sphere it cuts the display error 1.7 times but the linear error only 1.24
+  times: rare bright paths (the key light focused by the sphere) are spread,
+  not removed. The furnace and irradiance tests run without it.
+- **Default samples stay 1024.** Denoised, 256 samples look converged on
+  every example looked at (01, 03, 06, 10; 01 and 06 measured: 1.25 and
+  1.00 levels against a 4096-sample raw reference, like 1024 raw); 1024
+  denoised is 0.86 and 0.67. The room uses 512 (see below).
+- **Material paths.** The clear coat in the furnace loses 1.1 % (coat
+  roughness 0.05) and 2.4 % (0.5), single-scattering loss, no gain. Rough
+  glass lost 31 % at roughness 0.6: a microfacet that sends light the wrong
+  way now is drawn again and no shadowing weight is applied, so the energy
+  goes on along the lobe (0.04 % from white in the furnace, roughness 0.3
+  and 0.6; the lobe's shape at grazing angles is approximate). The bounce
+  cap went from 16 to 64 events (light trapped in glass hit it). An emitter
+  is seen at its own radiance exactly; a plate lit by a sphere of known
+  size agrees with `rho L R^2 h / d^3` within 0.6 % at 16384 samples.
+  Emitters are still found by BSDF sampling only, so they converge slowly.
+- **Glass passes the sun.** A shadow ray now crosses glass, attenuated by
+  Fresnel and tint and not bent; paths that reach the sun through glass
+  from a surface that sampled it are not counted again. A pane casts 0.9232
+  of the open floor's light against the closed form 0.9216. A thick glass
+  body's focused caustic is not drawn (the clamp removed most of it before;
+  the glass sphere in the sun now loses 0.13 % to the clamp, was 6.6 %).
+- **Portals** (`Portal` in `scene3d.rs`, render option `portals`): up to
+  four rectangles through which the dome is sampled directly, weighted
+  against BSDF sampling. A closed room lit by a uniform sky through a
+  ceiling opening: the floor matches the form factor within 0.02 % at 256
+  samples with the portal, its pixels spread 0.22 % against 27 % without;
+  16384 samples without agree within 0.2 %. In example 9 they help less
+  (raw noise 7.2 to 6.1 levels at 256 samples): there the noise is the sunlit
+  floor's light bouncing onto the walls.
+- **Studio backdrop** (`Environment::sweep`, on for "studio"): what is seen
+  just above the horizon blends from the open ground's own radiance into
+  the dome over 20 degrees, so a level view has no floor-to-wall line (rows
+  either side of the horizon differ by 0.2 %, were 70 %); lighting is
+  unchanged.
+- **Placed camera** (`Camera3d::placed`; render option `camera: {eye,
+  target, fov | height, up}`, `fit`): perspective with a field of view or
+  orthographic with a height, any up direction (default +Z, where the old
+  rule is kept bit for bit), both qualities, fitted only if asked. A known
+  point lands within 0.06 px (presentation) and 0.15 px (working) of its
+  closed-form pixel, perspective and orthographic; from eye height the
+  horizon is at row 80.786 against the closed form 80.788.
+- **Ground material** (`Ground::material`, option `ground.material`) with
+  a new generic pattern, `Mottle` (two octaves of soft value noise toward a
+  second colour): the tracer's ground albedo equals the core's to 0.0002;
+  `materials.js` has `lawn`. **Aerial haze** (`Environment::haze`, 150 m
+  for "sky"): ground seen far away fades into the horizon colour; the rows
+  either side of the horizon differ by 6.3 %, were 76 %. Example 11 gained
+  an eye-height view on a lawn (its picture unchanged).
+- **Determinism.** The same accumulation filters to the same pixels. Two
+  identical 4096-sample renders can differ in the last bit of the raw sums
+  in a few hundred pixels (GPU arithmetic, seen with this slice's shader);
+  no 8-bit pixel changed in the four compared.
+- **Examples.** 10, the still life: 11 parts, 38 checks (Pappus volumes of
+  every revolved profile, no arc's circle crossing the axis, everything on
+  the table, no overlaps); camera render 5.3 s at 1024 samples. 9, the
+  room: 07's living room with the bookshelf and stool built by
+  `lib/bookshelf.js` and `lib/stool.js` (03 and 08 now use them; their
+  pictures are byte-identical), 25 parts, 17 checks; interior 17 s at 512
+  samples. Details and what still looks wrong are in
+  [3d-examples.md](3d-examples.md).
+- **Open.** Next-event estimation of emitters and of bright surfaces (the
+  room's sun patch). Caustics. Brushing that follows a swept part's own
+  direction. HDR environments. Haze on parts (only the ground fades).
+
+### 3D in the browser: 3D2b's viewport and 3D5a's browser side (2026-11-18)
+
+The browser shows parts in both render modes, from the same core code as
+the server, and evaluates them itself once it loads the kernel module.
+Design: [3d-design.md](3d-design.md) section 14. Reference:
+`docs/api-surface.md`, "Solid parts in the browser".
+
+- **Viewport** (`cadview-web/src/view3d.rs`). A canvas with its own surface
+  on the page's one `GpuContext`; demand-driven frames; drag to orbit,
+  right- or shift-drag to pan, wheel to zoom; named views, fit, orthographic
+  and perspective. The scene is `solid::scene::parts_scene`, the same call
+  and options as `cad.render`.
+- **Working mode**: the raster backend, one frame per change.
+- **Presentation mode**: the path tracer, progressive. The working render
+  is shown while the camera moves; once still, samples are added in
+  batches, each submitted only after the GPU finished the last and sized to
+  about 24 ms of GPU time; accumulation restarts on any change and stops at
+  the target. A first sample slower than 40 ms traces at half resolution;
+  the target is 30 s of work at the measured speed, 16 to 256 samples.
+- **UI.** A 2D/3D switch per tab when the document has parts, and
+  Working/Presentation, named views, Ortho/Persp and Fit in the 3D view,
+  with a sample counter. Without WebGPU the 3D view says so in words.
+- **Prebaked scenes** (`solid/baked.rs`, `cad.bake3d`, `GET /api/bake3d`):
+  meshes, exact boxes and volumes, placements, attributes and render
+  options; read as an evaluator, so `parts()` on a bake gives the kernel's
+  numbers bit for bit. The embed viewer shows one with
+  `<codecad-viewer scene="part.bake3d">` and a mode switch; the app opens
+  one with `?scene=` or a dropped `.bake3d`. The gallery bakes to 17 to
+  139 KB each (3 to 58 KB gzipped).
+- **The app with a server** asks the server for the bake of the current
+  document (an interim source until the page loads the kernel by default)
+  and asks again when the parts change.
+- **The kernel module** (`crates/cadview-kernel-wasm`, `just
+  build-kernel`): arris behind core's byte interface (`solid/remote.rs`),
+  4.33 MB, 1.42 MB gzipped, fetched only by the first call that needs
+  geometry or `await cad.loadKernel()`, content-hashed with a manifest and a
+  wire version checked three times. Calls are synchronous on the page's
+  thread, like the script API. A test reads the evaluator traits and fails
+  for any method that does not cross the boundary.
+- **Evidence** (headless Chromium on its software GPU, SwiftShader; the
+  native references rendered by the same code on the same software GPU
+  through Vulkan, `cargo run -p cadview-render3d --example bake`):
+  - the bookshelf, the pipe flange and the play tower frame, prebaked, in
+    the embed viewer: working and presentation (16 samples, full
+    resolution, seed 0) both equal the native render on every pixel (`pngdiff`: 0 of 614 400 over 8/255; root mean square 0.00);
+  - one GPU device per page: the embed viewer, and the app with a 2D tab
+    and a 3D tab, each log one `GPU device created`;
+  - idle: no frame and no animation-frame callback in 3 s, in working mode
+    and after the sample target;
+  - orbit: a 120 px drag turns the camera 55 degrees, draws 14 working
+    frames while moving and restarts the accumulation;
+  - network: the prebaked page fetches the page, the viewer script, the
+    wasm-bindgen glue, the main module and the 3.6 KB bake, nothing else;
+    the app with a server fetched `/api/bake3d` once (19 KB) for its 3D
+    tab and nothing of the kernel; a page without a server fetched nothing
+    of the kernel until the first call that needed geometry, which was
+    refused with the call to await and started one fetch of the manifest
+    and the module (1.43 MB on the wire, 0.3 s on loopback, 0.12 s of it
+    to compile), and nothing after;
+  - kernel equivalence: the 3D1a assembly script run in that page gives
+    all 120 numbers (volume, box, centroid of twelve parts) bit-identical
+    to the server's, the same ids and `describe()`, and identical results
+    of `overlapping3d`, `pairsWithin3d` and `distance3d`; then both modes
+    draw it from the page's own geometry.
+- **Times on the software GPU** (not real-GPU numbers): bookshelf first
+  frame submitted 1.4 to 10 s after navigation (module download and
+  compile, device; on a cold run SwiftShader's shader compilation made the
+  first raster frame take 9.2 s of GPU time); warm working frames 170 to 183 ms of GPU time, 0.4 to 0.9 ms of
+  CPU; one path-traced sample at 960 x 640 1.6 to 1.7 s, so the adaptive
+  view traced at half resolution and reached its target of 38 to 64
+  samples in 18 to 28 s (three runs); 16 samples at full resolution took
+  25 to 35 s. The kernel page, 1000 x 688: 82 samples at half resolution
+  in 33 s. On this machine's GPU,
+  natively, the bookshelf's 256 samples take 0.5 s (3D5a); a real browser
+  GPU was not measured.
+- **Sizes.** Main module 25.33 MB before, 25.94 MB after (8.53 to 8.71 MB
+  gzipped, +177 KB): the raster, the tracer, the view, the bake reader and
+  the kernel proxy; the tracer alone is 97 KB raw, 29 KB gzipped. The embed viewer's script 28.5 to 38.7 KB.
+- **Also fixed.** The page applied the server's echo of its own empty
+  flushes (two zero bytes, sent after every read-only call such as the
+  layer panel's poll) as a document change: a rebuild and a frame in every
+  view of the session, about once a second. Empty updates are skipped now.
+- **On the combined tree** (with 3D3a's projection and 3D5a's second
+  slice): the bookshelf's working render, and its presentation at 16
+  samples both denoised and raw, equal native on every pixel; one device;
+  flat frame counters; the prebaked page fetches no kernel. The assembly
+  still matches the server bit for bit, and `cad.project` (front and iso
+  of a plate with a hole and a pin) through the page's kernel gives the
+  server's 34 entities, 419 numbers identical: `topology`, `silhouettes`
+  and `ray_hits` cross the boundary (wire version 2). The view follows the
+  denoiser (on unless `denoise: false`, as `cad.render`) and a placed
+  `camera`. Natively on a discrete GPU, against 4096 samples: 16 denoised
+  samples leave 1.63 levels of noise (RMS), between 64 raw (2.38) and 256
+  raw (1.21); 64 denoised leave 0.97. So a clean image needs about four
+  to eight times fewer samples. The second slice's tracer is slower per
+  sample on the software GPU (6.6 s at 960 x 640, was 1.7 s), so the
+  adaptive view there settles on 16 samples at half resolution (41 s);
+  each denoised batch costs about 1 s more there.
+- **Open.** The kernel runs on the page's thread (a heavy part blocks for
+  a fraction of a second); a Worker needs cross-origin isolation or JSPI.
+  The projection's trait methods (`topology`, `silhouettes`, `ray_hits`)
+  got their requests in 3D3a (wire version 2). Two
+  3D tabs at once (only the active tab has a canvas), the perf harness
+  (`web/tests/perf3d.mjs`) and the 3D2b/3D5a time gates on GPU-A and GPU-B,
+  zoom-adaptive meshes (the bake's one chord serves every zoom), lines mode,
+  a part list in the layer panel, bakes committed for the site, and the
+  site's 3D gallery. The release and site builds do not build the kernel
+  module (no CI change here), so they show bakes and server bakes only.
+
+### 3D3a: what landed (2026-11-18)
+
+Projected views with hidden lines as exact 2D entities. Reference:
+`docs/api-surface.md`, "Projected views"; design section 7.
+
+- **The call.** `cad.project({view | from+up, parts, origin, at, scale,
+  hidden, silhouettes, smooth, layers, partAttrs, name})` makes one block
+  definition per view (true size) and one insert at `at` scaled by
+  `scale`; projecting again with the same name replaces the block and moves
+  its insert. Every entity carries `partId`, `edge` (visible or hidden) and
+  `curve` (edge or silhouette). The script names the layers; a layer the
+  call creates gets plain defaults. `cad.viewPoints` (and `toSheet` on the
+  typed result) maps 3D points to the sheet. Views by the names `cad.render`
+  uses, or by a direction. First- and third-angle arrangement is script
+  code (`examples/3d/lib/views.js`). Not built from the row above: the
+  `3D_*` layer names (no layer has meaning in the core), `3D_CENTER` axes,
+  the committed golden JSON (the numbers are in the tests instead), and the
+  Truck adapter (dropped in 3D0b).
+- **Kernel capabilities.** Optional `SolidKernel::topology` (faces with
+  closed-form surfaces, edges with exact curves: line, circle, ellipse,
+  rational B-spline; the faces each bounds; seam and smooth flags),
+  `silhouettes` (core's closed forms in `solid/silhouette.rs` for
+  cylinders, elliptic cylinders, cones, spheres, and tori seen along or
+  across their axis, clipped by the kernel to each face, the ends moved
+  onto the face's boundary edge by Newton's method) and `ray_hits` (arris
+  `ray_fire` on the exact faces). Defaults refuse. They cross the browser's
+  kernel boundary too (`solid/remote.rs`, wire version 2).
+- **Hidden lines** (`solid/hlr.rs`, `solid/oracle.rs`): exact projection;
+  splits at crossings in the view (closed form where one curve is straight,
+  Newton otherwise), at end points of other curves lying on a curve, and at
+  the folds of conics seen edge on; one oracle question per piece; merge on
+  carriers with visible winning. The oracle is a mesh (chord max(0.01 mm,
+  1e-5 of the size)) in a bounding volume hierarchy; it is trusted only
+  away from the mesh's outline in the view (contour sides between triangles
+  facing opposite ways), otherwise four rays 8 chords to the side decide
+  (the rule the exact fallback uses for rays inside a face), and failing
+  that the kernel's exact rays. Nothing tessellated is stored or drawn.
+- **Evidence** (`cadview-solid/tests/projection.rs`, arris). A 100 x 60 x 10
+  plate with a 10 mm hole and an 8 mm slot: top, front and right views equal
+  hand-computed lines, circle and arcs with a worst error of 0 mm; the side
+  view's four hidden lines (y = 25, 26, 34, 35) are there with hidden lines
+  on and absent with them off. Iso view of a 10 mm hole: one ellipse,
+  semi-axes 5.000000000000001 and 2.886751345948129 against 5 and 5 / sqrt 3
+  (see the note below). A cylinder of radius 7: its silhouettes are the
+  lines x = -7 and 7 exactly; turned 90 degrees, off by 7e-15 mm. The
+  oracle against exact rays on all 13 corpus parts in six views: 1710
+  pieces, 5130 samples at 5, 50 and 95 % of each piece, 0 disagree (at 2 and
+  98 %, 4 samples disagree, all next to the fold of an edge-on circle at
+  the top of a bead, where the ray is 0.007 mm inside the circle and the
+  kernel marks its own hits as grazes). The same view twice, and in a fresh
+  document, gives the same block bytes. Harness (`capabilities.rs`, against
+  the certified reference): 2026 edges of 117 parts on the boundary; 818
+  silhouette curves in four views on the boundary with |n . v| at most
+  2.9e-12; 11 700 rays whose hits lie on the boundary, 2902 segments
+  between crossings inside or outside as the reference says. Scoreboards
+  unchanged. Server: the bookshelf's front, left, top and iso views saved
+  to DWG and reloaded hold only LINE (56, 44, 22, 195), ARC (0, 1, 2, 0) and
+  ELLIPSE (0, 0, 0, 8), every one with its `partId`.
+- **The iso ellipse's minor axis.** The ladder row asked for semi-axes 5 and
+  5 cos(35.264 degrees) = 4.08. A circle seen at 54.736 degrees from its
+  normal has minor semi-axis 5 cos(54.736) = 5 sin(35.264) = 5 / sqrt 3 =
+  2.887; the test checks that.
+- **Times** (release, one machine): the example's pillow block 26 to 42 ms
+  per principal view and 282 ms for the iso view; the bookshelf 18 to 58
+  ms per view (debug); the play tower, now 142 parts, 56, 39 and 65 ms for
+  front, right and top and 667 ms for the iso view (2404 entities; 96 % of
+  it classification, 12 exact rays). Before the outline-only margin and the
+  side rays the pillow block took minutes: an exact arris ray on it costs
+  about 55 ms (it rebuilds its face index per ray).
+- **Example** `examples/3d/12-projected-views.js`: a pillow block (fillets,
+  counterbores, a chamfered bore, an oil hole into the bore) drawn on an A3
+  sheet in first angle with an isometric view and dimensions placed
+  through `toSheet`, written as PNG and PDF; its checks read the views back.
+- **Open.** Silhouettes of tori seen obliquely and of B-spline faces (listed
+  in `open`, missing from the view); B-spline edges that lie on no conic
+  are fitted cubic splines (0.01 mm), not exact; parts must not
+  interpenetrate; sections, hatching, centre lines and automatic
+  dimensions are later rungs; the browser's own kernel answers the new
+  calls through the wire but was not tested in a browser. The typed calls
+  are in `web/src/cad-api.ts`, but `cad-client/cad-api-setup.js` is not
+  rebuilt: scripts reach them through `__cadCall` (lines marked `RAW:`).
+  An oil hole whose axis meets the bore's is refused by arris 0.11.1 (the
+  example's is offset 8 mm).
+
 ## Risks
 
 - **arris is about two months old with one maintainer, and breaks its API every minor release (pre-1.0).** ogeom, the first choice, changed its licence within weeks. The mitigations are an exact pin on a permissive release, the Truck differential corpus from 3D0b onward, the right to vendor, and documents that store no kernel data. If arris stalls before 3D3a, `TruckKernel` plus our own HLR adapter and closed-form silhouettes carry 3D0–3D3 (the HLR adapter is ours in any case, since arris has no HLR). Roundovers then drop to `fallback: "visual"` until a kernel can do them.

@@ -7,6 +7,7 @@
 //! (single file or folder). Documents are lazy-loaded on first access.
 
 pub mod assets;
+mod bake;
 mod http;
 pub mod registry;
 mod render;

@@ -64,6 +64,14 @@ pub fn dispatch(doc: &mut Document, method: &str, args: &str) -> Option<R> {
         "parts" => parts(doc, args),
         "part" => part(doc, args),
         "partDef" => part_def(doc, args),
+        "project" => parse(args)
+            .and_then(|o| crate::solid::project::project(doc, &o))
+            .map(|v| v.to_string())
+            .map_err(|e| format!("project: {e}")),
+        "viewPoints" => parse(args)
+            .and_then(|o| crate::solid::project::view_points(doc, &o))
+            .map(|v| v.to_string())
+            .map_err(|e| format!("viewPoints: {e}")),
         _ => return crate::setquery3d::dispatch(doc, method, args),
     };
     Some(r)

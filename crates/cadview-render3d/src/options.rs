@@ -58,6 +58,11 @@ pub struct RenderOptions3d {
     /// Presentation only: the seed of the random numbers. The same scene,
     /// samples and seed give the same bytes.
     pub seed: u32,
+    /// Presentation only: filter the result with the denoiser
+    /// ([`crate::trace::TraceSettings::denoise`]). Off by default here (the
+    /// raw estimate, which tests compare with closed forms); `cad.render`
+    /// turns it on.
+    pub denoise: bool,
 }
 
 impl Default for RenderOptions3d {
@@ -70,6 +75,7 @@ impl Default for RenderOptions3d {
             fit: true,
             spp: crate::trace::DEFAULT_SPP,
             seed: 0,
+            denoise: false,
         }
     }
 }

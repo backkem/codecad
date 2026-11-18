@@ -78,15 +78,19 @@ build-embed:
 
 # Build GH Pages site: homepage + gallery + example pages + app + embed +
 # examples. The example files are copied as committed (drawings, scripts,
-# renders, prebaked scenes): no kernel, GPU or server step.
-build-site: build-wasm clean-dist build-web build-embed
+# renders, prebaked scenes): nothing is evaluated or rendered here, so the
+# build needs no GPU and no server. The kernel module is built for the app.
+build-site: build-wasm clean-dist build-web build-embed build-kernel
     rm -rf _site
-    mkdir -p _site/app _site/embed _site/examples/lib _site/examples/3d/lib _site/assets
+    mkdir -p _site/app/kernel _site/embed _site/examples/lib _site/examples/3d/lib _site/assets
     cp site/*.html site/*.css site/*.js _site/
     cp dist/index.html _site/app/
     cp -r dist/assets _site/app/
     cp dist/cadview-web.js _site/app/
     cp dist/cadview-web_bg.wasm _site/app/
+    # The solid kernel for the app only: fetched on the first call that needs
+    # geometry. The embed viewer and the example pages show prebaked scenes.
+    cp dist/kernel/* _site/app/kernel/
     cp dist-embed/codecad-viewer.js dist-embed/cadview-web.js dist-embed/cadview-web_bg.wasm _site/embed/
     cp examples/*.dwg examples/*.png examples/*.js _site/examples/
     cp examples/lib/*.js _site/examples/lib/

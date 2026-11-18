@@ -849,8 +849,8 @@ Design: [3d-design.md](3d-design.md) section 14. Reference:
   (`web/tests/perf3d.mjs`) and the 3D2b/3D5a time gates on GPU-A and GPU-B,
   zoom-adaptive meshes (the bake's one chord serves every zoom), lines mode,
   a part list in the layer panel, bakes committed for the site, and the
-  site's 3D gallery. The release and site builds do not build the kernel
-  module (no CI change here), so they show bakes and server bakes only.
+  site's 3D gallery (both landed later, with the site). The site build now
+  builds the kernel module for the app; release builds still do not.
 
 ### 3D3a: what landed (2026-11-18)
 

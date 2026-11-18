@@ -351,7 +351,7 @@ just build-server # native server binary
 just build-packed      # single binary with frontend baked in
 just build-packed-full # same + examples/ baked in
 just clean-dist        # remove stale hashed WASM from dist/
-just build-kernel      # optional: the solid kernel module (dist/kernel/)
+just build-kernel      # the solid kernel module (dist/kernel/); build-site runs it
 ```
 
 **IMPORTANT**: after changing cadview-web Rust code, you must run

@@ -48,9 +48,9 @@ tool and the data.
 - **Drawings from models**: exact projected views (`cad.project`) for
   shop drawings, and part lists from attributes.
 - **In the browser**: a prebaked scene (`cad.bake3d`) opens without a
-  kernel, in both render modes (WebGPU). An optional kernel module
-  (`just build-kernel`) lets a page build parts itself; the public site
-  does not ship it.
+  kernel, in both render modes (WebGPU). A kernel module
+  (`just build-kernel`) lets a page build parts itself: the app fetches it
+  on the first call that needs geometry, the example pages never do.
 
 **With server**: run `cadview-server` for persistence, sync, and automation:
 

@@ -8,6 +8,9 @@ on:
     paths:
       - "crates/cadview-core/**"
       - "crates/cadview-render/**"
+      - "crates/cadview-render3d/**"
+      - "crates/cadview-solid/**"
+      - "crates/cadview-kernel-wasm/**"
       - "crates/cadview-web/**"
       - "crates/mtext/**"
       - "web/**"

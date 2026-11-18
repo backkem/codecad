@@ -79,7 +79,7 @@ fail(<span class="str">"a guard on every platform edge"</span>,
         <dt>Server</dt>
         <dd>Runs scripts in a sandbox, builds solids with the kernel, checks them, renders PNGs (working and path traced), writes prebaked scenes, DWG and PDF.</dd>
         <dt>Browser</dt>
-        <dd>Opens DWG, draws and edits in 2D through the same API, and shows prebaked 3D scenes in both render modes. This site's pages ship no solid kernel: 3D scripts run on a server.</dd>
+        <dd>Opens DWG, draws and edits in 2D through the same API, and shows prebaked 3D scenes in both render modes. The app fetches the solid kernel on the first call that needs it and then builds parts in the page; the example pages show prebaked scenes and never fetch it.</dd>
         <dt>Direction</dt>
         <dd>Models as the input to fabrication: 3D printing and CNC. Not a feature today.</dd>
       </dl>

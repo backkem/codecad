@@ -16,6 +16,7 @@
 
 pub mod corpus;
 pub mod kernel;
+pub mod mesh;
 pub mod select;
 pub mod types;
 

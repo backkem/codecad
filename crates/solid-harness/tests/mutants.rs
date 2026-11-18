@@ -4,14 +4,22 @@
 //! be flagged as wrong by at least one layer; the test prints which layers
 //! caught it and on how many cases.
 //!
+//! A mutant runs only the parts its mutation changes: a part whose mutated
+//! recipe equals the original is taken over from the unbroken kernel's
+//! run, with its verdicts when the wrapper changes no output, and with its
+//! meshes passed through the wrapper when it changes meshes
+//! (`Broken::derive` states the argument). Parts, relations and sweep
+//! steps run in parallel (`SOLID_HARNESS_THREADS=1` runs them serially).
+//!
 //! `cargo test -p solid-harness --release --test mutants -- --nocapture`
 
 use std::collections::BTreeMap;
+use std::time::Instant;
 
 use solid_harness::cases::catalogue;
-use solid_harness::kernels::broken::{Broken, Mutation};
+use solid_harness::kernels::broken::{Baseline, Broken, Mutation};
 use solid_harness::kernels::ArrisKernel;
-use solid_harness::layers::{enclosures, run_all};
+use solid_harness::layers::enclosures;
 use solid_harness::outcome::{Layer, Outcome};
 
 fn mutants() -> Vec<Mutation> {
@@ -35,11 +43,20 @@ fn mutants() -> Vec<Mutation> {
 
 #[test]
 fn every_mutant_is_caught() {
+    let t0 = Instant::now();
     let cat = catalogue();
     let enc = enclosures(&cat);
-    let base = run_all(&ArrisKernel, &cat, &enc);
+    // The unbroken kernel's run, kept: a mutant takes over every part,
+    // relation and sweep its mutation provably does not change
+    // (`Broken::run_against`).
+    let base = Baseline::run(&ArrisKernel, &cat, &enc);
+    println!(
+        "enclosures {:.1} s, unbroken kernel {:.1} s",
+        enc.seconds, base.report.seconds
+    );
     // (row, layer) pairs already wrong on the unbroken kernel do not count.
     let base_wrong: Vec<(String, Layer)> = base
+        .report
         .rows
         .iter()
         .flat_map(|r| {
@@ -58,7 +75,18 @@ fn every_mutant_is_caught() {
             inner: ArrisKernel,
             mutation: m,
         };
-        let rep = run_all(&k, &cat, &enc);
+        let (rep, reuse) = k.run_against(&cat, &enc, &base);
+        let timing = format!(
+            "    {:.1} s: {} parts run, {} taken over, {} with derived outputs; {} of {} relations and {} of {} sweeps taken over",
+            rep.seconds,
+            reuse.parts_run,
+            reuse.parts_same,
+            reuse.parts_derived,
+            reuse.relations_same,
+            cat.relations.len(),
+            reuse.sweeps_same,
+            cat.sweeps.len()
+        );
         let mut by_layer: BTreeMap<Layer, usize> = BTreeMap::new();
         let mut example: BTreeMap<Layer, String> = BTreeMap::new();
         for r in &rep.rows {
@@ -93,9 +121,11 @@ fn every_mutant_is_caught() {
             let e: String = e.chars().take(220).collect();
             println!("    {:<10} e.g. {e}", l.name());
         }
+        println!("{timing}");
         if by_layer.is_empty() {
             escaped.push(m.label());
         }
     }
+    println!("total {:.1} s", t0.elapsed().as_secs_f64());
     assert!(escaped.is_empty(), "mutants not caught: {escaped:?}");
 }

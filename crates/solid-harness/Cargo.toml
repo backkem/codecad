@@ -11,13 +11,11 @@ publish = false
 
 [dependencies]
 cadview-core = { path = "../cadview-core" }
+# The shipped kernel adapter (arris, pinned there), under test here.
+cadview-solid = { path = "../cadview-solid" }
 kurbo = "0.13"
-# The candidate kernels under test, pinned exactly. Only src/kernels/arris.rs
-# names arris and only src/kernels/cad_kernel.rs names cad-kernel.
-# `paranoid`: a release build runs the kernel's checker on every operation's
-# output and returns an error for a result it rejects (a debug build does
-# that anyway, as a panic the adapter turns into the same error).
-arris = { version = "=0.11.1", default-features = false, features = ["paranoid"] }
+# The second kernel, a test-only second opinion, pinned exactly. Only
+# src/kernels/cad_kernel.rs names it.
 cad-kernel = "=0.15.0"
 # Only for the development-time wasm timing runner (examples/wasm_timings.rs):
 # the version the workspace already locks through the script sandbox.

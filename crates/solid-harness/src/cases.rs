@@ -105,6 +105,20 @@ impl Relation {
             | Relation::Split { name, .. } => name,
         }
     }
+
+    /// The names of the parts the relation compares.
+    pub fn parts(&self) -> Vec<&str> {
+        match self {
+            Relation::Equivalent { a, b, .. } | Relation::Same { a, b, .. } => vec![a, b],
+            Relation::UnionIdentity {
+                a, b, union, inter, ..
+            } => vec![a, b, union, inter],
+            Relation::Empty { part, of, .. } => vec![part, of],
+            Relation::Motion { base, moved, .. } => vec![base, moved],
+            Relation::Mirror { base, mirrored, .. } => vec![base, mirrored],
+            Relation::Split { whole, pieces, .. } => vec![whole, &pieces[0], &pieces[1]],
+        }
+    }
 }
 
 /// Layer 7: one parameter sweep through a contact.

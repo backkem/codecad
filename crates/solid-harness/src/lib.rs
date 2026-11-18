@@ -17,8 +17,9 @@
 //! - [`cases`]: the catalogue of solids, relations and sweeps.
 //! - [`fuzz`]: the fuzzer's generator, judge, shrinker and case printer
 //!   (the driver is `examples/fuzz.rs`, a development-time tool).
-//! - [`kernels`]: the adapters under test (arris, cad-kernel) and the broken wrappers
-//!   that test the harness itself.
+//! - [`kernels`]: the adapters under test (arris, from the shipped crate
+//!   cadview-solid, and cad-kernel) and the broken wrappers that test the
+//!   harness itself.
 //! - [`scoreboard`]: the committed per-kernel file and its ratchet.
 //!
 //! This crate is a test tool. No shipped crate may depend on it.

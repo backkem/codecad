@@ -3,6 +3,8 @@
 //! wrong), and an unsupported optional capability is "not applicable".
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 use std::time::Instant;
 
 use cadview_core::solid::{Aabb3, EvalError, MassProps, Placement, SolidKernel, TriMesh, Validity};
@@ -39,6 +41,80 @@ impl Fail {
     }
 }
 
+/// The environment variable that sets how many threads [`par_map`] uses
+/// (`1` runs everything on the calling thread).
+pub const THREADS_ENV: &str = "SOLID_HARNESS_THREADS";
+
+/// How many threads [`par_map`] uses: [`THREADS_ENV`] if set, else the
+/// machine's parallelism.
+pub fn threads() -> usize {
+    std::env::var(THREADS_ENV)
+        .ok()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .filter(|&n| n >= 1)
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
+}
+
+/// `items.iter().map(f).collect()`, the items taken one at a time by up to
+/// [`threads`] threads (`std::thread::scope`), the results in the items'
+/// order whatever the threads did. Items are started in the order given,
+/// so put the slow ones first.
+///
+/// Why this keeps every result the same: each item is a pure function of
+/// its input. A part's run builds its own kernel model (arris keeps no
+/// process-wide state and starts no threads; cad-kernel's caches change
+/// how fast it answers, not what), its sampling is seeded from the case
+/// name, and nothing is shared between items but read-only inputs.
+pub fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    let n = items.len();
+    let threads = threads().min(n);
+    if threads <= 1 {
+        return items.iter().map(f).collect();
+    }
+    let next = AtomicUsize::new(0);
+    let slots: Vec<Mutex<Option<R>>> = (0..n).map(|_| Mutex::new(None)).collect();
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(|| loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                if i >= n {
+                    break;
+                }
+                let r = f(&items[i]);
+                *slots[i].lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
+            });
+        }
+    });
+    slots
+        .into_iter()
+        .map(|s| {
+            s.into_inner()
+                .unwrap_or_else(|e| e.into_inner())
+                .expect("every item ran")
+        })
+        .collect()
+}
+
+/// [`par_map`] over `items` started in the order of `cost`, highest first
+/// (ties in the items' order), so that the slowest items do not start
+/// last; the results are still in the items' order.
+pub fn par_map_by_cost<T: Sync, R: Send>(
+    items: &[T],
+    cost: impl Fn(&T) -> u64,
+    f: impl Fn(&T) -> R + Sync,
+) -> Vec<R> {
+    let mut order: Vec<usize> = (0..items.len()).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(cost(&items[i])));
+    let done = par_map(&order, |&i| (i, f(&items[i])));
+    let mut out: Vec<Option<R>> = (0..items.len()).map(|_| None).collect();
+    for (i, r) in done {
+        out[i] = Some(r);
+    }
+    out.into_iter()
+        .map(|r| r.expect("every item ran"))
+        .collect()
+}
+
 /// Runs a kernel call, catching panics.
 pub fn guard<T>(f: impl FnOnce() -> Result<T, EvalError>) -> Result<T, Fail> {
     match catch_unwind(AssertUnwindSafe(f)) {
@@ -57,6 +133,7 @@ pub fn guard<T>(f: impl FnOnce() -> Result<T, EvalError>) -> Result<T, Fail> {
 }
 
 /// Everything the layers need about one part on one kernel.
+#[derive(Clone)]
 pub struct PartRun<B> {
     pub case: PartCase,
     pub reference: Result<Reference, NotDefined>,
@@ -134,5 +211,20 @@ pub fn run_part<K: SolidKernel>(
         validity,
         meshes,
         eval_ms,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn par_map_keeps_the_items_order() {
+        let items: Vec<u64> = (0..1000).collect();
+        let want: Vec<u64> = items.iter().map(|x| x * x).collect();
+        assert_eq!(par_map(&items, |x| x * x), want);
+        // Started by cost (the reverse here), still answered in order.
+        assert_eq!(par_map_by_cost(&items, |x| *x, |x| x * x), want);
+        assert!(par_map(&[] as &[u64], |x| *x).is_empty());
     }
 }

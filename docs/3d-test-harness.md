@@ -483,6 +483,81 @@ arris can detect itself; the adapter now turns them into refusals:
   part of the meridian's boundary), so the enclosure never certifies the
   thin column of cells along it.
 
+### After slice 5 (2026-11-18): the adapter ships, the gates are fast again
+
+- **The arris adapter moved to a shipped crate**, `crates/cadview-solid`
+  (MIT, compiles for wasm32, the only crate that names arris). Its
+  behaviour is unchanged: the exact pin, default features off,
+  `paranoid`, the refusal of results arris's checker rejects (the debug
+  panic turned into the same refusal), the refusal of open meshes. The
+  closed-mesh check it uses is now kernel-neutral code in cadview-core
+  (`solid/mesh.rs`, `topology`), and the harness's mesh layer uses the
+  same function. The harness tests the adapter from cadview-solid. Both
+  scoreboard files came out byte-identical after the move. A new test
+  (`shipped_kernels_record_no_wrong_case`) fails if the committed
+  scoreboard of a shipped kernel (arris) records any wrong case.
+  cad-kernel and the broken wrappers stay in the harness.
+- **Where the time went** (release, one thread, arris): 307 s for the
+  catalogue. Tessellation at chord 1e-4 took 164 s, 131 s of it on the
+  revolved profile with a bead and a cove and its four derived copies
+  (22 to 30 s each, 2 million triangles); chord 1e-3 took 7.5 s, the
+  coarser chords under 1 s. The shell test took 65 s, 57 s of it on two
+  turned copies (the swept bar moved, 38 s; the rounded slab moved,
+  18 s): the mesh grid kept a long triangle in every cell of its box, and
+  turned against the axes that box is most of the part. The mesh layer
+  took 17 s, the relations 45 s (winding numbers on the 1e-3 meshes),
+  evaluation 4.5 s, the sweeps 1.8 s, and the enclosures 15 s per test.
+  cad-kernel: 178 s, of it tessellation 37 s (its mesher has its own
+  threads), shell 61 s on the same two parts, mesh 18 s. The mutant gate
+  ran the whole arris catalogue 15 times (once unbroken, once per
+  mutant), most of it tessellating parts the mutation does not touch.
+- **What changed.** Nothing is dropped or coarsened: the same parts,
+  layers, chords, samples and tolerances.
+  - *Parallel runs.* Parts, relations, sweep steps and enclosures run on
+    `std::thread::scope` threads (`run::par_map`, one per hardware thread,
+    `SOLID_HARNESS_THREADS` to change it, `1` for serial), the slow parts
+    started first, the results in catalogue order. Each item is a pure
+    function of its input: arris keeps no process-wide state and starts
+    no threads; every sample is seeded from the case name. cad-kernel
+    keeps per-thread warm starts and a process-wide index of B-spline
+    nets, both keyed by address; by its own documentation they change how
+    fast it answers, not what (it clears the warm starts at each of its
+    own parallel items and Booleans). Checked: both scoreboard files come
+    out byte-identical with 24 threads, with 5 and serially.
+  - *The mesh grid* keeps a triangle only in the cells it comes near (the
+    cell's circumscribed ball meets the triangle, with slack for
+    rounding), so a query sees the same triangles that matter and gives
+    the same distance, bit for bit (a test compares it with a scan of
+    every triangle). The shell test went from 65 s to 15 s on one thread.
+  - *Mutants run only what they change* (`Broken::run_against`). A part
+    whose mutated recipe equals the original, tools included, gets the
+    same input on the inner kernel, so its B-rep is the unbroken run's.
+    When the wrapper changes no output for it, its run and verdicts are
+    taken over. When the wrapper changes the mass or a mesh, the B-rep and
+    meshes are taken over, mass, box and check are asked again through
+    the wrapper, each mesh goes through the wrapper's mesh mutation (what
+    its `tessellate` does to the inner kernel's mesh), and the verdicts
+    are computed again. A relation is taken over when every part it names
+    was, and the wrapper does not change the box a motion asks for; a
+    sweep when every step's recipe is unchanged and the wrapper does not
+    change volumes.
+- **Evidence unchanged.** The mutant table is the same before and after:
+  every mutant caught by the same layers on the same number of cases.
+- **Timings** on a 24-thread machine (release, then debug):
+
+  | Gate | Before | After |
+  |---|---|---|
+  | scoreboard, both kernels, release | 262 s | 50 s (arris 50 s, cad-kernel 25 s) |
+  | mutants, release | 54 min (66 min in a run beside other builds) | 4.1 to 4.4 min |
+  | scoreboard, debug | not measured | 99 s |
+  | mutants, debug | not measured | 8.4 min |
+  | lib tests, debug | | 23 s |
+  | corpus, debug | | 1.2 s |
+
+  The slowest single part now sets the pace: the revolved profile
+  intersected with itself takes about 30 s to tessellate at 1e-4 on one
+  thread, and arris tessellates on one thread.
+
 ## 10. Effect on the ladder
 
 - 3D0a's gate (the closed-form corpus) stays and becomes layer 1.

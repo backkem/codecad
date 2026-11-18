@@ -1048,6 +1048,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cadview-solid"
+version = "0.1.0"
+dependencies = [
+ "arris",
+ "cadview-core",
+ "kurbo",
+]
+
+[[package]]
 name = "cadview-web"
 version = "0.1.0"
 dependencies = [
@@ -5955,10 +5964,10 @@ dependencies = [
 name = "solid-harness"
 version = "0.1.0"
 dependencies = [
- "arris",
  "cad-kernel",
  "cadview-core",
  "cadview-render3d",
+ "cadview-solid",
  "kurbo",
  "wasmtime",
 ]

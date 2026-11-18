@@ -6,6 +6,7 @@ members = [
     "crates/cadview-render3d",
     "crates/cadview-web",
     "crates/cadview-server",
+    "crates/cadview-solid",
     "crates/mtext",
     "crates/solid-harness",
 ]
@@ -14,10 +15,10 @@ members = [
 license = "MIT"
 repository = "https://github.com/backkem/codecad"
 
-# The candidate kernel runs its own checker on every operation in debug
+# The kernel (arris) runs its own checker on every operation in debug
 # builds (kept: debug assertions stay on) and is very slow unoptimised.
 # Optimise it in dev builds so the solid-harness tests run in reasonable
-# time; only the test crate solid-harness links it.
+# time; cadview-solid links it (and through it the harness).
 [profile.dev.package.arris]
 opt-level = 3
 [profile.dev.package.arris-check]

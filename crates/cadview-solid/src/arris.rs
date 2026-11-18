@@ -1,7 +1,7 @@
 //! [`SolidKernel`] on the arris B-rep kernel (docs/3d-design.md section 5).
 //!
-//! The harness's adapter for arris, moved out of cadview-core so that core
-//! links no kernel. This is the only file that names arris. Everything
+//! The adapter for arris, in its own crate so that cadview-core links no
+//! kernel. This is the only file that names arris. Everything
 //! arris builds stays in an [`ArrisBrep`], which is derived data: never
 //! synced, never stored.
 //!
@@ -63,6 +63,7 @@ use arris::Control;
 use cadview_core::solid::kernel::{
     Aabb3, EvalError, Evaluated, MassProps, SolidKernel, ToolResolver, TriMesh, Validity,
 };
+use cadview_core::solid::mesh::topology;
 use cadview_core::solid::select::{edge_query, EdgeQuery};
 use cadview_core::solid::types::{
     arc_point, DefId, Depth, FeatId, Feature, Frame3, Op, PartDef, Path3, Placement, Plane3,
@@ -104,7 +105,7 @@ impl fmt::Debug for ArrisBrep {
 }
 
 impl ArrisKernel {
-    /// The arris version compiled in: the exact pin in solid-harness's
+    /// The arris version compiled in: the exact pin in cadview-solid's
     /// Cargo.toml (arris exports no version constant).
     pub const VERSION: &'static str = "0.11.1";
 }
@@ -261,7 +262,7 @@ impl SolidKernel for ArrisKernel {
         };
         // A solid's mesh must be a closed, consistently oriented surface.
         // arris leaves a few open on slivers; that is a refusal, not a mesh.
-        let topo = crate::mesh::topology(&mesh);
+        let topo = topology(&mesh);
         if !topo.closed {
             return Err(EvalError::Kernel {
                 feature: None,
@@ -1321,7 +1322,7 @@ mod tests {
 
 /// Evidence for the rungs after 3D0a, on arris directly (not through the
 /// trait): roundovers, tessellation, sections, projection and provenance.
-/// Run with `cargo test -p solid-harness kernels::arris::forward_look
+/// Run with `cargo test -p cadview-solid arris::forward_look
 /// -- --nocapture` to see the numbers.
 #[cfg(test)]
 mod forward_look {

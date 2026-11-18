@@ -38,7 +38,11 @@ fn path(stem: &str) -> PathBuf {
 }
 
 /// Runs the catalogue on `kernel` and compares with `scoreboards/<stem>.txt`.
-fn gate<K: SolidKernel>(kernel: &K, stem: &str) {
+fn gate<K>(kernel: &K, stem: &str)
+where
+    K: SolidKernel + Sync,
+    K::Brep: Send + Sync,
+{
     let t0 = Instant::now();
     let cat = catalogue();
     let enc = enclosures(&cat);
@@ -112,6 +116,32 @@ fn arris_scoreboard() {
 #[test]
 fn cad_kernel_scoreboard() {
     gate(&CadKernel, KERNELS[1]);
+}
+
+/// The kernels that ship (linked by a shipped crate, today cadview-solid),
+/// by scoreboard stem. A kernel that ships must have no recorded wrong
+/// case (docs/3d-test-harness.md section 5).
+const SHIPPED: [&str; 1] = ["arris"];
+
+/// The committed scoreboard of every shipped kernel records no wrong case,
+/// overall or on any layer. Reads the files only; no kernel runs.
+#[test]
+fn shipped_kernels_record_no_wrong_case() {
+    for stem in SHIPPED {
+        assert!(KERNELS.contains(&stem), "{stem} has no scoreboard gate");
+        let text = std::fs::read_to_string(path(stem)).expect("the scoreboard exists");
+        let lines = parse(&text).expect("the committed scoreboard parses");
+        assert!(!lines.is_empty(), "{stem}: the scoreboard has no cases");
+        let wrong: Vec<String> = lines
+            .iter()
+            .filter(|(_, l)| l.overall == Outcome::Wrong || l.layers.contains(&Outcome::Wrong))
+            .map(|(name, _)| name.clone())
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "{stem} ships but its scoreboard records wrong cases: {wrong:?}"
+        );
+    }
 }
 
 /// Every committed scoreboard belongs to a kernel this file runs, and every

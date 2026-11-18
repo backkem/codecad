@@ -4,12 +4,19 @@
 //! as wrong by some layer; `tests/mutants.rs` checks that and reports
 //! which layers caught each one.
 
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
+
 use cadview_core::solid::{
     Aabb3, DefId, EvalError, Evaluated, Feature, MassProps, Op, PartDef, Placement, Point3,
     Profile2d, Seg2, SolidKernel, ToolRef, ToolResolver, TriMesh, Validity, Vec3,
 };
 
-use crate::cases::Tools;
+use crate::cases::{Catalogue, PartCase, Relation, Tools};
+use crate::layers::{finish, finish_with, run_parts_with, Enclosures, Prepared, Report, Row};
+use crate::run::{guard, Fail, PartRun};
 
 /// One way to be wrong.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -315,7 +322,205 @@ impl<K: SolidKernel> SolidKernel for Broken<K> {
     }
 
     fn tessellate(&self, b: &K::Brep, chord: f64) -> Result<TriMesh, EvalError> {
-        let mut m = self.inner.tessellate(b, chord)?;
+        Ok(self.mutate_mesh(self.inner.tessellate(b, chord)?))
+    }
+}
+
+/// The unbroken kernel's run of the catalogue, kept so that a mutant can
+/// take over what its mutation does not change ([`Broken::run_against`]).
+pub struct Baseline<'c, B: Clone> {
+    /// One run per catalogue part, in order.
+    pub runs: Vec<Cow<'c, PartRun<B>>>,
+    /// The report: the part rows first, then the relations, then the
+    /// sweeps, each in the catalogue's order.
+    pub report: Report,
+}
+
+impl<'c, B: Clone + Send + Sync> Baseline<'c, B> {
+    /// Runs the catalogue on `kernel`, the unbroken kernel of the mutants.
+    pub fn run<K>(kernel: &K, cat: &Catalogue, enc: &Enclosures) -> Self
+    where
+        K: SolidKernel<Brep = B> + Sync,
+    {
+        let t0 = Instant::now();
+        let (runs, rows) = run_parts_with(kernel, cat, enc, |_, _| Prepared::Run);
+        let report = finish(kernel, cat, &runs, rows, t0);
+        Baseline { runs, report }
+    }
+}
+
+/// How much of a mutant's run was taken over from the baseline.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Reuse {
+    /// Parts run on the broken kernel.
+    pub parts_run: usize,
+    /// Parts taken over unchanged, with their rows.
+    pub parts_same: usize,
+    /// Parts whose B-rep and meshes were taken over and passed through the
+    /// wrapper's outputs, their rows computed again.
+    pub parts_derived: usize,
+    /// Relations and sweeps whose rows were taken over.
+    pub relations_same: usize,
+    pub sweeps_same: usize,
+}
+
+impl<K: SolidKernel> Broken<K> {
+    /// The catalogue on this broken kernel, taking over from `base` (the
+    /// inner kernel's run) every part, relation and sweep the mutation
+    /// provably does not change ([`Self::derive`]); everything else runs
+    /// as in [`crate::layers::run_all`]. Gives the same report as
+    /// `run_all` would.
+    ///
+    /// A relation's row is a function of the runs of the parts it names
+    /// and, for a motion, of the kernel's box of the base part under the
+    /// motion: it is taken over when every part it names was taken over
+    /// unchanged and the wrapper does not change that box. A sweep's row
+    /// is a function of each step's evaluated volume: it is taken over when
+    /// every step's recipe is unchanged by the mutation and the wrapper
+    /// does not change the volume.
+    pub fn run_against(
+        &self,
+        cat: &Catalogue,
+        enc: &Enclosures,
+        base: &Baseline<'_, K::Brep>,
+    ) -> (Report, Reuse)
+    where
+        K: Sync,
+        K::Brep: Send + Sync,
+    {
+        let t0 = Instant::now();
+        let np = cat.parts.len();
+        let base_row = |i: usize| &base.report.rows[i];
+        let derived = AtomicUsize::new(0);
+        let (runs, rows) = run_parts_with(self, cat, enc, |i, _| {
+            let p = self.derive(&base.runs[i], base_row(i));
+            if matches!(p, Prepared::Derived(_)) {
+                derived.fetch_add(1, Ordering::Relaxed);
+            }
+            p
+        });
+        // A part taken over unchanged is borrowed from the baseline.
+        let same: HashMap<&str, bool> = runs
+            .iter()
+            .map(|r| (r.case.name.as_str(), matches!(r, Cow::Borrowed(_))))
+            .collect();
+        let mut reuse = Reuse {
+            parts_same: same.values().filter(|s| **s).count(),
+            parts_derived: derived.into_inner(),
+            ..Reuse::default()
+        };
+        reuse.parts_run = np - reuse.parts_same - reuse.parts_derived;
+        let relation = |i: usize| {
+            let rel = &cat.relations[i];
+            let parts_same = rel.parts().iter().all(|n| same.get(n) == Some(&true));
+            let asks_box = matches!(rel, Relation::Motion { .. });
+            (parts_same && !(asks_box && self.changes_framed_bbox()))
+                .then(|| base_row(np + i).clone())
+        };
+        let sweep = |i: usize| {
+            let sw = &cat.sweeps[i];
+            let unchanged =
+                !self.changes_mass() && sw.steps.iter().all(|(_, case)| self.same_recipe(case));
+            unchanged.then(|| base_row(np + cat.relations.len() + i).clone())
+        };
+        reuse.relations_same = (0..cat.relations.len())
+            .filter(|&i| relation(i).is_some())
+            .count();
+        reuse.sweeps_same = (0..cat.sweeps.len())
+            .filter(|&i| sweep(i).is_some())
+            .count();
+        let report = finish_with(self, cat, &runs, rows, t0, relation, sweep);
+        (report, reuse)
+    }
+
+    /// Whether the mutated recipe of `case` (definition and every tool it
+    /// reaches) is the case's own: then the inner kernel is asked exactly
+    /// what the unbroken kernel was asked.
+    pub fn same_recipe(&self, case: &PartCase) -> bool {
+        let (def, tools) = self.mutate(&case.def, &case.tools);
+        def == case.def && tools.0.iter().all(|t| case.tools.def(t.id) == Some(t))
+    }
+
+    fn changes_mass(&self) -> bool {
+        matches!(self.mutation, Mutation::MassScale(_))
+    }
+
+    fn changes_framed_bbox(&self) -> bool {
+        self.mutation == Mutation::BboxIgnoresRotation
+    }
+
+    /// Whether the wrapper changes a kernel output other than the recipe
+    /// (mass, a mesh) for a part evaluated in its own frame. The box under
+    /// a rotated frame is asked only by the relations ([`Self::run_against`]).
+    fn changes_part_outputs(&self) -> bool {
+        matches!(
+            self.mutation,
+            Mutation::MassScale(_)
+                | Mutation::DropTriangle
+                | Mutation::FlipTriangle
+                | Mutation::MoveVertex(_)
+        )
+    }
+
+    /// Where part `base.case`'s run under this mutation comes from, given
+    /// `base` (the unbroken kernel's run of the same case) and its row
+    /// `base_row`: taken over when that is provably what running it would
+    /// give, else [`Prepared::Run`].
+    ///
+    /// The proof: [`SolidKernel::evaluate`] here evaluates the mutated
+    /// recipe on the inner kernel. When the mutated definition equals the
+    /// original and every tool definition it reaches equals the one the
+    /// case's resolver gives for that id, the inner kernel gets the same
+    /// input, and its evaluation is a pure function of the input (arris
+    /// keeps no process-wide state), so the B-rep is `base`'s. Mass, box
+    /// and check are then asked again through this wrapper on that B-rep
+    /// (they are cheap), and each mesh is `base`'s mesh of the same B-rep
+    /// at the same chord passed through this wrapper's mesh mutation,
+    /// which is what [`SolidKernel::tessellate`] here computes; that
+    /// avoids repeating the tessellation. Where the wrapper changes no
+    /// part output, the run equals `base` and so does its row.
+    pub fn derive<'a>(&self, base: &'a PartRun<K::Brep>, base_row: &'a Row) -> Prepared<'a, K::Brep>
+    where
+        K::Brep: Clone,
+    {
+        if !self.same_recipe(&base.case) {
+            return Prepared::Run;
+        }
+        if !self.changes_part_outputs() {
+            return Prepared::Same(base, base_row);
+        }
+        let not_built = || Fail::Refused("not evaluated".into());
+        let (mass, bbox, validity, meshes) = match &base.brep {
+            Ok(b) => (
+                guard(|| self.mass(b)),
+                guard(|| self.bbox(b, &Placement::IDENTITY)),
+                guard(|| self.check(b)),
+                base.meshes
+                    .iter()
+                    .map(|(c, m)| (*c, m.clone().map(|m| self.mutate_mesh(m))))
+                    .collect(),
+            ),
+            Err(_) => (
+                Err(not_built()),
+                Err(not_built()),
+                Err(not_built()),
+                Vec::new(),
+            ),
+        };
+        Prepared::Derived(Box::new(PartRun {
+            case: base.case.clone(),
+            reference: base.reference.clone(),
+            brep: base.brep.clone(),
+            mass,
+            bbox,
+            validity,
+            meshes,
+            eval_ms: base.eval_ms,
+        }))
+    }
+
+    /// The mesh mutation applied to a mesh of the inner kernel.
+    fn mutate_mesh(&self, mut m: TriMesh) -> TriMesh {
         let mid = m.triangles.len() / 2;
         match self.mutation {
             Mutation::DropTriangle if !m.triangles.is_empty() => {
@@ -331,6 +536,6 @@ impl<K: SolidKernel> SolidKernel for Broken<K> {
             }
             _ => {}
         }
-        Ok(m)
+        m
     }
 }

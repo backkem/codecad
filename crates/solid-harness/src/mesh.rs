@@ -45,91 +45,10 @@ pub fn area_vector2(t: [V3; 3]) -> V3 {
     cross(sub(t[1], t[0]), sub(t[2], t[0]))
 }
 
-/// Summary topology of a mesh.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Topology {
-    /// Every directed edge occurs once and its opposite once, and no
-    /// triangle repeats an index: a closed, consistently oriented,
-    /// edge-manifold surface.
-    pub closed: bool,
-    /// Directed edges used more than once, or without their opposite.
-    pub bad_edges: usize,
-    /// Degenerate triangles (a repeated index).
-    pub degenerate: usize,
-    /// Vertices used by triangles.
-    pub vertices: usize,
-    /// Undirected edges.
-    pub edges: usize,
-    pub triangles: usize,
-    /// Connected components of triangles (through shared edges).
-    pub shells: usize,
-}
-
-impl Topology {
-    pub fn euler(&self) -> i64 {
-        self.vertices as i64 - self.edges as i64 + self.triangles as i64
-    }
-}
-
-pub fn topology(m: &TriMesh) -> Topology {
-    let mut directed: HashMap<(u32, u32), u32> = HashMap::new();
-    let mut degenerate = 0;
-    let mut used = vec![false; m.positions.len()];
-    for t in &m.triangles {
-        if t[0] == t[1] || t[1] == t[2] || t[2] == t[0] {
-            degenerate += 1;
-        }
-        for k in 0..3 {
-            let (a, b) = (t[k], t[(k + 1) % 3]);
-            *directed.entry((a, b)).or_insert(0) += 1;
-            used[a as usize] = true;
-        }
-    }
-    let mut bad_edges = 0;
-    let mut undirected = 0;
-    for (&(a, b), &n) in &directed {
-        let back = directed.get(&(b, a)).copied().unwrap_or(0);
-        if n != 1 || back != 1 {
-            bad_edges += 1;
-        }
-        if a < b || back == 0 {
-            undirected += 1;
-        }
-    }
-    // Shells: union-find over triangles sharing an undirected edge.
-    let nt = m.triangles.len();
-    let mut parent: Vec<usize> = (0..nt).collect();
-    fn find(p: &mut [usize], mut x: usize) -> usize {
-        while p[x] != x {
-            p[x] = p[p[x]];
-            x = p[x];
-        }
-        x
-    }
-    let mut owner: HashMap<(u32, u32), usize> = HashMap::new();
-    for (i, t) in m.triangles.iter().enumerate() {
-        for k in 0..3 {
-            let (a, b) = (t[k], t[(k + 1) % 3]);
-            let key = (a.min(b), a.max(b));
-            if let Some(&j) = owner.get(&key) {
-                let (ri, rj) = (find(&mut parent, i), find(&mut parent, j));
-                parent[ri] = rj;
-            } else {
-                owner.insert(key, i);
-            }
-        }
-    }
-    let shells = (0..nt).filter(|&i| find(&mut parent, i) == i).count();
-    Topology {
-        closed: nt > 0 && bad_edges == 0 && degenerate == 0,
-        bad_edges,
-        degenerate,
-        vertices: used.iter().filter(|u| **u).count(),
-        edges: undirected,
-        triangles: nt,
-        shells,
-    }
-}
+/// The mesh topology check is kernel-neutral and shared with the shipped
+/// kernel adapter (which refuses a mesh that is not closed): it lives in
+/// cadview-core.
+pub use cadview_core::solid::mesh::{topology, MeshTopology};
 
 /// The total vector area and the total (scalar) area.
 pub fn vector_area(m: &TriMesh) -> (V3, f64) {
@@ -255,6 +174,8 @@ impl Grid {
         let cell = (vol / n).cbrt().max(big / 256.0).max(1e-9);
         let dims = ext.map(|e| ((e / cell).ceil() as usize).max(1));
         let tris: Vec<[V3; 3]> = (0..m.triangles.len()).map(|i| corners(m, i)).collect();
+        // The size of the largest coordinate, for rounding slack.
+        let magnitude = lo.iter().chain(&hi).fold(big, |s, x| s.max(x.abs())) + cell;
         let mut cells: HashMap<[usize; 3], Vec<u32>> = HashMap::new();
         for (i, t) in tris.iter().enumerate() {
             let mut tlo = [f64::INFINITY; 3];
@@ -267,9 +188,32 @@ impl Grid {
             }
             let a = Self::index_in(lo, cell, dims, tlo);
             let b = Self::index_in(lo, cell, dims, thi);
+            let span = (0..3).map(|k| b[k] - a[k] + 1).product::<usize>();
+            // A long triangle turned against the axes has a box that spans
+            // many cells it never comes near. It is kept only in the cells
+            // whose circumscribed ball it meets: every cell that holds a
+            // point of the triangle, and so every cell a query can need
+            // (the slack covers the rounding of `index_in` at a cell's
+            // border). Small triangles keep their whole box.
+            let near = (span > 8).then(|| {
+                let n = area_vector2(*t);
+                let nn = norm(n);
+                (n, nn)
+            });
+            let reach = 0.5 * cell * 3f64.sqrt() * (1.0 + 1e-9) + 1e-12 * magnitude;
             for x in a[0]..=b[0] {
                 for y in a[1]..=b[1] {
                     for z in a[2]..=b[2] {
+                        if let Some((n, nn)) = near {
+                            let c = [x, y, z].map(|j| j as f64 + 0.5);
+                            let c = [0, 1, 2].map(|k| lo[k] + c[k] * cell);
+                            if nn > 0.0 && dot(n, sub(c, t[0])).abs() > reach * nn {
+                                continue;
+                            }
+                            if point_triangle_distance(c, *t) > reach {
+                                continue;
+                            }
+                        }
                         cells.entry([x, y, z]).or_default().push(i as u32);
                     }
                 }
@@ -376,6 +320,31 @@ mod tests {
         let g = Grid::new(&m);
         assert!((g.distance_capped([0.5, 0.5, 1.25], 1.0) - 0.25).abs() < 1e-15);
         assert_eq!(g.distance_capped([5.0, 5.0, 5.0], 1.0), 1.0);
+        // The grid answers exactly what a scan of every triangle answers,
+        // also for long triangles turned against the axes (kept only in
+        // the cells they come near).
+        let mut turned = m.clone();
+        let (s, c) = (0.3f64.sin(), 0.3f64.cos());
+        for p in &mut turned.positions {
+            let (x, y, z) = (400.0 * p.x, 7.0 * p.y, 0.5 * p.z);
+            *p = Point3::new(
+                c * x - s * y,
+                s * c * x + c * c * y - s * z,
+                s * s * x + s * c * y + c * z,
+            );
+        }
+        let g = Grid::new(&turned);
+        let mut rng = crate::rng::Rng::named("grid", 1);
+        let (lo, hi) = aabb(&turned);
+        for _ in 0..2000 {
+            let p = [0, 1, 2].map(|k| rng.range(lo[k] - 1.0, hi[k] + 1.0));
+            for r in [1e-3, 0.5, 3.0] {
+                let scan = (0..turned.triangles.len())
+                    .map(|i| point_triangle_distance(p, corners(&turned, i)))
+                    .fold(r, f64::min);
+                assert_eq!(g.distance_capped(p, r), scan, "at {p:?}, r {r}");
+            }
+        }
         // A flipped triangle opens the surface.
         let mut f = m.clone();
         f.triangles[0].swap(1, 2);

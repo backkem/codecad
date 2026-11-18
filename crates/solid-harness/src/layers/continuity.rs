@@ -21,7 +21,7 @@
 
 use cadview_core::solid::SolidKernel;
 
-use crate::cases::Sweep;
+use crate::cases::{PartCase, Sweep};
 use crate::outcome::Verdict;
 use crate::run::{guard, Fail};
 
@@ -38,14 +38,17 @@ pub fn evaluate<K: SolidKernel>(kernel: &K, sweep: &Sweep) -> Vec<Step> {
     sweep
         .steps
         .iter()
-        .map(|(s, case)| {
-            let volume = guard(|| {
-                let b = kernel.evaluate(&case.def, &case.tools)?.brep;
-                Ok(kernel.mass(&b)?.volume)
-            });
-            Step { s: *s, volume }
-        })
+        .map(|(s, case)| evaluate_step(kernel, *s, case))
         .collect()
+}
+
+/// One step: the recipe at `s` evaluated and measured.
+pub fn evaluate_step<K: SolidKernel>(kernel: &K, s: f64, case: &PartCase) -> Step {
+    let volume = guard(|| {
+        let b = kernel.evaluate(&case.def, &case.tools)?.brep;
+        Ok(kernel.mass(&b)?.volume)
+    });
+    Step { s, volume }
 }
 
 pub fn check(sweep: &Sweep, steps: &[Step]) -> Verdict {

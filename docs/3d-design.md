@@ -335,21 +335,28 @@ stay honest.
 
 ## 5. Kernel choice and boundary
 
-### Decision update (2026-11-17): ogeom dropped, kernel choice open
+### Decision update (2026-11-18): arris for now
 
 ogeom changed licence: releases up to 0.11.5 are `MIT OR Apache-2.0`, and
 from 0.12.0 on every ogeom crate is published as `LGPL-2.1-only`. CodeCAD
 is MIT and statically links its kernel into the server binary and the wasm
 bundle, so ogeom was dropped in 3D0a before anything with it landed.
 
-- **Which kernel ships is not decided.** Until a kernel-independent test
-  harness has run against the candidates, no shipped crate links a kernel:
-  the backend below is a dev-dependency of cadview-core, used by the corpus
-  tests only. The candidates are arris, another permissively licensed
-  kernel, or one of our own. The rest of this document describes the plan
-  with arris in the kernel's place; read it as provisional. The harness's
-  evidence on arris and a second candidate, cad-kernel, is in
-  [research/kernel-comparison.md](research/kernel-comparison.md).
+- **The ladder continues on arris, for now.** The test harness
+  (3d-test-harness.md) ran arris and a second candidate, cad-kernel, side
+  by side; the evidence is in
+  [research/kernel-comparison.md](research/kernel-comparison.md). arris
+  has what the next rungs need (sections, projection, ray hits,
+  provenance, centroids) and was wrong far less often under fuzzing, at
+  the cost of refusing more often near exact contacts. The choice is
+  provisional: everything goes through the `SolidKernel` trait, documents
+  store no kernel data, cad-kernel stays on the scoreboard as a second
+  opinion, and a kernel of our own remains possible with the harness as
+  its gate.
+- **No shipped crate links a kernel yet.** The adapters live in the
+  harness crate. Before arris ships, its recorded wrong cases must be
+  gone from its scoreboard (3d-test-harness.md, section 5): fixed
+  upstream, or turned into refusals by the adapter.
 - **Reference backend: [arris](https://github.com/arris-labs/arris)**, pinned
   to `=0.11.1` (`MIT OR Apache-2.0`, pure Rust, no `unsafe`). Default
   features are off: no serde and no rayon, so it starts no threads, and it

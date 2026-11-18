@@ -1,9 +1,10 @@
 # Kernel comparison: arris 0.11.1 and cad-kernel 0.15.0
 
 Evidence from the solid harness (docs/3d-test-harness.md, slice 4) on the
-two candidate kernels behind `SolidKernel`. It does not choose a kernel
-(3d-design.md section 5 keeps the decision open); it states what was
-measured, how, and what it does and does not support.
+two candidate kernels behind `SolidKernel`. It does not choose a kernel;
+it states what was measured, how, and what it does and does not support.
+The decision taken afterwards (arris for now) is recorded in 3d-design.md
+section 5.
 
 Everything below was run on one Windows x64 machine (24 hardware
 threads), release builds unless a line says otherwise, on 2026-11-18. The

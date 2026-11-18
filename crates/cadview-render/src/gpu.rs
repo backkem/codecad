@@ -45,6 +45,11 @@ impl GpuRenderer {
         self.ctx.adapter_name()
     }
 
+    /// The shared context, for other renderers on the same device (3D).
+    pub fn context(&self) -> &GpuContext {
+        &self.ctx
+    }
+
     fn target(&mut self, width: u32, height: u32) -> &Target {
         let reuse = self
             .target

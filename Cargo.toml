@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/cadview-core",
     "crates/cadview-render",
+    "crates/cadview-render3d",
     "crates/cadview-web",
     "crates/cadview-server",
     "crates/mtext",

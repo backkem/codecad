@@ -94,6 +94,11 @@ crates/
                               #   expansion + BezPath cache), build_display_list:
                               #   every 2D drawing decision (culling, LOD, colour,
                               #   linetype, paint order) as a renderer-neutral list
+      src/scene3d.rs          # 3D twin of render.rs: Scene3d (meshes, placements,
+                              #   materials, lighting, edges), Camera3d (orbit,
+                              #   named views, fit, matrices), RenderMesh (normals
+                              #   and sharp edges at a crease angle), build_frame
+                              #   (silhouettes per view), reference shade + tone curve
       src/solid/              # 3D parts (docs/3d-design.md), no sync or API yet
         types.rs              #   feature tree: PartDef, Feature, Profile2d (exact
                               #   2D segments), EdgeSel, Plane3, Placement
@@ -115,6 +120,15 @@ crates/
       src/lib.rs              # render_png / render_rgba: Auto|Gpu|Cpu, PNG encode
       examples/pngdiff.rs     # compare two PNGs (fraction of differing pixels)
       examples/render.rs      # batch DWG -> PNG with timings
+    cadview-render3d/         # backends for core's Frame3d (no CAD logic, no kernel)
+      src/lib.rs              # Renderer3d trait (progressive-capable), Gpu, Target
+      src/raster.rs           # working-quality raster: MSAA 4x, depth, shading
+                              #   that mirrors scene3d::shade, edge lines (+ .wgsl)
+      src/options.rs          # RenderOptions3d: size, pixelRatio, background,
+                              #   quality (working | presentation, not yet)
+      src/headless.rs         # render_rgba / render_png on cadview-render's
+                              #   process-wide GPU device (native)
+      examples/shapes.rs      # procedural meshes -> PNGs, timings, --fallback
     cadview-web/              # wasm-bindgen target (browser renderer)
       src/main.rs             # entry points, module wiring
       src/session.rs          # SessionRegistry, DocumentSession, SESSIONS
@@ -135,6 +149,8 @@ crates/
       src/transport.rs        # WebTransport: stream classification, per-doc sync, RPC
       src/script.rs           # server-side JS execution (codelib): run_script,
                               #   exec_file, host.call bridge, nested exec
+      src/library.rs          # cad.use: library name -> file (path-sandboxed),
+                              #   ES module -> async function transform
       src/render.rs           # cad.render handler (sandbox, WT RPC and --render)
       src/sync.rs             # re-exports cadview_core::sync::SyncDoc
     solid-harness/            # test tool (publish = false), docs/3d-test-harness.md;
@@ -150,8 +166,6 @@ crates/
                               #   regression cases found by the fuzzer
       src/kernels/arris.rs    # ArrisKernel (arris =0.11.1), the only file naming arris
       src/kernels/cad_kernel.rs # CadKernel (cad-kernel =0.15.0), the only file
-      src/library.rs          # cad.use: library name -> file (path-sandboxed),
-                              #   ES module -> async function transform
                               #   naming cad-kernel
       src/kernels/broken.rs   # broken adapters (mutants) that test the harness
       src/fuzz.rs             # fuzzer library: seeded recipe generator, judge
@@ -487,6 +501,7 @@ Scripts get `cad` on globalThis with the same API as the browser
 |-----|-------------|
 | `cad.*` | All mutation/query methods (addLine, entities, etc.) |
 | `cad.readFile(path)` | Read file from disk (relative to script dir) |
+| `cad.use(name)` | Load a script library (an ES module, `lib/<name>.js` under the script dir) once per run; resolves to its exports. Also in the browser console. See `docs/api-surface.md`, "Script libraries" |
 | `cad.save(path)` | Save document as JSON |
 | `cad.saveDwg(path)` | Save document as DWG |
 | `cad.savePdf(path, { colors, lineweights, skipLayers })` | Save a one-page PDF. `colors`: `"paper"` (default, readable on white), `"mono"`, `"screen"` (as stored). `lineweights: true` strokes entities at their own lineweight where one is set (default: uniform hairlines). `skipLayers`: layer names to leave out, on top of the layers the document hides (default: none) |
@@ -507,7 +522,6 @@ Scripts get `cad` on globalThis with the same API as the browser
                   (__cadCall/__rpcCall/__readFile/__loadLibrary -> host.call)
                      │
                      └── codelib sandbox, host calls answered by script.rs
-| `cad.use(name)` | Load a script library (an ES module, `lib/<name>.js` under the script dir) once per run; resolves to its exports. Also in the browser console. See `docs/api-surface.md`, "Script libraries" |
                             │
                             ├── cad.<method> -> cadview_core::cad_call()
                             ├── rpc.<method> -> save/saveDwg/loadDwg/exec handlers
@@ -515,6 +529,10 @@ Scripts get `cad` on globalThis with the same API as the browser
                             └── lib.load     -> library.rs (cad.use: resolve +
                                                 ES module transform)
 ```
+
+The engine cannot load ES modules (`import()` traps the instance), so
+`library.rs` turns a library's `import`/`export` declarations into an
+async function that the loader in `cad-api.ts` evaluates.
 
 `cad.exec(path)` runs the file as a nested codelib run on the same
 document (moved into the nested run and handed back), up to 8 deep,
@@ -536,10 +554,6 @@ within what is left of the caller's time budget.
   channel. Multiple sync streams coexist on one WebTransport connection.
 - **Handshake**: client sends sync header + SV, server replies with
   update + SV, client sends its update. Then continuous bidi.
-The engine cannot load ES modules (`import()` traps the instance), so
-`library.rs` turns a library's `import`/`export` declarations into an
-async function that the loader in `cad-api.ts` evaluates.
-
 - **RPC**: per-call bidi streams. Request JSON includes `doc_id` for
   routing to the correct server-side document.
 
@@ -644,18 +658,38 @@ Compare two PNGs with
 (prints the fraction of pixels differing by more than 8/255 in any
 channel).
 
+### Render 3D to PNG
+
+`cadview-render3d` renders a `cadview_core::scene3d::Scene3d` (triangle
+meshes, placements, materials, a camera) headless, on the same
+process-wide GPU device as the 2D renderer. Only the working quality
+exists (shaded raster with edges and outlines, ambient occlusion, an
+optional ground, clip planes for cutaways); `Quality::Presentation`
+returns `Render3dError::NotAvailable`. No server or script API yet.
+
+```bash
+# Procedural meshes to PNGs: every working-render feature once, 500-part
+# timings and contact-sheet.png (--fallback also tries wgpu's software
+# adapter)
+cargo run -p cadview-render3d --release --example shapes -- out/ --fallback
+# Kernel-evaluated corpus parts, whole and cut, plus corpus-sheet.png (the
+# harness is the only crate with a kernel)
+cargo run -p solid-harness --release --example render_corpus -- out/
+```
+
 ## Tests
 
 ```bash
 cargo test -p cadview-core
 cargo test -p cadview-render
+cargo test -p cadview-render3d
 cargo test -p cadview-web
 cargo test -p cadview-server
 cargo test -p solid-harness            # see "Solid harness" below
 ```
 
-cadview-render's GPU tests print `SKIPPED` and pass when no GPU adapter
-is found.
+cadview-render's and cadview-render3d's GPU tests print `SKIPPED` and
+pass when no GPU adapter is found.
 
 cadview-core: 35+ tests (entity CRUD, cad_call dispatch, geometry).
 cadview-web: 12 tests (session registry isolation, create/destroy/use).

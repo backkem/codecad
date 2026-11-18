@@ -1,0 +1,17 @@
+[package]
+name = "cadview-render3d"
+version = "0.1.0"
+edition = "2021"
+description = "Backends for cadview-core 3D scenes: shaded raster with edges on the shared wgpu device, headless PNG"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+cadview-core = { path = "../cadview-core" }
+# The shared GpuContext (one device per process or page) and PNG encoding.
+cadview-render = { path = "../cadview-render", default-features = false, features = ["gpu"] }
+wgpu = "30.0.2"
+log = "0.4"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pollster = "1"

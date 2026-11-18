@@ -1017,6 +1017,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cadview-render3d"
+version = "0.1.0"
+dependencies = [
+ "cadview-core",
+ "cadview-render",
+ "log",
+ "pollster",
+ "wgpu",
+]
+
+[[package]]
 name = "cadview-server"
 version = "0.1.0"
 dependencies = [

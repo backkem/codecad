@@ -22,6 +22,7 @@ pub mod geo;
 pub mod pdf;
 pub mod region;
 pub mod render;
+pub mod scene3d;
 pub mod solid;
 pub mod spline;
 pub mod sync;

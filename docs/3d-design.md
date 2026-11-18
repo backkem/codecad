@@ -147,6 +147,59 @@ outside core, in `cadview-render3d`, which both shells share.
 
 ## 4. Data model
 
+### 4.0 Revision (2026-11-18): the core speaks a general shape language
+
+This design was written around DIY furniture, and woodworking terms
+leaked into the core's types and API: a part "kind" (flat or turned), a
+grain direction, stock sizes on materials, a `cad.board` call and a cut
+list computed in core. That conflicts with the rule the project has since
+written down (`architecture.md`, "Semantics live in code"): the core
+holds exact geometry and answers generic questions, and what the
+geometry means lives in the script.
+
+The revision, which overrides the sections below wherever they disagree:
+
+- **Parts are shape only.** A `PartDef` is an id, a name and an ordered
+  list of features. The features are a general shape language: extrude,
+  revolve, sweep, loft, hole, boolean, fillet, chamfer. `PartKind`,
+  `GrainDir` and the "fast path for flat parts" (sections 4.1 and 5) are
+  dropped; they were removed from the code before anything used them.
+- **Meaning rides on attributes.** Grain, stock, a cut-list label and
+  anything else a domain needs are free-form attributes on parts and
+  materials, which the core stores, syncs and filters on without
+  interpreting them. This is the same mechanism planned for 2D entities.
+  `Part.label` and `Material.stock` in section 4.1 become attributes.
+  A material's appearance and its section hatch stay: they are rendering
+  and drafting properties, not domain meaning.
+- **Woodworking is a script library, fully decoupled.** It is TypeScript
+  or JavaScript that runs in the script sandbox (and in the browser), and
+  it uses nothing but the public `cad.*` API. It is not compiled into the
+  core, not part of the `cad` API prelude, and the core has no knowledge
+  of it: it could live in another repository. `cad.board` (section 10)
+  becomes a library helper over `cad.extrude`. The cut list (section 7.6)
+  is computed by the library from generic part queries: the bounding box
+  in the part's own frame, the volume, the material and the attributes.
+  The library knows the sizes it asked for, so it can still report exact
+  numbers as entered and compare them with the kernel's box. `cutlist.rs`
+  (section 3) is not built in core.
+- **What the core owes such a library** is generic: attributes on parts,
+  `cad.parts()` with filtering at the source, exact measures (box in a
+  given frame, volume, distance, interference), projection and sections.
+  A different domain (sheet metal, circuit boards, 3D printing) uses the
+  same calls with a different library.
+- **Scripts need a proper way to load a library.** Today an example
+  loads its helpers with `new Function(cad.readFile("lib/drafting.js"))()`.
+  That works but is a workaround. Loading a library by name or path is a
+  generic mechanism the sandbox and the browser should offer. It is rung
+  A7 on `LADDER-API.md` and starts with research; shipping domain
+  libraries is not a priority before then.
+- **The examples and the vision are unchanged.** The bookshelf script in
+  section 10.1 still reads the same; `board`, `cutList` and
+  `cutListTable` come from the library it loads.
+
+Ladder rungs that named the moved pieces (3D1a `board`, 3D3b cut lists)
+keep their gates. What changes is where the code lives.
+
 ### 4.1 Types (cadview-core `solid/`)
 
 ```rust

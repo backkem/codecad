@@ -45,6 +45,25 @@ When adding or bumping a dependency, always `cargo search <crate>` to
 check the latest published version. Don't assume the version in
 Cargo.toml is current.
 
+## Generic core rule
+
+CodeCAD is code plus CAD. **Code** brings the meaning: the use case, the
+domain, the rules. **CAD** is the core: generic, exact drawing and shape
+work. The core must not learn what a drawing is about.
+
+- **No domain knowledge in Rust.** No layer names or prefixes with
+  built-in behaviour, no part "kinds", no rules that serve one trade. A
+  domain library is TypeScript or JavaScript that runs in the script
+  sandbox and uses only the public `cad.*` API.
+- **Before adding something to the core or the API, ask: would another
+  domain need the same thing?** If yes, add the generic mechanism: a
+  query over whole sets, an attribute the core stores but does not
+  interpret, an option the script passes. If no, it belongs in a script.
+- **When a rule is too slow in script, move the geometric primitive it
+  needs into the core, not the rule.**
+
+See `docs/architecture.md`, "Semantics live in code".
+
 ## Public repository
 
 This repository is public. Everything committed, and every commit

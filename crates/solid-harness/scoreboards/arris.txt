@@ -4,16 +4,16 @@
 # Outcomes: correct, refused (typed error), undecided (inside the band), WRONG, n/a.
 #
 # Counts per layer:
-#   closed     30 correct, 148 n/a
-#   enclosure  91 correct, 17 refused, 3 WRONG, 67 n/a
-#   shell      92 correct, 19 refused, 67 n/a
-#   mesh       93 correct, 20 refused, 65 n/a
-#   valid      96 correct, 17 refused, 65 n/a
-#   equiv      12 correct, 166 n/a
-#   algebra    40 correct, 7 refused, 131 n/a
-#   continuity 1 correct, 2 refused, 3 undecided, 172 n/a
-#   overall    3 WRONG, 143 correct, 29 refused, 3 undecided
-# Cases recorded WRONG (findings against this kernel; the gate keeps them, a kernel that ships must have none): 3
+#   closed     44 correct, 173 n/a
+#   enclosure  114 correct, 18 refused, 3 undecided, 82 n/a
+#   shell      115 correct, 20 refused, 82 n/a
+#   mesh       116 correct, 21 refused, 80 n/a
+#   valid      119 correct, 18 refused, 80 n/a
+#   equiv      16 correct, 201 n/a
+#   algebra    49 correct, 8 refused, 160 n/a
+#   continuity 2 correct, 2 refused, 3 undecided, 210 n/a
+#   overall    180 correct, 31 refused, 6 undecided
+# Cases recorded WRONG (findings against this kernel; the gate keeps them, a kernel that ships must have none): 0
 #
 # case | overall | closed | enclosure | shell | mesh | valid | equiv | algebra | continuity
 part: board | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
@@ -194,18 +194,18 @@ part: slot split: above | correct | n/a | correct | correct | correct | correct 
 #   closed: n/a: no closed form
 part: slot split: below | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
 #   closed: n/a: no closed form
-part: fuzz: small box far from the origin (s1 i34) | WRONG | n/a | WRONG | correct | correct | correct | n/a | n/a | n/a
+part: fuzz: small box far from the origin (s1 i34) | undecided | n/a | undecided | correct | correct | correct | n/a | n/a | n/a
 #   closed: n/a: no closed form
-#   enclosure: WRONG: volume 0.2026571096673287 outside [2.0265589177e-1, 2.0265710772e-1], rel width 6.0e-6
+#   enclosure: undecided: volume 0.2026571096673287 outside [2.0265589177e-1, 2.0265710772e-1], rel width 6.0e-6 by 1.750e-9, within the positional band 6.272e-5 (area bound 6.2718e1 mm^2 times 1e-6 mm)
 part: fuzz: two near-tangent blind holes breaking out (s1 i24) | refused | n/a | refused | refused | refused | refused | n/a | n/a | n/a
 #   closed: n/a: no closed form
 #   enclosure: refused: feature 3: kernel: degenerate result: the faces touch along a curve interior to both result faces (-f12, +f15)
 #   shell: refused: feature 3: kernel: degenerate result: the faces touch along a curve interior to both result faces (-f12, +f15)
 #   mesh: refused: feature 3: kernel: degenerate result: the faces touch along a curve interior to both result faces (-f12, +f15)
 #   valid: refused: feature 3: kernel: degenerate result: the faces touch along a curve interior to both result faces (-f12, +f15)
-part: fuzz: tiny box with a face 1e-9 off (s4 i20) | WRONG | n/a | WRONG | correct | correct | correct | n/a | n/a | n/a
+part: fuzz: tiny box with a face 1e-9 off (s4 i20) | undecided | n/a | undecided | correct | correct | correct | n/a | n/a | n/a
 #   closed: n/a: no closed form
-#   enclosure: WRONG: volume 0.00006000000029999982 outside [5.9999640001e-5, 6.0000000000e-5], rel width 6.0e-6
+#   enclosure: undecided: volume 0.00006000000029999982 outside [5.9999640001e-5, 6.0000000000e-5], rel width 6.0e-6 by 2.400e-13, within the positional band 2.240e-8 (area bound 2.2400e-2 mm^2 times 1e-6 mm)
 part: fuzz: through hole tangent to a side face (s1 i196) | refused | n/a | refused | refused | refused | refused | n/a | n/a | n/a
 #   closed: n/a: no closed form
 #   enclosure: refused: kernel: the kernel's checker rejects the result: L5 f31: loop 0 intersects itself
@@ -244,9 +244,9 @@ part: fuzz: two tangent blind holes breaking out (s4 i0) | refused | n/a | refus
 #   shell: refused: feature 3: kernel: degenerate result: the faces touch along a curve interior to both result faces (-f14, +f17)
 #   mesh: refused: feature 3: kernel: degenerate result: the faces touch along a curve interior to both result faces (-f14, +f17)
 #   valid: refused: feature 3: kernel: degenerate result: the faces touch along a curve interior to both result faces (-f14, +f17)
-part: fuzz: intersection 1e-7 above a face (s3 i114) | WRONG | n/a | WRONG | correct | correct | correct | n/a | n/a | n/a
+part: fuzz: intersection 1e-7 above a face (s3 i114) | undecided | n/a | undecided | correct | correct | correct | n/a | n/a | n/a
 #   closed: n/a: no closed form
-#   enclosure: WRONG: volume 263.99999560000003 outside [2.6399840280e2, 2.6399998680e2], rel width 6.0e-6
+#   enclosure: undecided: volume 263.99999560000003 outside [2.6399840280e2, 2.6399998680e2], rel width 6.0e-6 by 8.536e-6, within the positional band 7.520e-4 (area bound 7.5200e2 mm^2 times 1e-6 mm)
 part: fuzz: thin plate intersection 1e-3 up, far away (s2 i101) | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
 #   closed: n/a: no closed form
 part: fuzz: hole along the corner of a thin rod far away (s1 i857) | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
@@ -292,6 +292,44 @@ part: fuzz: side hole along a thin prism (s11 i61) | refused | n/a | refused | r
 #   valid: refused: feature 2: kernel: degenerate result: the faces touch along a curve interior to both result faces (+f8, +f3, +f4)
 part: fuzz: cylinder intersection far from the origin (s2 i11) | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
 #   closed: n/a: no closed form
+part: rounded slab | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: tapered square bar | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: revolved profile with bead and cove | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: swept round bar | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: quarter revolve of a rectangle | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: three-quarter revolve of a rectangle | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: revolved rectangle tube | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: extruded annulus | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: loft of equal squares | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: extruded square bar | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: disc swept along a line | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: extruded disc | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: disc swept along a quarter arc | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: disc revolved a quarter turn | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: rounded slab moved | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: tapered square bar moved | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: revolved profile with bead and cove moved | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: swept round bar moved | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: three-quarter revolve of a rectangle moved | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: revolved profile with bead and cove mirrored | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: three-quarter revolve of a rectangle mirrored | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: revolved profile with bead and cove + itself | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: revolved profile with bead and cove n itself | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: revolved profile with bead and cove - itself | refused | n/a | refused | refused | refused | refused | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   enclosure: refused: feature 2: kernel: degenerate result: the result has no thickness (+b0, +b1)
+#   shell: refused: feature 2: kernel: degenerate result: the result has no thickness (+b0, +b1)
+#   mesh: refused: feature 2: kernel: degenerate result: the result has no thickness (+b0, +b1)
+#   valid: refused: feature 2: kernel: degenerate result: the result has no thickness (+b0, +b1)
 equiv: box: one extrude = two fused halves | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a | n/a
 equiv: box: extrude up = extrude down | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a | n/a
 equiv: box: extrude down = flipped plane | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a | n/a
@@ -358,6 +396,21 @@ algebra: operand order (intersection): side with dado and rail with half-lap | c
 algebra: split by a plane: board with hole | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
 algebra: split by a plane: block with counterbore | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
 algebra: split by a plane: slot | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+equiv: tube: revolved rectangle = extruded annulus | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: square bar: loft of equal sections = extrude | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: round bar: sweep along a line = extrude | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: quarter torus: sweep along an arc = revolve by its angle | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a | n/a
+algebra: motion: rounded slab | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: motion: tapered square bar | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: motion: revolved profile with bead and cove | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: motion: swept round bar | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: motion: three-quarter revolve of a rectangle | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: mirror: revolved profile with bead and cove | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: mirror: three-quarter revolve of a rectangle | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A + A = A: revolved profile with bead and cove | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A n A = A: revolved profile with bead and cove | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A - A = empty: revolved profile with bead and cove | refused | n/a | n/a | n/a | n/a | n/a | n/a | refused | n/a
+#   algebra: refused: feature 2: kernel: degenerate result: the result has no thickness (+b0, +b1)
 sweep: box tool through a flush top face | undecided | n/a | n/a | n/a | n/a | n/a | n/a | n/a | undecided
 #   continuity: undecided: jump within the band from s = 1e-8 to 1e-7: dV -4.000e-5
 sweep: dado tool through a flush end face | undecided | n/a | n/a | n/a | n/a | n/a | n/a | n/a | undecided
@@ -369,3 +422,4 @@ sweep: two holes through tangency | refused | n/a | n/a | n/a | n/a | n/a | n/a 
 #   continuity: refused: 7 of 21 steps refused, first s = -1e-7: feature 3: kernel: degenerate result: the faces touch along a curve interior to both result faces (-f11, +f13)
 sweep: fused box through face contact | undecided | n/a | n/a | n/a | n/a | n/a | n/a | n/a | undecided
 #   continuity: undecided: jump within the band from s = -1e-7 to -1e-8: dV 3.867e-5; wrong direction within the band from s = 1e-8 to 1e-7: dV -1.333e-6
+sweep: box tool through tangency with a revolved cylinder | correct | n/a | n/a | n/a | n/a | n/a | n/a | n/a | correct

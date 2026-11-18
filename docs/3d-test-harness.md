@@ -72,12 +72,19 @@ in `solid-harness/src/reference/` (doc comments are the specification):
 | Hole | removes `rho < d/2` for `t` in `[0, depth]` from the entry point along the direction (`t >= 0` for through), plus `rho < cbore/2` for `t` in `[0, cbore depth]`; nothing behind the entry point |
 | Boolean, inline tool | the tool's reference moved by the placement (normalised quaternion), combined by union, difference or intersection |
 | Chamfer, equal distances | defined only on the cap edges of a first, adding extrude over a convex polygon, before any other feature: keeps `s + t >= d`, `s` the distance inside from the edge line and `t` the depth from the cap; mitres at convex corners; every other case is "not defined" |
+| Revolve | the profile on one side of its axis (it may touch it); a point is in the full revolve when its meridian point (axial coordinate, distance from the axis) is in the profile region; below a whole turn, cut to the angles `[0, theta]` from the profile's half-plane, right-handed about the axis (a wedge: two half-spaces through the axis, intersected up to 180 degrees, united above) |
+| Loft | defined for two sections on planes with the same axes, each one strictly convex polygon of lines, side `i` of one exactly parallel to and in the direction of side `i` of the other: the convex hull of the two polygons (every side face is then a plane); every other loft is "not defined" |
+| Sweep | along lines and arcs that start at the profile plane's origin along its normal, tangent-continuous: the section moves rigidly with no twist, sliding along a line and turning about an arc's axis; the solid is the union of the pieces (a prism per line, a revolve of the section by the arc's angle per arc) |
+| Fillet (rolling ball) | defined only for all edges, directly after a first, adding extrude of a strictly convex polygon: the prism opened by a ball of radius `r`, which for a convex prism is the set of points within `r` of the prism shrunk by `r` (signed distance `sd(P') - r`, exact); every other round is "not defined" |
 
 **No kernel adapter may evaluate a feature before its reference meaning
 is written down as one exact definition.** Property-only checks are
 allowed only where an exact definition is impossible, and the definition
-must say so. Sweep and loft get their definitions when they are first
-implemented.
+must say so. Where a feature's definition covers only some recipes (loft,
+fillet), the rest are "not defined": those parts get n/a on the reference
+layers and are judged by closed forms, the mesh layer, the kernel's
+validity, equivalent constructions and the two kernels against each
+other.
 
 Two consequences:
 
@@ -385,6 +392,97 @@ arris can detect itself; the adapter now turns them into refusals:
   open question below (a positional band for the enclosure), not
   something the adapter can detect.
 
+### Slice 5 built (2026-11-18, rung 3D0b): curved features and a positional band
+
+- **A positional band for the enclosure** (closes the open question of
+  section 11). A volume outside the certified enclosure (plus the `1e-9`
+  relative slack) by at most `A * BAND` is now undecided, further out is
+  wrong. `BAND = 1e-6` mm is the band of section 8 and of the continuity
+  layer. `A` is a certified upper bound on the boundary's area from the
+  recipe alone, never from a kernel: the boundary of a Boolean result lies
+  in the union of its operands' boundaries, so the sum over the reference's
+  leaves bounds it, each leaf's area by a closed form rounded up (a
+  prism's caps and side; a cylinder's side over the part of its axis the
+  part's box spans; a solid of revolution's surface by Pappus; a chamfer's
+  plane by the box), and every convex leaf at most the area of the part's
+  box (a point of a convex leaf's boundary in the box is on the boundary
+  of their intersection, and surface area grows with convex sets). The
+  argument for the band: a boundary moved by at most `BAND` along its
+  normal changes the volume by at most `A * BAND` to first order. Over
+  the 135 catalogue parts with an enclosure the band is a median `5e-7` of
+  the volume and at most `4e-4` for parts with a volume, except a sliver
+  of `8e-7` mm^3 (fuzzer case s4 i801), where it is 33 times the volume:
+  a part thinner than the band cannot be judged by volume at all. The
+  scoreboard run prints the table (`band_table`).
+- **What moved:** three cases on arris (all its recorded wrong cases:
+  face merges at 1e-9 and 1e-7 mm, rounding 2.3e6 mm from the origin) and
+  three on cad-kernel, from wrong to undecided. No other row changed.
+  One cad-kernel case stays wrong: a corner box far from the origin whose
+  volume is off by 3.5e-7 mm^3 against a band of 1.9e-7. arris now has no
+  recorded wrong case.
+- **Curved features in both adapters.** arris: `ops::revolve`,
+  `ops::loft`, `ops::sweep` (rotation-minimising frame) and `ops::fillet`.
+  cad-kernel: `build::revolve`, a ruled loft of two line sections as
+  bilinear sheets (`build::lofted`), a sweep of lines and arcs as the union
+  of a prism per line and a revolve per arc (the kernel has no general
+  sweep), and `rounds::rounded`. Its adapter now computes a tight box for
+  sphere, torus, bilinear-sheet and degree-one B-spline geometry too (the
+  candidate extremes, kept when the kernel's own classification puts them
+  on the boundary). Tapered extrudes stay unsupported in both.
+- **A curved corpus** in core (`corpus/curved.rs`): a slab with all 12
+  edges rounded, a tapered square bar (loft), a revolved profile with a
+  bead and a cove, and a round bar swept along a line, an arc and a line.
+  Both kernels build all four as valid single solids with closed meshes,
+  every volume within 2e-15 relative of the hand-derived closed form and
+  every box within 3e-14 mm (gate: 1e-6).
+- **Reference meanings** (section 3) for revolve (full turn and wedge),
+  loft (two parallel convex sections with parallel sides: a convex
+  polytope), sweep (lines and arcs: the union of prisms and revolves) and
+  fillet (all edges of a convex prism: the prism opened by a ball). All
+  are certified: sign-exact, 1-Lipschitz, interval-evaluated. Lofts and
+  rounds outside those cases are "not defined" (see section 11).
+- **Catalogue:** 217 rows per kernel (137 parts, 73 relations, 7 sweeps):
+  the 4 corpus parts, 2 wedge revolves, 4 equivalent pairs (revolved
+  rectangle against extruded annulus, loft of equal sections against an
+  extrude, sweep along a line against an extrude, sweep along a quarter
+  arc against a quarter revolve), motions of five curved parts, mirrors
+  of two revolves, `A + A`, `A n A`, `A - A` of the revolved profile, and
+  one continuity sweep through a curved tangency (a box face sliding onto
+  a revolved cylinder).
+- **Mutants:** 14 (three new: every fillet radius 1e-3 mm larger, every
+  revolve axis moved 0.01 mm, the last loft section scaled by 1.001), all
+  caught, the band in place. The fillet radius is caught only by the
+  closed form (the rounded slab, 2.6e-6 relative): the surface moves by
+  at most 4e-4 mm, under the shell test's 1e-3 step, and the enclosure is
+  too wide on a rounded part. The axis shift is caught by the closed form,
+  the shell test, the mesh layer (the shifted axis opens a tube: Euler
+  characteristic 0) and an equivalent pair; the loft scale by the closed
+  form, the enclosure, the shell test and the loft-against-extrude pair.
+  Every earlier mutant is still caught; the mesh layer alone still
+  catches a dropped triangle and the algebra layer alone the box that
+  ignores rotation, and "volume scaled by 1 + 1e-6" is still wrong on
+  the enclosure layer on 14 parts (closed form 44). The
+  run now takes 54 minutes in release, most of it tessellating curved
+  parts at chord 1e-4.
+- **What it found on arris 0.11.1:** nothing wrong. Every curved row is
+  correct on every layer; `A - A` of the revolved profile is refused, as
+  for the other bases.
+- **What it found on cad-kernel 0.15.0:** its mesher breaks the chord
+  contract on torus faces at the finest chord. On a quarter torus the
+  worst triangle centroid lies 9.5e-3, 9.9e-4 and 1.3e-2 mm off the exact
+  torus at chords 1e-2, 1e-3 and 1e-4 (the test
+  `kernels::cad_kernel::forward_look::torus_mesh_against_its_chord`):
+  finer than 1e-3 it gets worse, not better. The shell test (steps of
+  1e-3 off that mesh) and the mesh layer's volume convergence catch it on
+  10 rows (every part with a torus face, and the parts derived from them).
+  They are recorded as findings against cad-kernel. Its B-reps and
+  volumes are right (closed form and enclosure correct on all of them).
+- **What it found in our own code:** no bug in the adapters or the
+  reference. One property to know: a point on a revolve's axis is in the
+  boundary band when the profile runs along the axis (the axis segment is
+  part of the meridian's boundary), so the enclosure never certifies the
+  thin column of cells along it.
+
 ## 10. Effect on the ladder
 
 - 3D0a's gate (the closed-form corpus) stays and becomes layer 1.
@@ -417,13 +515,45 @@ Decided:
   impossible, stated as such. Sweep and loft get their definitions when
   they are first implemented.
 
+- **A positional band for the enclosure** (3D0b): a volume outside the
+  certified enclosure by at most `A * 1e-6` mm, `A` a certified area
+  bound from the recipe, is undecided; further out is wrong (layer 1b
+  above, slice 5).
+- **Curved features get a reference only where it is exact** (3D0b):
+  revolve (any profile on one side of its axis, any angle), sweep along
+  lines and arcs (any profile), loft only between two parallel convex
+  polygons with parallel sides, fillet only on all edges of a convex
+  extrude directly after it. Everything else is "not defined", not
+  approximated.
+
 Open:
 
-- **A positional band for the enclosure.** Layer 1b calls a volume
-  outside the certified enclosure (plus 1e-9 relative) wrong, even when
-  the difference is a face moved by less than the kernel's own tolerance
-  and the 1e-6 mm band of section 8. The continuity layer calls such
-  evidence undecided. Both kernels have recorded wrong cases of this
-  kind (`docs/research/kernel-comparison.md`).
+- **What the curved references do not cover yet**, and what each would
+  need:
+  - *Fillet on a subset of edges, or after other features.* The rolling
+    ball's point set is still "not reached by a ball of radius `r` inside
+    the solid near a selected edge", but near the ends of a selected
+    chain and at corners where selected and unselected edges meet, the
+    kernels' blends are a choice (section 8), not a consequence of the
+    definition. An exact reference needs a definition of those ends
+    first; the opening of the whole solid is exact only when every edge
+    is rounded.
+  - *Concave rounds* (the closing by a ball): exact as a set, but the
+    signed distance of a closing needs the distance to the complement's
+    opening, which has no closed form over our leaves yet.
+  - *Lofts between non-parallel sides, more than two sections, or curved
+    sections.* The ruled faces are then bilinear (or smooth) sheets; the
+    exact distance to them needs a certified distance to a bilinear patch
+    (a degree-4 problem per point), which is not written.
+  - *Sweeps along helices or splines*, and sweeps whose arcs pass the
+    section across their axis: the frame is then not a sequence of rigid
+    slides and turns.
+  - *Tapered extrudes* need the offset of a profile (exact for polygons,
+    arcs offset to arcs), not written.
+- **The enclosure is weak on curved parts** at the default budget: its
+  relative width is 0.03 to 0.8 on the curved catalogue parts (a box
+  subdivision fits round faces badly, and cells along a revolve axis
+  never certify), so it catches a missing or extra feature there, not a
+  small error. The shell test and the closed forms carry those parts.
 - **A time limit on kernel calls**, so that a hang can be a recorded
   outcome in the catalogue rather than only a fuzzer note.

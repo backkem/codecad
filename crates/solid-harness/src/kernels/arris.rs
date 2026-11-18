@@ -13,11 +13,16 @@
 //! | `Hole` | `ops::primitive_cylinder` starting exactly at the entry point (blind: the depth; through: past the far side of the part), `ops::cut`; a counterbore is a second, wider cylinder from the entry point, `ops::cut` |
 //! | `Boolean` with `ToolRef::Def` | the tool definition evaluated into the same model, moved by `ops::transform`, then the op |
 //! | `Chamfer` (`d1 == d2`) | edges picked by [`edge_query`], then `ops::chamfer` (mitred corners) |
+//! | `Fillet` | edges picked by [`edge_query`], then `ops::fillet` (rolling ball, closed-form corner blends; refuses corners it has no closed form for) |
+//! | `Revolve` | the profile on its plane, `ops::revolve` about the axis mapped to 3D, by the angle in radians (a whole turn exactly `2 pi`), then the op |
+//! | `Loft` | every section on its plane, `ops::loft` (`LoftKind::Ruled`, or `Smooth` when not ruled), open, then the op |
+//! | `Sweep` | the path checked (`Path3::check`), its lines and arcs as a `geom::Path` (`LineTo`, `ArcTo`), `ops::sweep` with `FrameLaw::RotationMinimizing`, then the op |
 //! | op `Add` / `Subtract` / `Intersect` | `ops::fuse` / `ops::cut` / `ops::common` |
 //!
-//! Everything else (`Revolve`, `Sweep`, `Loft`, `Fillet`, tapered extrude,
-//! asymmetric chamfer, `ToolRef::Part`, spline profile segments) returns
-//! [`EvalError::Unsupported`].
+//! Everything else (tapered extrude, asymmetric chamfer, `ToolRef::Part`,
+//! spline profile segments) returns [`EvalError::Unsupported`]. arris
+//! itself refuses an elliptic segment in a revolved profile. A fillet's
+//! `fallback` is for renderers; the B-rep is the exact round or an error.
 //!
 //! Volumes come from `ops::measure::mass_properties`, which integrates on
 //! the exact faces (no mesh). arris has no body-level bounding box, so
@@ -45,7 +50,9 @@ use std::sync::Arc as Shared;
 use arris::check::domain::FaceDomain;
 use arris::check::{check, lumps, Level};
 use arris::geom::region2::Side;
-use arris::geom::{Curve, Profile, ProfileLoop, ProfileSegment, Surface};
+use arris::geom::{
+    Curve, FrameLaw, Path, PathSegment, Profile, ProfileLoop, ProfileSegment, Surface,
+};
 use arris::math::nalgebra::{Quaternion, UnitQuaternion};
 use arris::math::{Axis, Frame, Isometry, Point2, Precision, Vec2};
 use arris::ops::query::{distance, Operand};
@@ -58,8 +65,8 @@ use cadview_core::solid::kernel::{
 };
 use cadview_core::solid::select::{edge_query, EdgeQuery};
 use cadview_core::solid::types::{
-    arc_point, DefId, Depth, FeatId, Feature, Frame3, Op, PartDef, Placement, Plane3, Point3,
-    Profile2d, Seg2, ToolRef, Vec3,
+    arc_point, DefId, Depth, FeatId, Feature, Frame3, Op, PartDef, Path3, Placement, Plane3,
+    Point3, Profile2d, Seg2, Seg3, ToolRef, Vec3,
 };
 
 /// How arris's debug-build panic starts when an operation's output fails
@@ -373,14 +380,54 @@ fn eval_into(
                     .map_err(&k)?
                     .0
             }
-            Feature::Revolve { .. }
-            | Feature::Sweep { .. }
-            | Feature::Loft { .. }
-            | Feature::Fillet { .. } => {
-                return Err(EvalError::unsupported(
-                    Some(id),
-                    format!("the {} feature", feature.kind_name()),
-                ));
+            Feature::Revolve {
+                profile,
+                plane,
+                axis,
+                angle_deg,
+                op,
+                ..
+            } => {
+                let body =
+                    revolve(model, profile, plane, axis, *angle_deg).map_err(|e| e.at(id))?;
+                combine(model, current.take(), body, *op, id)?
+            }
+            Feature::Loft {
+                sections,
+                ruled,
+                op,
+                ..
+            } => {
+                let body = loft(model, sections, *ruled).map_err(|e| e.at(id))?;
+                combine(model, current.take(), body, *op, id)?
+            }
+            Feature::Sweep {
+                profile,
+                plane,
+                path,
+                op,
+                ..
+            } => {
+                let body = sweep(model, profile, plane, path).map_err(|e| e.at(id))?;
+                combine(model, current.take(), body, *op, id)?
+            }
+            Feature::Fillet { edges, radius, .. } => {
+                let Some(cur) = current.take() else {
+                    return Err(EvalError::invalid(Some(id), "nothing to round yet"));
+                };
+                if !radius.is_finite() || *radius <= CONFUSION {
+                    return Err(EvalError::invalid(
+                        Some(id),
+                        "fillet radius must be finite and positive",
+                    ));
+                }
+                // `fallback` names what a renderer may show when the exact
+                // round is refused; the B-rep is exact or an error.
+                let query = edge_query(&def.features[..i], edges, id)?;
+                let picked = pick_edges(model, cur, &query, id)?;
+                arris::ops::fillet(model, cur, &picked, *radius, &RUN)
+                    .map_err(&k)?
+                    .0
             }
         };
         current = Some(next);
@@ -454,13 +501,9 @@ fn arris_frame(f: &Frame3) -> Result<Frame, EvalError> {
     Frame::from_orthonormal(pt(f.origin), vec(f.x), vec(f.y), vec(f.z)).map_err(kernel_err(None))
 }
 
-/// A profile on a sketch plane, swept `distance` along the plane normal.
-fn extrude(
-    model: &mut Model,
-    profile: &Profile2d,
-    plane: &Plane3,
-    distance: f64,
-) -> Result<Body, EvalError> {
+/// A checked profile on its sketch plane, in arris's form, with the
+/// plane's frame.
+fn sketch(profile: &Profile2d, plane: &Plane3) -> Result<(Profile, Frame3), EvalError> {
     profile.check()?;
     let frame = plane.frame()?;
     let mut loops = profile.loops().map(|(_, lp)| profile_loop(lp));
@@ -468,11 +511,110 @@ fn extrude(
         .next()
         .ok_or_else(|| EvalError::invalid(None, "profile has no outer loop"))??;
     let holes = loops.collect::<Result<Vec<_>, _>>()?;
-    let sketch = Profile {
-        plane: arris_frame(&frame)?,
-        outer,
-        holes,
+    Ok((
+        Profile {
+            plane: arris_frame(&frame)?,
+            outer,
+            holes,
+        },
+        frame,
+    ))
+}
+
+/// A profile turned about an axis in its plane (`ops::revolve`).
+fn revolve(
+    model: &mut Model,
+    profile: &Profile2d,
+    plane: &Plane3,
+    axis: &kurbo::Line,
+    angle_deg: f64,
+) -> Result<Body, EvalError> {
+    if !angle_deg.is_finite() || angle_deg <= 0.0 || angle_deg > 360.0 {
+        return Err(EvalError::invalid(
+            None,
+            "revolve angle must be in (0, 360] degrees",
+        ));
+    }
+    let (sketch, frame) = sketch(profile, plane)?;
+    let (a, b) = (frame.at(axis.p0, 0.0), frame.at(axis.p1, 0.0));
+    if a.distance(b) <= CONFUSION {
+        return Err(EvalError::invalid(None, "revolve axis has no direction"));
+    }
+    let axis = Axis::new(pt(a), vec(b - a)).map_err(kernel_err(None))?;
+    let angle = if angle_deg == 360.0 {
+        std::f64::consts::TAU
+    } else {
+        angle_deg.to_radians()
     };
+    Ok(arris::ops::revolve(model, &sketch, axis, angle, &RUN)
+        .map_err(kernel_err::<OpError>(None))?
+        .0)
+}
+
+/// A solid through the sections (`ops::loft`): ruled, or smooth through
+/// every section (two sections are ruled either way).
+fn loft(
+    model: &mut Model,
+    sections: &[(Profile2d, Plane3)],
+    ruled: bool,
+) -> Result<Body, EvalError> {
+    if sections.len() < 2 {
+        return Err(EvalError::invalid(None, "a loft needs two sections"));
+    }
+    let profiles = sections
+        .iter()
+        .map(|(p, pl)| sketch(p, pl).map(|s| s.0))
+        .collect::<Result<Vec<_>, _>>()?;
+    let kind = if ruled {
+        arris::ops::LoftKind::Ruled
+    } else {
+        arris::ops::LoftKind::Smooth
+    };
+    Ok(arris::ops::loft(model, &profiles, kind, false, &RUN)
+        .map_err(kernel_err::<OpError>(None))?
+        .0)
+}
+
+/// A profile carried along a path with a rotation-minimising frame
+/// (`ops::sweep`).
+fn sweep(
+    model: &mut Model,
+    profile: &Profile2d,
+    plane: &Plane3,
+    path: &Path3,
+) -> Result<Body, EvalError> {
+    path.check(plane)?;
+    let (sketch, _) = sketch(profile, plane)?;
+    let segments = path
+        .segs
+        .iter()
+        .map(|s| match s {
+            Seg3::Line { to, .. } => PathSegment::LineTo(pt(*to)),
+            Seg3::Arc { via, to, .. } => PathSegment::ArcTo {
+                via: pt(*via),
+                to: pt(*to),
+            },
+        })
+        .collect();
+    let spine = Path {
+        start: pt(path.segs[0].ends().0),
+        segments,
+    };
+    Ok(
+        arris::ops::sweep(model, &sketch, &spine, FrameLaw::RotationMinimizing, &RUN)
+            .map_err(kernel_err::<OpError>(None))?
+            .0,
+    )
+}
+
+/// A profile on a sketch plane, swept `distance` along the plane normal.
+fn extrude(
+    model: &mut Model,
+    profile: &Profile2d,
+    plane: &Plane3,
+    distance: f64,
+) -> Result<Body, EvalError> {
+    let (sketch, frame) = sketch(profile, plane)?;
     let direction = vec(frame.z.scale(distance.signum()));
     Ok(
         arris::ops::extrude(model, &sketch, direction, distance.abs(), &RUN)
@@ -1012,20 +1154,6 @@ mod tests {
     fn unsupported_features_are_errors_not_panics() {
         let base = extrude(Profile2d::rect(0.0, 0.0, 10.0, 10.0), 10.0, Op::Add);
         let cases = vec![
-            Feature::Revolve {
-                id: FeatId(2),
-                profile: Profile2d::rect(1.0, 0.0, 2.0, 1.0),
-                plane: Plane3::XZ,
-                axis: kurbo::Line::new((0.0, 0.0), (0.0, 1.0)),
-                angle_deg: 360.0,
-                op: Op::Add,
-            },
-            Feature::Fillet {
-                id: FeatId(2),
-                edges: cadview_core::solid::types::EdgeSel::All,
-                radius: 1.0,
-                fallback: cadview_core::solid::types::RoundFallback::Error,
-            },
             Feature::Chamfer {
                 id: FeatId(2),
                 edges: cadview_core::solid::types::EdgeSel::All,

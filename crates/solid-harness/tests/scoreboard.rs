@@ -22,7 +22,7 @@ use std::time::Instant;
 use cadview_core::solid::SolidKernel;
 use solid_harness::cases::catalogue;
 use solid_harness::kernels::{ArrisKernel, CadKernel};
-use solid_harness::layers::{enclosures, run_all};
+use solid_harness::layers::{band_table, enclosures, run_all};
 use solid_harness::outcome::{Layer, Outcome};
 use solid_harness::scoreboard::{compare, parse, render, BLESS_ENV};
 
@@ -50,6 +50,12 @@ fn gate<K: SolidKernel>(kernel: &K, stem: &str) {
         cat.sweeps.len(),
         enc.seconds
     );
+    if stem == KERNELS[0] {
+        println!(
+            "positional band of the enclosure layer per part:\n{}",
+            band_table(&cat, &enc)
+        );
+    }
     let report = run_all(kernel, &cat, &enc);
     println!("kernel run {:.1} s", report.seconds);
     for r in &report.rows {

@@ -114,7 +114,8 @@ crates/
                               #   no kernel
         select.rs             #   EdgeSel -> exact 3D target curves (kernel-neutral)
         corpus/               #   reference parts with closed-form volume + bbox,
-                              #   generic over SolidKernel (prismatic.rs: 3D0a)
+                              #   generic over SolidKernel (prismatic.rs: 3D0a;
+                              #   curved.rs: round, loft, revolve, sweep, 3D0b)
     cadview-render/           # backends for the display list (no CAD logic)
       src/scene.rs            # display list -> vello::Scene (wasm32 + native)
       src/context.rs          # GpuContext: adapter, device, queue, vello::Renderer
@@ -179,6 +180,11 @@ crates/
       examples/fuzz.rs        # the fuzzer driver (development-time, never in CI)
       examples/compare.rs     # both kernels on the catalogue and the sweeps
       examples/timings.rs     # evaluation and tessellation times per kernel
+      examples/wasm_corpus.rs # the corpus on arris as a wasm module (cdylib for
+                              #   wasm32-unknown-unknown); wasm_corpus_base.rs is
+                              #   the same with no kernel (the size baseline)
+      examples/wasm_timings.rs # native host: runs wasm_corpus with wasmtime,
+                              #   native and wasm timings (feature wasm-runner)
   cad-client/                 # build output for sandbox
     cad-api-setup.js          # Vite-built IIFE (from cad-api.ts), a codelib prelude
   web/                        # frontend (TypeScript + React + Vite)
@@ -705,7 +711,8 @@ The kernel adapters, the reference semantics and the evidence layers
 live in `solid-harness` (docs/3d-test-harness.md). Core links no kernel.
 
 ```bash
-# 3D0a gate: the prismatic corpus on arris, per-part table with timings
+# 3D0a and 3D0b gates: the prismatic and the curved corpus on arris,
+# per-part tables with timings (cad-kernel's curved run is printed only)
 cargo test -p solid-harness --test corpus -- --nocapture
 # Every case on every layer, for every kernel with a file in scoreboards/
 # (arris.txt, cad-kernel.txt), compared with that file (ratchet)
@@ -718,6 +725,10 @@ cargo test -p solid-harness --release --test mutants -- --nocapture
 # Capability evidence per kernel (revolve, sweep, loft, rounds, offsets,
 # sections, tessellation), each against a closed form
 cargo test -p solid-harness --release --lib forward_look -- --nocapture
+# The corpus in wasm (development-time, needs no Node): build the module,
+# then time it natively and under wasmtime (docs/research/3d-corpus-timings.md)
+cargo build -p solid-harness --release --target wasm32-unknown-unknown --example wasm_corpus --example wasm_corpus_base
+cargo run -p solid-harness --release --features wasm-runner --example wasm_timings -- target/wasm32-unknown-unknown/release/examples/wasm_corpus.wasm
 ```
 
 The scoreboard and mutant runs take a few minutes in a debug build; use

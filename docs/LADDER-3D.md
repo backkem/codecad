@@ -68,7 +68,7 @@ Each rung is built by a **builder/tester pair** and sized at **≤ about 2 weeks
 | Rung | Content | Done when |
 |---|---|---|
 | **3D0a** kernel boundary and prismatic corpus | `cadview-core/src/solid/`: the `PartDef`, `Feature`, `Profile2d` and `EdgeSel` types (no sync yet), the `SolidKernel` trait and `ArrisKernel` pinned to an exact version (`=0.11.1`). A **prismatic corpus** with closed-form volume and bbox per entry:<br>• board<br>• board with through hole<br>• dado<br>• rabbet<br>• mortise and tenon pair<br>• half-lap<br>• counterbored hole<br>• chamfered slab | `cargo test -p cadview-core solid::corpus::prismatic` passes. Every entry is a valid B-rep, and its volume matches the closed form to ≤ 1e-9 relative. The bbox matches to 1e-9 mm. Per-entry native timings are recorded in the test output. |
-| **3D0b** curved corpus, Truck and wasm | Curved corpus entries:<br>• fully rounded board<br>• tapered leg (loft)<br>• turned leg (revolve with beads and coves)<br>• swept handrail<br><br>`TruckKernel` behind the `kernel-truck` feature (no fillets). A wasm runner `node scripts/solid-corpus.mjs`, built the same way as `research/3d-smoke/`. | Curved entries match the closed form to ≤ 1e-6 relative. Truck agrees with arris to ≤ 1e-6 relative on every non-filleted entry (`cargo test -p cadview-core --features kernel-truck solid::corpus`). The wasm runner passes the full corpus and prints per-entry timings. A table of native and wasm timings and the `cadview-web` wasm size delta is committed in `docs/research/3d-corpus-timings.md`. Any entry arris refuses is listed there, with an upstream issue link. |
+| **3D0b** curved corpus, Truck and wasm | Curved corpus entries:<br>• fully rounded board<br>• tapered leg (loft)<br>• turned leg (revolve with beads and coves)<br>• swept handrail<br><br>`TruckKernel` behind the `kernel-truck` feature (no fillets). A wasm runner `node scripts/solid-corpus.mjs`, built the same way as `research/3d-smoke/`.<br><br>**Changed in the build (see "3D0b: what landed"):** the Truck cross-check is dropped, because cad-kernel 0.15.0 in the test harness fills the second-kernel role (with fillets); the wasm runner is a wasmtime host in the harness, since there is no Node on the build machine; corpus names are general shapes (rounded slab, tapered square bar, revolved profile, swept round bar). | Curved entries match the closed form to ≤ 1e-6 relative. Truck agrees with arris to ≤ 1e-6 relative on every non-filleted entry (`cargo test -p cadview-core --features kernel-truck solid::corpus`). The wasm runner passes the full corpus and prints per-entry timings. A table of native and wasm timings and the `cadview-web` wasm size delta is committed in `docs/research/3d-corpus-timings.md`. Any entry arris refuses is listed there, with an upstream issue link. |
 | **3D1a** parts in the document | Yrs maps `partdefs`, `parts`, `materials`, `assets` and `scene3d`. A content-hashed evaluation cache. Undo/redo covers parts. JSON save/load includes parts, and DWG export ignores them. Flat-part API in `cad_call` and `cad-api.ts`: `board`, `subtract`, `hole`, `pocket`, `move3d`, `copy3d`, `material`, `parts`. | A core test runs two Yrs peers. One applies a script that builds the bookshelf parts, and the other converges to byte-identical `partdefs`/`parts` maps. `cad.parts()` returns identical bboxes and volumes on both. `saveDwg` output for a document with parts is byte-identical to the same document without them. `undo()` after a `subtract` restores the previous volume exactly. |
 | **3D1b** general features and checks | `extrude` (with taper), `revolve`, `union`, `intersect`, `rotate3d`, `measure3d`, `interference`. `describe()` reports parts. `POST /api/run` runs 3D scripts in the sandbox. | Via `curl /api/run`, the bookshelf script with one shelf 2 mm too long gets back exactly one interference record (the right pair, volume equal to the closed form to 1e-6 relative). With the correct shelf it gets none. `measure3d` between two parallel boards returns the gap to 1e-9 mm. A turned leg built by `revolve` matches its 3D0b corpus volume. |
 | **3D2a** one GPU stack (= NATIVE N0a) | Bump `vello 0.9 → 0.11` and `eframe/egui 0.34 → 0.36` together, so the web bundle has one wgpu, 30. Add `GpuContext`: one `wgpu::Device` per page, shared by every canvas (today each Vello canvas creates its own). No 3D code yet. | `cargo tree -p cadview-web --target wasm32-unknown-unknown -d` lists no duplicate `wgpu`. Every example DWG renders in both the Vello and the egui renderer with **≤ 0.1 % of pixels differing by more than 8/255 in any channel** from the committed PNGs (`examples/lib/render.mjs` plus a diff script). Opening three tabs creates exactly one device (debug counter). |
@@ -164,6 +164,41 @@ Each rung is built by a **builder/tester pair** and sized at **≤ about 2 weeks
   (fully rounded, valid, 33 faces, volume 3 188 376.635 in 22 ms release),
   tessellation, an exact section and exact ray hits.
 
+### 3D0b: what landed (2026-11-18)
+
+- **Curved corpus** (`cadview-core/src/solid/corpus/curved.rs`, kernel
+  neutral, named in general shape language): a 400 x 200 x 20 slab with
+  all 12 edges rounded r = 4, a tapered square bar (ruled loft from 40 x
+  40 to 24 x 24 over 300), a revolved profile with a bead and a cove (one
+  revolve of lines and arcs), and a round bar (r = 6) swept along a line,
+  a quarter arc and a line. Each closed form is derived in its doc
+  comment (Steiner, prismatoid, discs, Pappus) and checked numerically in
+  core's tests.
+- **Gate:** `cargo test -p solid-harness --test corpus` passes on arris:
+  every curved part a valid single solid with a closed mesh, volume
+  errors 2.9e-16, 7.4e-16, 2.4e-16 and 4.9e-16 relative (gate 1e-6),
+  box errors 0, 0, 0 and 2.8e-14 mm. cad-kernel builds the same four
+  (printed, not gated): errors 1.5e-15, 7.4e-16, 1.7e-15, 6.1e-16, boxes
+  exact.
+- **Adapters.** Revolve, loft, sweep and fillet in both (design 4.1
+  semantics, now written into `types.rs`); `Feature::Sweep` gained the
+  profile's `plane`, and `Path3::check` states what a sweep path must be.
+  Tapered extrudes stay unsupported. No corpus entry is refused by either
+  kernel.
+- **Harness:** reference meanings for the curved features, a positional
+  band for the volume enclosure, curved catalogue cases, three curved
+  mutants (all caught), scoreboards regenerated; see
+  [3d-test-harness.md](3d-test-harness.md), "Slice 5". arris has no
+  recorded wrong case left; cad-kernel has 20, 10 of them from its mesher
+  on torus faces.
+- **Truck is dropped from this rung.** The planned Truck cross-check was
+  a second, unrelated kernel to compare against; cad-kernel fills that
+  role in the harness, with fillets, which Truck lacks.
+- **Wasm:** see [research/3d-corpus-timings.md](research/3d-corpus-timings.md)
+  for the size arris adds and native against wasm timings, measured with
+  a wasmtime host in the harness instead of the planned Node runner (the
+  build machine has no Node).
+
 ### 3D2a: what landed (2026-11-17)
 
 Same work as LADDER-NATIVE N0a.
@@ -216,12 +251,124 @@ Same work as LADDER-NATIVE N0a.
   smoke crates and decide which vello/eframe pair actually shares one
   wgpu. Done in 3D2a: vello 0.12 and eframe 0.37 share wgpu 30.0.2 (see
   above). Kiss3d still has to be checked against that wgpu in 3D2b.
+  Done in the first 3D2b slice (below).
+
+### 3D2b, first slice: what landed (2026-11-18)
+
+A headless, shaded 3D render to PNG. The viewport (browser canvas,
+orbit input, React toggle, perf harness) is still open, and so are scene
+sync from `Document`, the server `render` RPC and `cad.render` for 3D
+(3D6b).
+
+- **Core.** `cadview-core/src/scene3d.rs` decides everything once:
+  `RenderMesh` derives normals from a bare `TriMesh` (angle-weighted,
+  split at a 40° crease angle) and classifies its edges with the same
+  angle; `build_frame` adds the smooth edges that are silhouettes from
+  the current eye; `Camera3d` is an orbit camera (Z up, right-handed,
+  WebGPU depth 0..1) with named views, exact fit for both projections and
+  a computed clip range; `shade` and `tone_map` (Khronos PBR Neutral) are
+  the reference every backend reproduces.
+- **Backend.** `cadview-render3d` has the `Renderer3d` trait (a frame may
+  take several calls, so a progressive path tracer fits) and one backend
+  of our own on wgpu: 4x MSAA, Depth32Float, per-pixel shading, and sharp
+  edges and silhouettes as 1.5 px screen-space lines. It renders on
+  `cadview-render`'s process-wide device; no second device is opened.
+  `Quality::Presentation` returns `NotAvailable`.
+- **Kiss3d was tried and not adopted for this path.** It resolves to the
+  single wgpu 30.0.2 and rendered a correct, byte-reproducible box on the
+  shared device, but its context and resource managers are thread-local.
+  Used from a second thread it panicked in its texture manager and then
+  aborted the whole process during thread-local teardown, and dropping
+  its last surface calls `destroy()` on the device it was given (the
+  shared one). A server renders from any worker thread, so that does not
+  fit headless rendering. It would also add 98 crates to `Cargo.lock`
+  (an AV1 encoder and a parser generator among them). It stays the
+  candidate for the presentation render (its path tracer), on a thread of
+  its own, or as the tracer kernel to fork (design §9.5).
+- **Evidence** (`cargo test -p cadview-render3d`, one GPU machine).
+  Silhouette area of a unit box (front, top, right, isometric) and a
+  sphere (front, top, isometric) against the closed form: within 0.06 %
+  (tolerance a quarter pixel along the outline). Face pixels equal the
+  core's reference shading exactly (tolerance 2 levels). A near box hides
+  the far one at the sampled points, in both projections. Smooth shading:
+  largest second difference across a 48-facet cylinder 2 levels, 13 with
+  flat facets. Edges: 1.50 px of ink on a box edge, none across a
+  cylinder's side, ink at both outlines. Two renders are byte-identical.
+  1x and 2x pixel ratio agree to 0.42 levels on average.
+- **Times** (release, 960x640): first render 974 ms (device and pipeline
+  creation), warm 1.6 to 2.8 ms including PNG encoding. wgpu's software
+  adapter on Windows (DX12 WARP) renders the same frame in about 19 ms,
+  within 1 level of the GPU image on every pixel. lavapipe (Linux) is
+  not measured yet.
+- **Cost.** One new crate, no new third-party crates.
+
+### 3D2b, second slice: what landed (2026-11-18)
+
+The working render against the list in `docs/3d-examples.md`, on
+procedural meshes (the example recipes come later). Every parameter a
+second backend would have to agree on is in `scene3d.rs`; the raster
+backend only carries it out.
+
+- **Outlines on any background.** 3D renders default to a light neutral
+  background (`LIGHT_BACKGROUND`); the 2D viewer's dark one is
+  `Background::VIEWER`. `EdgeStyle::outline` draws the background side of
+  every silhouette 1 px wider, in the line colour when that contrasts at
+  least 3:1 (WCAG) with the background, otherwise in a light grey. The
+  backend draws it only where no part was drawn (stencil), so it never
+  covers a face.
+- **Depth cues: screen-space ambient occlusion and a ground.** Chosen over
+  a shadow map because the default key light is a headlight, whose
+  shadows fall mostly behind the parts, while occlusion darkens pockets,
+  holes, gaps and the ground next to a part from any light. It is a
+  deterministic, WebGPU-friendly post pass: core gives the 16 kernel
+  points, the 4 x 4 rotation pattern, the radius (15 % of the scene
+  diagonal by default), strength, bias and depth range; the backend reads
+  depth sample 0, averages each 4 x 4 block and multiplies the colour.
+  Open flat faces come out at exactly 1 and are left untouched. The
+  optional ground (`Ground`: height defaults to the lowest point, colour
+  defaults to the background, so it shows only the contact shadow) is
+  never cut and is not part of the fit.
+- **Cutaway.** Up to four `ClipPlane`s. Front faces on the removed side are
+  discarded and a line marks the cut; back faces, which can then only be
+  seen through a cut, are drawn flat in the item's section colour (given,
+  or derived from its base colour leaning toward a brick red), and a
+  full-screen pass moves those pixels' depth onto the cut itself, so the
+  ground and edges behind a cut face stay hidden. This relies on closed
+  meshes. The camera fit uses the part of the scene box the planes keep.
+- **Exploded views.** `explode_offsets` and `Scene3d::explode` move items
+  away from the centre of all their boxes by a factor along chosen axes.
+- **Many parts.** The backend caches vertex and index buffers per shared
+  `Arc<RenderMesh>` (dropped after three frames unused) and draws the items
+  that share a mesh in one instanced call, from a storage buffer.
+  `Scene3d::add_shared` adds another placement of a prepared mesh.
+- **Contact sheet and palette.** `contact_sheet` lays renders out in a
+  labelled grid; captions are TEXT entities drawn by the 2D renderer, so no
+  font dependency. `palette_color(i)` hands out muted colours (OKLab
+  chroma 0.075, three lightness steps, golden-angle hues).
+- **Evidence** (`cargo test -p cadview-render3d`, one GPU machine).
+  Outline contrast at 18 points around a box: 5.13:1 on the light
+  background, 7.60:1 on the dark one, 1.11:1 on the dark one with the
+  outline off (threshold 3). Floor of a 12 mm pocket seen from the top: 27
+  levels darker than the top face (threshold 20), which keeps its
+  reference shading. Ground 0.5 mm from a cube: 35 levels darker than 8 mm
+  away, which is the background colour (threshold 15). Without ground or
+  occlusion the image is byte-identical to occlusion at strength 0, and
+  with every new feature off the five first-slice images are
+  byte-identical to the first slice's output. Cutaway: section colour
+  within 1 level on material, the cavity wall's reference shading through
+  the cut, also with a ground. 500 boxes sharing one mesh prepare one mesh
+  and draw the same bytes as 500 separate meshes.
+- **Times** (release, 960x640, warm, including readback): 500 boxes
+  sharing a mesh 1.5 ms (first render with a cold cache 1.6 ms); 500
+  separate meshes 1.8 ms (first 7 ms). The default scene with occlusion
+  2.1 to 3.4 ms including PNG encoding. On DX12 WARP 31 ms, within 2 levels
+  of the GPU image.
 
 ## Risks
 
 - **arris is about two months old with one maintainer, and breaks its API every minor release (pre-1.0).** ogeom, the first choice, changed its licence within weeks. The mitigations are an exact pin on a permissive release, the Truck differential corpus from 3D0b onward, the right to vendor, and documents that store no kernel data. If arris stalls before 3D3a, `TruckKernel` plus our own HLR adapter and closed-form silhouettes carry 3D0–3D3 (the HLR adapter is ours in any case, since arris has no HLR). Roundovers then drop to `fallback: "visual"` until a kernel can do them.
 - **Evaluation latency in wasm.** The smoke test took 3.3 s for a fully rounded board. Content-hash caching, time-slicing and showing the previous B-rep keep the UI responsive. A Web Worker evaluator is the escape hatch (design §13), and the 3D0b timing table decides whether 3D2b needs it.
-- **Kiss3d as an embedded backend.** It has thread-local managers, an engine-shaped API and the look question. The `Renderer3d` trait, the 3D5b gate and the fork fallback bound the risk. Replacing Shaded mode with a thin raster pass of our own is a contained rewrite behind the same trait.
+- **Kiss3d as an embedded backend.** It has thread-local managers, an engine-shaped API and the look question. The `Renderer3d` trait, the 3D5b gate and the fork fallback bound the risk. Replacing Shaded mode with a thin raster pass of our own is a contained rewrite behind the same trait. The first 3D2b slice confirmed the thread-local problem at run time and took that route for the working render; Kiss3d now matters only for the presentation render.
 - **Three crates must agree on wgpu** (Vello, Kiss3d, egui). They agree on wgpu 30 today. Pin and bump them together. `GpuContext` turns a mismatch into a compile error, and 3D2a's `cargo tree -d` check keeps it that way.
 - **Headless rendering without a GPU** (lavapipe) is unverified. If it is too slow: lower spp and denoise, run the 3D example export on a GPU host, or fall back to the headless-Chromium path.
 - **Projection quality edge cases**: tangent-edge clutter on rounded parts, near-degenerate ellipses, torus silhouettes on turned parts, and the visibility oracle near grazing faces. Goldens grow with every bug found, `tangent_edges: false` is the default, and exact ray hits against the faces cross-check the oracle.

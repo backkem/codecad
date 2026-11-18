@@ -131,6 +131,13 @@ impl std::ops::Add for Vec3 {
     }
 }
 
+impl std::ops::Sub for Vec3 {
+    type Output = Vec3;
+    fn sub(self, o: Vec3) -> Vec3 {
+        Vec3::new(self.x - o.x, self.y - o.y, self.z - o.z)
+    }
+}
+
 impl std::ops::Neg for Vec3 {
     type Output = Vec3;
     fn neg(self) -> Vec3 {
@@ -579,7 +586,8 @@ fn loop_from_bulges(vertices: &[LwVertex]) -> Result<Vec<Seg2>, EvalError> {
     Ok(out)
 }
 
-/// A 3D path for a sweep: a chain of exact segments.
+/// A 3D path for a sweep: a chain of exact segments, each starting where
+/// the previous one ends, tangent-continuous at every joint (G1).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Path3 {
     pub segs: Vec<Seg3>,
@@ -592,12 +600,132 @@ pub enum Seg3 {
         from: Point3,
         to: Point3,
     },
-    /// A circular arc through three points.
+    /// A circular arc from `from` through `via` to `to`, the way the three
+    /// points order round their circle (it may be longer than half a turn).
     Arc {
         from: Point3,
         via: Point3,
         to: Point3,
     },
+}
+
+/// How far apart consecutive path segments' ends, and a path's start and
+/// its profile plane's origin, may be (mm).
+pub const PATH_JOIN_TOL: f64 = 1e-7;
+/// How far tangents may turn at a path joint, and how far a sweep's start
+/// tangent may be from its plane's normal (radians).
+pub const PATH_ANGLE_TOL: f64 = 1e-9;
+
+/// The circle of an arc segment, in floating point: centre, unit normal
+/// (the arc runs counter-clockwise about it), radius and the angle it
+/// turns, in `(0, 2 pi)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ArcCircle {
+    pub center: Point3,
+    pub normal: Vec3,
+    pub radius: f64,
+    pub angle: f64,
+}
+
+impl Seg3 {
+    /// The start and end points.
+    pub fn ends(&self) -> (Point3, Point3) {
+        match self {
+            Seg3::Line { from, to } | Seg3::Arc { from, to, .. } => (*from, *to),
+        }
+    }
+
+    /// An arc's circle (`None` for a line, or for three points on a line).
+    /// With `u = via - from`, `v = to - from` and `w = u x v`, the centre is
+    /// `from + (|u|^2 (v x w) + |v|^2 (w x u)) / (2 |w|^2)`; the points run
+    /// counter-clockwise about `w`, so the arc from `from` through `via` to
+    /// `to` turns the counter-clockwise angle from `from` to `to`.
+    pub fn arc_circle(&self) -> Option<ArcCircle> {
+        let Seg3::Arc { from, via, to } = *self else {
+            return None;
+        };
+        let (u, v) = (via - from, to - from);
+        let w = u.cross(v);
+        let w2 = w.dot(w);
+        let scale = u.dot(u).max(v.dot(v));
+        if w2.is_nan() || w2 <= 1e-24 * scale * scale {
+            return None;
+        }
+        let off = (v.cross(w).scale(u.dot(u)) + w.cross(u).scale(v.dot(v))).scale(0.5 / w2);
+        let center = from + off;
+        let normal = w.normalized()?;
+        let (a, c) = (from - center, to - center);
+        let mut angle = a.cross(c).dot(normal).atan2(a.dot(c));
+        if angle <= 0.0 {
+            angle += std::f64::consts::TAU;
+        }
+        Some(ArcCircle {
+            center,
+            normal,
+            radius: a.length(),
+            angle,
+        })
+    }
+
+    /// The unit tangent at the start (`at_end == false`) or the end.
+    pub fn tangent(&self, at_end: bool) -> Option<Vec3> {
+        match self {
+            Seg3::Line { from, to } => (*to - *from).normalized(),
+            Seg3::Arc { from, to, .. } => {
+                let c = self.arc_circle()?;
+                let p = if at_end { *to } else { *from };
+                c.normal.cross(p - c.center).normalized()
+            }
+        }
+    }
+}
+
+impl Path3 {
+    /// Checks a sweep path against its profile plane: at least one
+    /// segment, every arc a real circle, each segment starting where the
+    /// previous one ends ([`PATH_JOIN_TOL`]) and leaving in the direction
+    /// it arrived ([`PATH_ANGLE_TOL`]), the path starting at the plane's
+    /// origin along the plane's normal.
+    pub fn check(&self, plane: &Plane3) -> Result<(), EvalError> {
+        let bad = |why: String| Err(EvalError::invalid(None, format!("sweep path: {why}")));
+        let Some(first) = self.segs.first() else {
+            return bad("the path has no segments".into());
+        };
+        let frame = plane.frame()?;
+        for (i, s) in self.segs.iter().enumerate() {
+            let (a, b) = s.ends();
+            if !a.is_finite() || !b.is_finite() {
+                return bad(format!("segment {i} is not finite"));
+            }
+            if let Seg3::Arc { via, .. } = s {
+                if !via.is_finite() || s.arc_circle().is_none() {
+                    return bad(format!("arc {i} has no circle"));
+                }
+            }
+            if a.distance(b) <= PATH_JOIN_TOL {
+                return bad(format!("segment {i} has no length"));
+            }
+        }
+        let angle = |a: Vec3, b: Vec3| a.cross(b).length().atan2(a.dot(b));
+        if first.ends().0.distance(frame.origin) > PATH_JOIN_TOL {
+            return bad("the path does not start at the profile plane's origin".into());
+        }
+        let t0 = first.tangent(false).unwrap_or(Vec3::Z);
+        if angle(t0, frame.z) > PATH_ANGLE_TOL {
+            return bad("the path does not leave along the profile plane's normal".into());
+        }
+        for (i, w) in self.segs.windows(2).enumerate() {
+            if w[0].ends().1.distance(w[1].ends().0) > PATH_JOIN_TOL {
+                return bad(format!("segment {} does not start where {i} ends", i + 1));
+            }
+            let (ta, tb) = (w[0].tangent(true), w[1].tangent(false));
+            match (ta, tb) {
+                (Some(ta), Some(tb)) if angle(ta, tb) <= PATH_ANGLE_TOL => {}
+                _ => return bad(format!("the path turns a corner after segment {i}")),
+            }
+        }
+        Ok(())
+    }
 }
 
 // ── Features ──────────────────────────────────────────────────────────
@@ -681,6 +809,10 @@ pub enum Feature {
         taper_deg: f64,
         op: Op,
     },
+    /// The profile turned about `axis` by `angle_deg` degrees (`0 <
+    /// angle_deg <= 360`), right-handed about the axis direction (from
+    /// `axis.p0` to `axis.p1`). The axis lies in the profile's plane and
+    /// the profile on one side of it (it may touch it).
     Revolve {
         id: FeatId,
         profile: Profile2d,
@@ -690,12 +822,21 @@ pub enum Feature {
         angle_deg: f64,
         op: Op,
     },
+    /// The profile on `plane` carried along `path`. The path starts at the
+    /// plane's origin, leaving along the plane's normal. The section moves
+    /// rigidly with no twist about the path (a rotation-minimising frame):
+    /// along a line it slides, along an arc it turns about the arc's axis.
     Sweep {
         id: FeatId,
         profile: Profile2d,
+        plane: Plane3,
         path: Path3,
         op: Op,
     },
+    /// A solid through the sections, in order. `ruled`: each span between
+    /// consecutive sections is straight (segment `i` of one section joins
+    /// segment `i` of the next); otherwise one smooth surface runs through
+    /// all sections (two sections are the ruled loft).
     Loft {
         id: FeatId,
         sections: Vec<(Profile2d, Plane3)>,
@@ -717,6 +858,9 @@ pub enum Feature {
         op: Op,
         tool: ToolRef,
     },
+    /// A round of radius `radius` on the selected edges: the material a
+    /// ball of that radius rolling along both faces cannot reach is
+    /// removed at a convex edge and filled at a concave one.
     Fillet {
         id: FeatId,
         edges: EdgeSel,

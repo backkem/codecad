@@ -12,17 +12,21 @@
 //! | `Hole` | `build::prism` of `build::disc` at the entry point along the direction (blind: the depth; through: past the far side of the part's box), `boolean::combined(.., Op::Cut, 0)`; a counterbore is a second, wider disc prism from the entry point, cut the same way |
 //! | `Boolean` with `ToolRef::Def` | the tool definition evaluated on its own, moved by `Brep::moved` (a rigid motion), then the op |
 //! | `Chamfer` (`d1 == d2`) | edges picked by [`edge_query`], then for each picked convex edge, one at a time on the current solid: `fillet::flat_along` (the flat between the two legs, a plane between two planes) and `boolean::combined(.., Op::Cut, 0)` |
+//! | `Fillet` | edges picked by [`edge_query`], then `rounds::rounded` at the kernel's tolerance |
+//! | `Revolve` | the profile on its plane, `build::revolve` about the axis mapped to 3D, by the angle in radians (a whole turn exactly `2 pi`), then the op |
+//! | `Loft` (two sections on parallel planes, lines only) | one bilinear B-spline sheet per pair of corresponding segments, `build::lofted`, then the op |
+//! | `Sweep` (lines and arcs) | the path checked (`Path3::check`); per segment a prism of the carried section (`build::prism`, line) or its revolve about the arc's axis (`build::revolve`), united with `boolean::combined`, then the op |
 //! | op `Add` / `Subtract` / `Intersect` | `boolean::combined` with `Op::Union` / `Op::Cut` / `Op::Common`, floor 0 (the kernel's own tolerance, `1e-9` of the operands' size) |
 //!
 //! `combined` is the plain Boolean. The kernel also has `combined_written`,
 //! which first moves a tool's planar faces that are "all but flush" with
 //! the solid's onto them; that would change the recipe, so it is not used.
 //!
-//! Everything else (`Revolve`, `Sweep`, `Loft`, `Fillet`, tapered extrude,
-//! asymmetric chamfer, `ToolRef::Part`, spline profile segments, which have
-//! no reference meaning yet, a chamfer of a concave edge, and a chamfer
-//! whose flat on one edge cuts away another picked edge) returns
-//! [`EvalError::Unsupported`].
+//! Everything else (tapered extrude, asymmetric chamfer, `ToolRef::Part`,
+//! spline profile segments, which have no reference meaning yet, a chamfer
+//! of a concave edge, a chamfer whose flat on one edge cuts away another
+//! picked edge, a loft of more than two sections, on planes that are not
+//! parallel or with curved segments) returns [`EvalError::Unsupported`].
 //!
 //! Volumes come from `props::volume` (Green's theorem over each exact face,
 //! no mesh). cad-kernel computes no centroid, so [`MassProps::centroid`] is
@@ -56,8 +60,8 @@ use cadview_core::solid::kernel::{
 };
 use cadview_core::solid::select::{edge_query, EdgeQuery};
 use cadview_core::solid::types::{
-    arc_point, DefId, Depth, FeatId, Feature, Frame3, Op, PartDef, Placement, Plane3, Point3,
-    Profile2d, Seg2, ToolRef, Vec3,
+    arc_point, DefId, Depth, FeatId, Feature, Frame3, Op, PartDef, Path3, Placement, Plane3,
+    Point3, Profile2d, Seg2, Seg3, ToolRef, Vec3,
 };
 
 /// How far (mm) a picked edge may sit from its selector's target curve.
@@ -332,14 +336,55 @@ fn eval_def(
                 let query = edge_query(&def.features[..i], edges, id)?;
                 chamfer(cur, &query, *d1, id)?
             }
-            Feature::Revolve { .. }
-            | Feature::Sweep { .. }
-            | Feature::Loft { .. }
-            | Feature::Fillet { .. } => {
-                return Err(EvalError::unsupported(
-                    Some(id),
-                    format!("the {} feature", feature.kind_name()),
-                ));
+            Feature::Revolve {
+                profile,
+                plane,
+                axis,
+                angle_deg,
+                op,
+                ..
+            } => {
+                let body =
+                    revolve(profile, plane, axis, *angle_deg, names).map_err(|e| e.at(id))?;
+                combine(current.take(), body, *op, id)?
+            }
+            Feature::Loft {
+                sections,
+                ruled,
+                op,
+                ..
+            } => {
+                let body = loft(sections, *ruled, names).map_err(|e| e.at(id))?;
+                combine(current.take(), body, *op, id)?
+            }
+            Feature::Sweep {
+                profile,
+                plane,
+                path,
+                op,
+                ..
+            } => {
+                let body = sweep(profile, plane, path, names).map_err(|e| e.at(id))?;
+                combine(current.take(), body, *op, id)?
+            }
+            Feature::Fillet { edges, radius, .. } => {
+                let Some(cur) = current.take() else {
+                    return Err(EvalError::invalid(Some(id), "nothing to round yet"));
+                };
+                if !radius.is_finite() || *radius <= 0.0 {
+                    return Err(EvalError::invalid(
+                        Some(id),
+                        "fillet radius must be finite and positive",
+                    ));
+                }
+                let query = edge_query(&def.features[..i], edges, id)?;
+                let picked: Vec<usize> = picked(&cur, &query, id)?
+                    .into_iter()
+                    .map(|(e, _)| e)
+                    .collect();
+                let tol = tolerance(cur.size());
+                cad_kernel::rounds::rounded(&cur, &picked, *radius, tol)
+                    .map_err(kernel_err(Some(id)))?
             }
         };
         current = Some(next);
@@ -410,6 +455,27 @@ impl Names {
     }
 }
 
+/// A checked profile placed in 3D by `frame`, as a kernel profile whose
+/// edges are named by loop and segment.
+fn sketch(profile: &Profile2d, frame: &Frame3) -> Result<Profile, EvalError> {
+    profile.check()?;
+    let loops = profile
+        .loops()
+        .map(|(_, lp)| profile_loop(lp, frame))
+        .collect::<Result<Vec<_>, _>>()?;
+    let face_names = loops
+        .iter()
+        .enumerate()
+        .map(|(li, lp)| (0..lp.len()).map(|k| format!("l{li}s{k}")).collect())
+        .collect();
+    Ok(Profile {
+        origin: v3(frame.origin),
+        normal: d3(frame.z),
+        loops,
+        names: face_names,
+    })
+}
+
 /// A profile on a sketch plane, swept `distance` along the plane normal.
 fn extrude(
     profile: &Profile2d,
@@ -417,25 +483,191 @@ fn extrude(
     distance: f64,
     names: &mut Names,
 ) -> Result<Brep, EvalError> {
-    profile.check()?;
     let frame = plane.frame()?;
-    let loops = profile
-        .loops()
-        .map(|(_, lp)| profile_loop(lp, &frame))
-        .collect::<Result<Vec<_>, _>>()?;
-    let face_names = loops
-        .iter()
-        .enumerate()
-        .map(|(li, lp)| (0..lp.len()).map(|k| format!("l{li}s{k}")).collect())
-        .collect();
-    let sketch = Profile {
-        origin: v3(frame.origin),
-        normal: d3(frame.z),
-        loops,
-        names: face_names,
-    };
+    let sketch = sketch(profile, &frame)?;
     let b = prism(&sketch, distance.min(0.0), distance.max(0.0)).map_err(kernel_err(None))?;
     Ok(names.own(b))
+}
+
+/// A profile turned about an axis in its plane (`build::revolve`).
+fn revolve(
+    profile: &Profile2d,
+    plane: &Plane3,
+    axis: &kurbo::Line,
+    angle_deg: f64,
+    names: &mut Names,
+) -> Result<Brep, EvalError> {
+    if !angle_deg.is_finite() || angle_deg <= 0.0 || angle_deg > 360.0 {
+        return Err(EvalError::invalid(
+            None,
+            "revolve angle must be in (0, 360] degrees",
+        ));
+    }
+    let frame = plane.frame()?;
+    let sketch = sketch(profile, &frame)?;
+    let (a, b) = (frame.at(axis.p0, 0.0), frame.at(axis.p1, 0.0));
+    if a.distance(b) == 0.0 {
+        return Err(EvalError::invalid(None, "revolve axis has no direction"));
+    }
+    let angle = if angle_deg == 360.0 {
+        std::f64::consts::TAU
+    } else {
+        angle_deg.to_radians()
+    };
+    let body =
+        cad_kernel::build::revolve(&sketch, v3(a), d3(b - a), angle).map_err(kernel_err(None))?;
+    Ok(names.own(body))
+}
+
+/// `v` turned by `angle` about the unit `n` (Rodrigues).
+fn turned(v: Vec3, n: Vec3, angle: f64) -> Vec3 {
+    let (s, c) = angle.sin_cos();
+    v.scale(c) + n.cross(v).scale(s) + n.scale(n.dot(v) * (1.0 - c))
+}
+
+/// A profile carried along a path of lines and arcs with no twist: the
+/// union of one piece per segment, a prism of the section along a line
+/// (`build::prism`) and a revolve of it about an arc's axis by the arc's
+/// angle (`build::revolve`). cad-kernel 0.15.0 has no sweep along a
+/// general path; for lines and arcs these pieces are the sweep's meaning.
+fn sweep(
+    profile: &Profile2d,
+    plane: &Plane3,
+    path: &Path3,
+    names: &mut Names,
+) -> Result<Brep, EvalError> {
+    path.check(plane)?;
+    let mut f = plane.frame()?;
+    let mut acc: Option<Brep> = None;
+    for seg in &path.segs {
+        let section = sketch(profile, &f)?;
+        let piece = match seg {
+            Seg3::Line { from, to } => {
+                let len = from.distance(*to);
+                f.origin = f.origin + f.z.scale(len);
+                prism(&section, 0.0, len).map_err(kernel_err(None))?
+            }
+            Seg3::Arc { .. } => {
+                let c = seg
+                    .arc_circle()
+                    .ok_or_else(|| EvalError::invalid(None, "a sweep arc has no circle"))?;
+                let body =
+                    cad_kernel::build::revolve(&section, v3(c.center), d3(c.normal), c.angle)
+                        .map_err(kernel_err(None))?;
+                let o = f.origin - c.center;
+                f = Frame3 {
+                    origin: c.center + turned(o, c.normal, c.angle),
+                    x: turned(f.x, c.normal, c.angle),
+                    y: turned(f.y, c.normal, c.angle),
+                    z: turned(f.z, c.normal, c.angle),
+                };
+                body
+            }
+        };
+        let piece = names.own(piece);
+        acc = Some(match acc {
+            None => piece,
+            Some(a) => boolean(&a, &piece, KOp::Union, None)?,
+        });
+    }
+    acc.ok_or_else(|| EvalError::invalid(None, "a sweep path has no segments"))
+}
+
+/// A ruled loft between two sections on parallel planes, every loop all
+/// lines: one bilinear B-spline sheet per pair of corresponding segments
+/// (`build::lofted`, as its own tests build a frustum). More sections, a
+/// smooth loft through more than two, and curved segments are
+/// unsupported.
+fn loft(
+    sections: &[(Profile2d, Plane3)],
+    ruled: bool,
+    names: &mut Names,
+) -> Result<Brep, EvalError> {
+    let unsupported = |what: &str| Err(EvalError::unsupported(None, what.to_string()));
+    match sections.len() {
+        0 | 1 => return Err(EvalError::invalid(None, "a loft needs two sections")),
+        2 => {}
+        _ if ruled => return unsupported("a loft through more than two sections"),
+        _ => return unsupported("a smooth loft through more than two sections"),
+    }
+    let (mut s0, mut s1) = (&sections[0], &sections[1]);
+    for (p, _) in [s0, s1] {
+        p.check()?;
+    }
+    let (mut f0, mut f1) = (s0.1.frame()?, s1.1.frame()?);
+    if (f0.z - f1.z).length() > 1e-12 {
+        return unsupported("a loft between sections on planes that are not parallel");
+    }
+    let mut h = (f1.origin - f0.origin).dot(f0.z);
+    if h == 0.0 {
+        return Err(EvalError::invalid(None, "loft sections lie in one plane"));
+    }
+    if h < 0.0 {
+        std::mem::swap(&mut s0, &mut s1);
+        std::mem::swap(&mut f0, &mut f1);
+        h = -h;
+    }
+    let corners = |p: &Profile2d, f: &Frame3| -> Result<Vec<Vec<V>>, EvalError> {
+        p.loops()
+            .map(|(_, lp)| {
+                lp.iter()
+                    .map(|s| match s {
+                        Seg2::Line(l) => Ok(v3(f.at(l.p0, 0.0))),
+                        _ => Err(EvalError::unsupported(
+                            None,
+                            "a loft of sections with curved segments",
+                        )),
+                    })
+                    .collect()
+            })
+            .collect()
+    };
+    let (a, b) = (corners(&s0.0, &f0)?, corners(&s1.0, &f1)?);
+    if a.len() != b.len() || a.iter().zip(&b).any(|(x, y)| x.len() != y.len()) {
+        return Err(EvalError::invalid(
+            None,
+            "loft sections must have the same loops and segment counts",
+        ));
+    }
+    let mut rings = Vec::with_capacity(a.len());
+    for (li, (la, lb)) in a.iter().zip(&b).enumerate() {
+        // The outer loop counter-clockwise about the normal, holes
+        // clockwise; reversing both sections keeps segments paired.
+        let n = la.len();
+        let area: f64 = (0..n)
+            .map(|k| {
+                let (p, q) = (la[k], la[(k + 1) % n]);
+                let c = [
+                    p[1] * q[2] - p[2] * q[1],
+                    p[2] * q[0] - p[0] * q[2],
+                    p[0] * q[1] - p[1] * q[0],
+                ];
+                c[0] * f0.z.x + c[1] * f0.z.y + c[2] * f0.z.z
+            })
+            .sum();
+        let (mut la, mut lb) = (la.clone(), lb.clone());
+        if (area > 0.0) != (li == 0) {
+            la.reverse();
+            lb.reverse();
+        }
+        let nets = (0..n)
+            .map(|k| {
+                let k1 = (k + 1) % n;
+                cad_kernel::nurbs::Net {
+                    du: 1,
+                    dv: 1,
+                    uknots: vec![0.0, 0.0, 1.0, 1.0],
+                    vknots: vec![0.0, 0.0, 1.0, 1.0],
+                    poles: vec![vec![la[k], lb[k]], vec![la[k1], lb[k1]]],
+                    weights: None,
+                }
+            })
+            .collect();
+        rings.push(nets);
+    }
+    let body = cad_kernel::build::lofted(v3(f0.origin), d3(f0.z), [0.0, h], rings)
+        .map_err(kernel_err(None))?;
+    Ok(names.own(body))
 }
 
 /// The kernel frame at profile point `c` with the plane's axes.
@@ -861,28 +1093,170 @@ fn solids(b: &Brep) -> usize {
 }
 
 /// The tight box of `b` from its exact geometry (see the module docs).
+///
+/// Vertices and the exact boxes of line, circle and ellipse edges come from
+/// `Brep::bounds`, which is exact for exactly those (it is conservative for
+/// other edges and for curved faces, so it is only used when nothing else
+/// is there). A degree-one B-spline edge is the polyline of its poles: its
+/// box is its end vertices and the poles strictly inside its span. A smooth
+/// function on a face takes its extremes on the face's edges or at
+/// interior stationary points: planes, cylinders, cones and bilinear
+/// B-spline sheets (a bilinear function has only saddles) have none off
+/// their edges; a sphere or a torus has a few closed-form candidates, each
+/// kept when the kernel's own point classification puts it on the solid's
+/// boundary. Where a torus's extreme along its axis is a whole circle, 16
+/// points of it are tried: a face that holds an arc of the circle but none
+/// of those points ends that arc on its edges, at the same height.
+/// Anything else is refused.
 fn tight_bounds(b: &Brep) -> Result<Aabb3, EvalError> {
     let unsupported =
         |what: &str| EvalError::unsupported(None, format!("a tight bounding box of {what}"));
+    let mut curved = false;
+    let mut extra: Vec<V> = Vec::new();
     for e in &b.edges {
         if let EdgeCurve::Curve(c) = &e.curve {
-            if !matches!(
-                c,
-                Curve::Line { .. } | Curve::Circle(..) | Curve::Ellipse(..)
-            ) {
-                return Err(unsupported(&format!("a {} edge", c.kind())));
+            match c {
+                Curve::Line { .. } | Curve::Circle(..) | Curve::Ellipse(..) => {}
+                Curve::BSpline(s) if s.degree == 1 && s.weights.is_none() => {
+                    curved = true;
+                    // Pole i sits at knot i + 1.
+                    for (i, p) in s.poles.iter().enumerate() {
+                        let t = s.knots.get(i + 1).copied().unwrap_or(f64::NAN);
+                        if t > e.t[0] && t < e.t[1] {
+                            extra.push(*p);
+                        }
+                    }
+                }
+                _ => return Err(unsupported(&format!("a {} edge", c.kind()))),
             }
         }
     }
+    let mut round: Vec<&Surface> = Vec::new();
     for f in &b.faces {
-        if !matches!(
-            f.surface,
-            Surface::Plane(_) | Surface::Cylinder(..) | Surface::Cone(..)
-        ) {
-            return Err(unsupported(&format!("a {} face", f.surface.kind())));
+        match &f.surface {
+            Surface::Plane(_) | Surface::Cylinder(..) | Surface::Cone(..) => {}
+            Surface::BSpline(_, net)
+                if net.du == 1
+                    && net.dv == 1
+                    && net.weights.is_none()
+                    && net.poles.len() == 2
+                    && net.poles.iter().all(|r| r.len() == 2) =>
+            {
+                curved = true;
+            }
+            s @ (Surface::Sphere(..) | Surface::Torus(..)) => {
+                curved = true;
+                round.push(s);
+            }
+            s => return Err(unsupported(&format!("a {} face", s.kind()))),
         }
     }
-    let (lo, hi) = b.bounds();
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    let mut add = |p: V| {
+        for i in 0..3 {
+            lo[i] = lo[i].min(p[i]);
+            hi[i] = hi[i].max(p[i]);
+        }
+    };
+    if !curved {
+        let (l, h) = b.bounds();
+        add(l);
+        add(h);
+    } else {
+        for v in &b.vertices {
+            add(v.p);
+        }
+        for e in &b.edges {
+            if let EdgeCurve::Curve(
+                c @ (Curve::Line { .. } | Curve::Circle(..) | Curve::Ellipse(..)),
+            ) = &e.curve
+            {
+                let (l, h) = c.bounds(e.t);
+                add(l);
+                add(h);
+            }
+        }
+        for p in extra {
+            add(p);
+        }
+        if !round.is_empty() {
+            let located = cad_kernel::query::Located::new(b, tolerance(b.size()));
+            let on = |p: V| located.solid_place(p) == cad_kernel::query::Place::On;
+            let axis = |k: usize| {
+                let mut e = [0.0; 3];
+                e[k] = 1.0;
+                e
+            };
+            let at = |o: V, terms: &[(V, f64)]| -> V {
+                let mut p = o;
+                for (d, s) in terms {
+                    for i in 0..3 {
+                        p[i] += d[i] * s;
+                    }
+                }
+                p
+            };
+            let dot = |a: V, b: V| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+            for s in round {
+                for k in 0..3 {
+                    let e = axis(k);
+                    match s {
+                        Surface::Sphere(f, r) => {
+                            for sg in [1.0, -1.0] {
+                                let p = at(f.o, &[(e, sg * r)]);
+                                if on(p) {
+                                    add(p);
+                                }
+                            }
+                        }
+                        Surface::Torus(f, big, small) => {
+                            let beta = dot(e, f.z);
+                            let radial = at(e, &[(f.z, -beta)]);
+                            let alpha = dot(radial, radial).sqrt();
+                            if alpha > 1e-12 {
+                                let u = radial.map(|c| c / alpha);
+                                for sg in [1.0, -1.0] {
+                                    for side in [1.0, -1.0] {
+                                        let (cos_phi, sin_phi) = (sg * alpha * side, sg * beta);
+                                        let p = at(
+                                            f.o,
+                                            &[
+                                                (u, side * (big + small * cos_phi)),
+                                                (f.z, small * sin_phi),
+                                            ],
+                                        );
+                                        if on(p) {
+                                            add(p);
+                                        }
+                                    }
+                                }
+                            } else {
+                                for sg in [1.0, -1.0] {
+                                    for j in 0..16 {
+                                        let a = std::f64::consts::TAU * j as f64 / 16.0;
+                                        let p = at(
+                                            f.o,
+                                            &[
+                                                (f.x, big * a.cos()),
+                                                (f.y, big * a.sin()),
+                                                (f.z, sg * small),
+                                            ],
+                                        );
+                                        if on(p) {
+                                            add(p);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
     if !(lo.iter().chain(&hi).all(|v| v.is_finite())) {
         return Err(EvalError::Kernel {
             feature: None,
@@ -1143,6 +1517,53 @@ mod forward_look {
         let v = volume(&cup);
         println!("shelled cube: volume {v} (closed form 424)");
         assert!(close(v, 424.0, 1e-9));
+    }
+
+    /// The mesh contract on a torus (rung 3D0b's finding): a disc r = 6
+    /// revolved a quarter turn about the line x = 0, y = 40 along z, through
+    /// the adapter, meshed at shrinking chords. The largest distance of a
+    /// triangle's centroid from the exact torus (sqrt((rho - 40)^2 + z^2) -
+    /// 6, rho the distance from the axis) should stay within the chord.
+    #[test]
+    fn torus_mesh_against_its_chord() {
+        use cadview_core::solid::{
+            DefId, FeatId, Feature, NoTools, Op, PartDef, Plane3, Profile2d, SolidKernel,
+        };
+        let def = PartDef {
+            id: DefId(1),
+            name: "quarter torus".into(),
+            features: vec![Feature::Revolve {
+                id: FeatId(1),
+                profile: Profile2d::circle(kurbo::Point::new(0.0, 0.0), 6.0),
+                plane: Plane3::YZ,
+                axis: kurbo::Line::new((40.0, 0.0), (40.0, 1.0)),
+                angle_deg: 90.0,
+                op: Op::Add,
+            }],
+        };
+        let k = super::CadKernel;
+        let b = k.evaluate(&def, &NoTools).expect("revolves").brep;
+        for chord in [1e-2, 1e-3, 1e-4] {
+            let m = k.tessellate(&b, chord).expect("meshes");
+            let mut worst: f64 = 0.0;
+            for t in &m.triangles {
+                let c = t.iter().fold([0.0; 3], |a, &i| {
+                    let p = m.positions[i as usize];
+                    [a[0] + p.x / 3.0, a[1] + p.y / 3.0, a[2] + p.z / 3.0]
+                });
+                // Skip the two flat end discs (x = 0 and y = 40).
+                if c[0].abs() < 1e-9 || (c[1] - 40.0).abs() < 1e-9 {
+                    continue;
+                }
+                let rho = c[0].hypot(c[1] - 40.0);
+                let d = ((rho - 40.0).hypot(c[2]) - 6.0).abs();
+                worst = worst.max(d);
+            }
+            println!(
+                "quarter torus, chord {chord:e}: {} triangles, worst centroid {worst:.3e} mm off the torus",
+                m.triangles.len()
+            );
+        }
     }
 
     /// Point classification and face names: a point in the board is in,

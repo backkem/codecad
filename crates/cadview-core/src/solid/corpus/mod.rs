@@ -4,10 +4,14 @@
 //! definitions they cut with, and the exact volume and bounding box of each
 //! part. The entries are plain data and [`measure`] is generic over
 //! [`SolidKernel`], so the same corpus runs on every backend and on every
-//! target (rung 3D0b adds a second kernel and a wasm runner). Timing is left
-//! to the caller, since `std::time::Instant` does not exist on
+//! target (the harness crate runs it on two kernels and in wasm). Timing is
+//! left to the caller, since `std::time::Instant` does not exist on
 //! `wasm32-unknown-unknown`.
+//!
+//! - [`prismatic`]: extrudes, holes, booleans and chamfers (rung 3D0a).
+//! - [`curved`]: a round, a loft, a revolve and a sweep (rung 3D0b).
 
+pub mod curved;
 pub mod prismatic;
 
 use super::kernel::{Aabb3, EvalError, SolidKernel, ToolResolver};

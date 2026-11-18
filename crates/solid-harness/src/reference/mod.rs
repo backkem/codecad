@@ -84,8 +84,64 @@
 //! selectors, an asymmetric chamfer and a chamfer after any other feature
 //! are "not defined".
 //!
-//! Revolve, sweep, loft and fillet have no reference meaning yet: "not
-//! defined".
+//! **Revolve** (`0 < angle_deg <= 360`, axis points `p0 != p1` in the
+//! profile's plane). With `du` the unit axis direction in the plane and
+//! `eu` the unit normal to it towards the profile (the profile must lie in
+//! the closed half-plane `s = (q - p0) . eu >= -1e-9`, else "not
+//! defined"; anything at `s < 0` is not revolved), the 3D axis runs
+//! through `p0` along `d` (both lifted by the plane's frame). A point at
+//! axial coordinate `t` and distance `rho` from the axis is in the full
+//! revolve iff its meridian point `p0 + t du + rho eu` is in the profile's
+//! region. `f = f_region(p0 + t du + rho eu)`: `p -> (t, rho)` is
+//! 1-Lipschitz into the half-plane and the meridian map is an isometry, so
+//! `f` is 1-Lipschitz, its sign is exact, and it bounds the distance to
+//! the surface of revolution (whose meridian is part of the region's
+//! boundary: segments on the axis are not surface, so near the axis `|f|`
+//! is smaller than the distance, still a lower bound). Below a full turn
+//! the solid is also cut to the angles `[0, theta]` about `d`, measured
+//! from `e1` (`eu` lifted) towards `d x e1`: the wedge is the intersection
+//! (`theta <= 180`) or the union (`theta > 180`) of two half-spaces through
+//! the axis, each an exact plane distance; `theta`'s sine and cosine are
+//! enclosed from `angle_deg pi / 180`.
+//!
+//! **Loft**, defined for two sections on planes with the same axes, each
+//! one strictly convex polygon of lines with the same number of sides,
+//! side `i` of one certainly parallel to and in the direction of side `i`
+//! of the other (`ruled` or not: two sections are the ruled loft). Every
+//! side face is then a plane and the solid is the convex hull of the two
+//! polygons; `f` is the maximum of the exact signed distances to the side
+//! planes and the two cap planes (computed in intervals from the vertices).
+//! Other lofts are "not defined" (a twisted ruled face has no exact
+//! distance here).
+//!
+//! **Sweep** along a path of lines and arcs that passes `Path3::check`
+//! (starts at the plane's origin along its normal, tangent-continuous).
+//! The section (the profile in the plane's frame) moves rigidly with no
+//! twist: along a line of length `L` it slides `L` along the frame's
+//! normal; along an arc it turns about the arc's axis (the circumcentre of
+//! its three points and the normal the points run counter-clockwise
+//! about, in intervals) by the arc's angle. The swept solid is the union of
+//! the pieces: per line the prism of the region over `[0, L]`, per arc the
+//! revolve of the section about the arc's axis by its angle (as above,
+//! with the axis taken in the section's own coordinates; the section must
+//! lie on one side of it). `f` is the minimum over the pieces. An arc of
+//! (nearly) half a turn takes the hull of both wedge forms.
+//!
+//! **Fillet** (rolling ball), defined only for `EdgeSel::All` directly
+//! after the part's first feature, an adding, untapered extrude of one
+//! strictly convex polygon of lines with no holes, with `0 < r`, `2 r` less
+//! than the height by more than 1e-6, and every side of the polygon shrunk
+//! by `r` keeping a length above 1e-6. The result is the prism opened by a
+//! ball of radius `r`, which for a convex prism is the set of points
+//! within `r` of the prism shrunk by `r` (`P'`: the polygon's sides moved
+//! in by `r`, the height cut by `r` at both caps). `f = sd(P') - r` with
+//! `sd(P')` the exact signed distance to the convex prism `P'`: inside it
+//! the larger of the polygon's and the slab's signed distances, outside
+//! `sqrt(a+^2 + b+^2)` of the polygon's exact distance (to its sides) and
+//! the slab's. `sd` is 1-Lipschitz and exact, so `f` is too. Rounds of
+//! other edges, other features before or between, are "not defined".
+//!
+//! A tapered extrude has no reference meaning yet: "not defined".
 
 pub mod region;
 
@@ -93,7 +149,7 @@ use std::sync::Arc;
 
 use cadview_core::solid::{
     CapSide, DefId, Depth, EdgeSel, FeatId, Feature, Op, PartDef, Placement, Plane3, Point3, Seg2,
-    ToolRef, ToolResolver,
+    Seg3, ToolRef, ToolResolver,
 };
 
 use crate::interval::{Iv, Iv2, Iv3};
@@ -120,6 +176,16 @@ impl std::fmt::Display for NotDefined {
             Some(id) => write!(f, "{what} at feature {}: {}", id.0, self.reason),
             None => write!(f, "{what}: {}", self.reason),
         }
+    }
+}
+
+impl NotDefined {
+    /// The same, attributed to `f` if it names no feature yet.
+    fn at(mut self, f: Option<FeatId>) -> Self {
+        if self.feature.is_none() {
+            self.feature = f;
+        }
+        self
     }
 }
 
@@ -319,13 +385,18 @@ impl Linear {
 enum Node {
     Empty,
     /// `{(u, v) in region, w in [w0, w1]}` in `frame`, for a region with
-    /// no closed form of its own.
+    /// no closed form of its own. `w0` and `w1` enclose the exact ends.
     Prism {
         frame: IFrame,
         region: Arc<Region>,
-        w0: f64,
-        w1: f64,
+        w0: Iv,
+        w1: Iv,
     },
+    /// A solid of revolution, optionally cut to a wedge of angles.
+    Revolve(Box<Rev>),
+    /// A convex prism opened by a ball: the points within `r` of the
+    /// prism shrunk by `r`.
+    Opening(Box<Opening>),
     /// A convex polytope: the maximum of exact signed plane distances
     /// (a prism over a convex polygon: its edge planes and its two caps).
     /// `frame`, `rb` (the region's box) and `w0`, `w1` only bound it.
@@ -350,6 +421,143 @@ enum Node {
     Union(Box<Node>, Box<Node>),
     Inter(Box<Node>, Box<Node>),
     Diff(Box<Node>, Box<Node>),
+}
+
+/// A solid of revolution about the line through `a` along the unit `d`.
+/// A point `p` has axial coordinate `t = (p - a) . d` and radius `rho`,
+/// its distance from the axis; it is in the full revolve when the meridian
+/// point `o2 + t du + rho eu` lies in `region` (`du`, `eu` orthonormal in
+/// the region's plane: an isometry from the meridian half-plane `rho >= 0`
+/// into the region's plane). `wedge` keeps the angles `phi` in `[0,
+/// theta]`, measured from `e1` (unit, square to `d`) towards `e2 = d x e1`.
+#[derive(Debug, Clone)]
+struct Rev {
+    /// The profile's plane, for alignment and nothing else.
+    frame: IFrame,
+    a: Iv3,
+    d: Iv3,
+    e1: Iv3,
+    e2: Iv3,
+    o2: Iv2,
+    du: Iv2,
+    eu: Iv2,
+    region: Arc<Region>,
+    wedge: Option<Wedge>,
+    /// The meridian's extent: `t` in `[tmin, tmax]`, `rho <= rmax`.
+    tmin: f64,
+    tmax: f64,
+    rmax: f64,
+}
+
+/// The angles `[0, theta]`: `s = sin theta`, `c = cos theta`; `convex`
+/// says `theta <= pi` (`None` when that is not certain: then the hull of
+/// both forms, which holds the true one).
+#[derive(Debug, Clone, Copy)]
+struct Wedge {
+    s: Iv,
+    c: Iv,
+    convex: Option<bool>,
+}
+
+impl Rev {
+    fn eval(&self, p: Iv3) -> Iv {
+        let v = p - self.a;
+        let t = v.dot(self.d);
+        let rho = (v - self.d.scale(t)).norm();
+        let q = self.o2 + self.du.scale(t) + self.eu.scale(rho);
+        let mut f = self.region.eval(q);
+        if let Some(w) = self.wedge {
+            // Half-planes through the axis: `phi <= pi` side of `e1` and
+            // the `phi <= theta` side of the end direction, as exact
+            // signed distances (negative on the kept side).
+            let h1 = -v.dot(self.e2);
+            let h2 = -v.dot(self.e1.scale(w.s) - self.e2.scale(w.c));
+            let fw = match w.convex {
+                Some(true) => h1.max(h2),
+                Some(false) => h1.min(h2),
+                None => h1.max(h2).hull(h1.min(h2)),
+            };
+            f = f.max(fw);
+        }
+        f
+    }
+
+    fn bounds(&self) -> Bounds {
+        let mut b = Bounds::EMPTY;
+        let r = Iv::new(-self.rmax, self.rmax);
+        for t in [self.tmin, self.tmax] {
+            let c = self.a + self.d.scale(Iv::point(t));
+            b.add(Iv3::new(c.x + r, c.y + r, c.z + r));
+        }
+        b
+    }
+}
+
+/// A convex prism over the polygon `{q : n_i . q >= c_i}` (unit inward
+/// normals; `verts[i]` where line `i - 1` meets line `i`) and `w` in
+/// `[w0, w1]`, in `frame`, opened by a ball: the points within `r` of
+/// the prism, which itself is the original prism shrunk by `r`. `rb`,
+/// `ow0`, `ow1` are the original prism's extent, for bounds.
+#[derive(Debug, Clone)]
+struct Opening {
+    frame: IFrame,
+    lines: Vec<(Iv2, Iv)>,
+    verts: Vec<Iv2>,
+    w0: Iv,
+    w1: Iv,
+    r: f64,
+    rb: [f64; 4],
+    ow0: f64,
+    ow1: f64,
+}
+
+impl Opening {
+    /// `sd(P') - r` with `sd(P')` the exact signed distance to the shrunk
+    /// prism: inside it the larger of the polygon's and the slab's signed
+    /// distances, outside `sqrt(a+^2 + b+^2)` of the two (the distance to
+    /// a product of convex sets). That function of `(a, b)` is continuous
+    /// and non-decreasing in both, so its interval is its value at the
+    /// lower and at the upper ends.
+    fn eval(&self, p: Iv3) -> Iv {
+        let (u, v, w) = self.frame.local(p);
+        let q = Iv2::new(u, v);
+        let mut m = Iv::point(f64::NEG_INFINITY);
+        for (n, c) in &self.lines {
+            m = m.max(*c - n.dot(q));
+        }
+        let poly = if m.hi < 0.0 {
+            m
+        } else {
+            let k = self.verts.len();
+            let mut d = Iv::point(f64::INFINITY);
+            for i in 0..k {
+                d = d.min(region::segment_distance(
+                    self.verts[i],
+                    self.verts[(i + 1) % k],
+                    q,
+                ));
+            }
+            if m.lo > 0.0 {
+                d
+            } else {
+                m.hull(d)
+            }
+        };
+        let slab = (self.w0 - w).max(w - self.w1);
+        let g = |a: f64, b: f64, up: bool| -> f64 {
+            if a <= 0.0 && b <= 0.0 {
+                a.max(b)
+            } else {
+                let s = (Iv::point(a.max(0.0)).sqr() + Iv::point(b.max(0.0)).sqr()).sqrt();
+                if up {
+                    s.hi
+                } else {
+                    s.lo
+                }
+            }
+        };
+        Iv::new(g(poly.lo, slab.lo, false), g(poly.hi, slab.hi, true)) - self.r
+    }
 }
 
 /// An axis-aligned box, possibly unbounded or empty.
@@ -413,9 +621,11 @@ impl Node {
                 w1,
             } => {
                 let (u, v, w) = frame.local(p);
-                let slab = (Iv::point(*w0) - w).max(w - *w1);
+                let slab = (*w0 - w).max(w - *w1);
                 region.eval(Iv2::new(u, v)).max(slab)
             }
+            Node::Revolve(rv) => rv.eval(p),
+            Node::Opening(o) => o.eval(p),
             Node::Polytope { planes, .. } => {
                 let mut f = Iv::point(f64::NEG_INFINITY);
                 for pl in planes {
@@ -444,6 +654,8 @@ impl Node {
     fn first_frame(&self) -> Option<IFrame> {
         match self {
             Node::Prism { frame, .. } | Node::Polytope { frame, .. } => Some(*frame),
+            Node::Revolve(rv) => Some(rv.frame),
+            Node::Opening(o) => Some(o.frame),
             Node::Union(a, b) | Node::Inter(a, b) | Node::Diff(a, b) => {
                 a.first_frame().or_else(|| b.first_frame())
             }
@@ -492,6 +704,18 @@ impl Node {
                 t0,
                 t1,
             },
+            Node::Revolve(rv) => Node::Revolve(Box::new(Rev {
+                frame: frame(rv.frame),
+                a: m.to_world(rv.a),
+                d: m.rotate(rv.d),
+                e1: m.rotate(rv.e1),
+                e2: m.rotate(rv.e2),
+                ..*rv
+            })),
+            Node::Opening(o) => Node::Opening(Box::new(Opening {
+                frame: frame(o.frame),
+                ..*o
+            })),
             Node::Half(l) => Node::Half(l.moved(m)),
             Node::Union(a, b) => Node::Union(Box::new(a.moved(m)), Box::new(b.moved(m))),
             Node::Inter(a, b) => Node::Inter(Box::new(a.moved(m)), Box::new(b.moved(m))),
@@ -510,15 +734,80 @@ impl Node {
                 w1,
             } => {
                 let b = region.bbox;
-                frame.world_box([b[0], b[2]], [b[1], b[3]], [*w0, *w1])
+                frame.world_box([b[0], b[2]], [b[1], b[3]], [w0.lo, w1.hi])
             }
             Node::Polytope {
                 frame, rb, w0, w1, ..
             } => frame.world_box([rb[0], rb[2]], [rb[1], rb[3]], [*w0, *w1]),
+            Node::Revolve(rv) => rv.bounds(),
+            Node::Opening(o) => {
+                o.frame
+                    .world_box([o.rb[0], o.rb[2]], [o.rb[1], o.rb[3]], [o.ow0, o.ow1])
+            }
             Node::Cylinder { .. } | Node::Half(_) => Bounds::ALL,
             Node::Union(a, b) => a.bounds().hull(&b.bounds()),
             Node::Inter(a, b) => a.bounds().meet(&b.bounds()),
             Node::Diff(a, _) => a.bounds(),
+        }
+    }
+
+    /// An upper bound on the area of this node's boundary inside the
+    /// closed box `clip` (mm^2), from the recipe alone (rounded up).
+    ///
+    /// The boundary of a union, intersection or difference lies in the
+    /// union of the operands' boundaries, so the sum over the leaves bounds
+    /// it. A leaf: a prism's two caps and its side (`2 A + P h`, area and
+    /// perimeter bounded by [`Region::area_bound`] and
+    /// [`Region::perimeter_bound`]); a cylinder's side over the part of its
+    /// axis the box spans, and its caps; a solid of revolution's surface,
+    /// by Pappus at most `2 pi rmax P`, plus two meridian sections. A
+    /// convex leaf `C` also has `area(dC n clip) <= area(d(C n clip)) <=
+    /// area(d clip)`: a point of `dC` in the box is on the boundary of `C n
+    /// clip`, and surface area grows with convex sets. So does its own box,
+    /// for a convex leaf inside it. A half-space's plane meets the box in a
+    /// flat convex set, whose two sides together have at most the box's
+    /// area.
+    fn area_bound(&self, clip: &Bounds) -> f64 {
+        let box_area = |b: &Bounds| -> Iv {
+            let e = [0, 1, 2].map(|i| (Iv::point(b.max[i]) - Iv::point(b.min[i])).max(Iv::ZERO));
+            (e[0] * e[1] + e[1] * e[2] + e[2] * e[0]) * 2.0
+        };
+        let clip_area = box_area(clip).hi;
+        let two_pi = Iv::pi() * 2.0;
+        match self {
+            Node::Empty => 0.0,
+            Node::Prism { region, w0, w1, .. } => {
+                let h = (*w1 - *w0).abs();
+                (Iv::point(region.area_bound()) * 2.0 + Iv::point(region.perimeter_bound()) * h).hi
+            }
+            Node::Polytope { .. } | Node::Opening(_) => box_area(&self.bounds()).hi.min(clip_area),
+            Node::Cylinder { a, d, r, t0, t1 } => {
+                let (mut tmin, mut tmax) = (f64::INFINITY, f64::NEG_INFINITY);
+                for x in [clip.min[0], clip.max[0]] {
+                    for y in [clip.min[1], clip.max[1]] {
+                        for z in [clip.min[2], clip.max[2]] {
+                            let t = (Iv3::point(x, y, z) - *a).dot(*d);
+                            tmin = tmin.min(t.lo);
+                            tmax = tmax.max(t.hi);
+                        }
+                    }
+                }
+                let lo = t0.max(tmin);
+                let hi = t1.unwrap_or(f64::INFINITY).min(tmax);
+                let len = (Iv::point(hi) - Iv::point(lo)).max(Iv::ZERO);
+                let r = Iv::point(*r);
+                let side = two_pi * r * len + two_pi * r * r;
+                side.hi.min(clip_area)
+            }
+            Node::Half(_) => clip_area,
+            Node::Revolve(rv) => {
+                (two_pi * Iv::point(rv.rmax) * Iv::point(rv.region.perimeter_bound())
+                    + Iv::point(rv.region.area_bound()) * 2.0)
+                    .hi
+            }
+            Node::Union(a, b) | Node::Inter(a, b) | Node::Diff(a, b) => {
+                (Iv::point(a.area_bound(clip)) + Iv::point(b.area_bound(clip))).hi
+            }
         }
     }
 }
@@ -590,6 +879,18 @@ impl Reference {
     pub fn bounds(&self) -> Bounds {
         self.root.bounds()
     }
+
+    /// A certified upper bound on the area of the solid's boundary (mm^2),
+    /// from the recipe alone, or `None` when the reference cannot bound
+    /// the solid. Leaves are clipped to [`Reference::bounds`]; see
+    /// `Node::area_bound` for the argument.
+    pub fn area_bound(&self) -> Option<f64> {
+        let b = self.bounds();
+        if b.is_empty() {
+            return Some(0.0);
+        }
+        b.is_bounded().then(|| self.root.area_bound(&b))
+    }
 }
 
 fn build_def(
@@ -657,8 +958,8 @@ fn build_def(
                     None => Node::Prism {
                         frame,
                         region: Arc::new(region),
-                        w0,
-                        w1,
+                        w0: Iv::point(w0),
+                        w1: Iv::point(w1),
                     },
                 };
                 if i == 0 && *op == Op::Add {
@@ -761,17 +1062,36 @@ fn build_def(
                     current = Node::Inter(Box::new(current), Box::new(k));
                 }
             }
-            Feature::Revolve { .. }
-            | Feature::Sweep { .. }
-            | Feature::Loft { .. }
-            | Feature::Fillet { .. } => {
-                return Err(undefined(
-                    at,
-                    format!(
-                        "the {} feature has no reference meaning yet",
-                        feature.kind_name()
-                    ),
-                ));
+            Feature::Revolve {
+                profile,
+                plane,
+                axis,
+                angle_deg,
+                op,
+                ..
+            } => {
+                let body = revolve(profile, plane, axis, *angle_deg).map_err(|e| e.at(at))?;
+                current = combine(current, body, *op, started);
+                started = true;
+            }
+            Feature::Loft { sections, op, .. } => {
+                let body = loft(sections).map_err(|e| e.at(at))?;
+                current = combine(current, body, *op, started);
+                started = true;
+            }
+            Feature::Sweep {
+                profile,
+                plane,
+                path,
+                op,
+                ..
+            } => {
+                let body = sweep(profile, plane, path).map_err(|e| e.at(at))?;
+                current = combine(current, body, *op, started);
+                started = true;
+            }
+            Feature::Fillet { edges, radius, .. } => {
+                current = fillet(def, i, edges, *radius, &ch)?;
             }
         }
         if i > 0 && !is_chamfer {
@@ -793,6 +1113,452 @@ fn combine(current: Node, body: Node, op: Op, started: bool) -> Node {
         Op::Subtract => Node::Diff(Box::new(current), Box::new(body)),
         Op::Intersect => Node::Inter(Box::new(current), Box::new(body)),
     }
+}
+
+/// How far (mm) a profile may reach past a revolve axis and still count as
+/// lying on one side of it; the part past the axis is not revolved.
+const AXIS_SIDE_TOL: f64 = 1e-9;
+
+fn region_of(profile: &cadview_core::solid::Profile2d) -> Result<Region, NotDefined> {
+    Region::new(profile).map_err(|e| match e {
+        RegionError::Invalid(s) => invalid(None, s),
+        RegionError::Undefined(s) => undefined(None, s),
+    })
+}
+
+fn neg2(v: Iv2) -> Iv2 {
+    Iv2::new(-v.x, -v.y)
+}
+
+/// The region's box corners in meridian coordinates `t = (q - o2) . du`,
+/// `s = (q - o2) . eu`: `(tmin, tmax, smin, smax)`, rounded outward.
+fn meridian_extent(region: &Region, o2: Iv2, du: Iv2, eu: Iv2) -> (f64, f64, f64, f64) {
+    let b = region.bbox;
+    let mut e = (
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    );
+    for (x, y) in [(b[0], b[1]), (b[2], b[1]), (b[2], b[3]), (b[0], b[3])] {
+        let q = Iv2::point(x, y) - o2;
+        let (t, s) = (q.dot(du), q.dot(eu));
+        e = (e.0.min(t.lo), e.1.max(t.hi), e.2.min(s.lo), e.3.max(s.hi));
+    }
+    e
+}
+
+/// A revolve's reference: the module note's definition.
+fn revolve(
+    profile: &cadview_core::solid::Profile2d,
+    plane: &Plane3,
+    axis: &kurbo::Line,
+    angle_deg: f64,
+) -> Result<Node, NotDefined> {
+    if !(angle_deg.is_finite() && angle_deg > 0.0 && angle_deg <= 360.0) {
+        return Err(invalid(None, "revolve angle must be in (0, 360] degrees"));
+    }
+    let frame = frame_of(plane).map_err(|e| invalid(None, e))?;
+    let region = region_of(profile)?;
+    let (p0, p1) = (axis.p0, axis.p1);
+    if ![p0.x, p0.y, p1.x, p1.y].iter().all(|c| c.is_finite()) || p0 == p1 {
+        return Err(invalid(
+            None,
+            "revolve axis must be two distinct finite points",
+        ));
+    }
+    let o2 = Iv2::point(p0.x, p0.y);
+    let dir = Iv2::point(p1.x, p1.y) - o2;
+    let du = dir.scale(Iv::point(1.0) / dir.norm());
+    let perp = Iv2::new(-du.y, du.x);
+    let (_, _, smin, smax) = meridian_extent(&region, o2, du, perp);
+    let eu = if smin >= -AXIS_SIDE_TOL {
+        perp
+    } else if smax <= AXIS_SIDE_TOL {
+        neg2(perp)
+    } else {
+        return Err(undefined(
+            None,
+            "the profile lies on both sides of the revolve axis",
+        ));
+    };
+    let (tmin, tmax, _, smax) = meridian_extent(&region, o2, du, eu);
+    let lift = |v: Iv2| frame.x.scale(v.x) + frame.y.scale(v.y);
+    let a = frame.origin + lift(o2);
+    let d = lift(du);
+    let e1 = lift(eu);
+    let wedge = (angle_deg != 360.0).then(|| {
+        let theta = Iv::point(angle_deg) * Iv::pi() / Iv::point(180.0);
+        Wedge {
+            s: theta.sin(),
+            c: theta.cos(),
+            convex: Some(angle_deg <= 180.0),
+        }
+    });
+    Ok(Node::Revolve(Box::new(Rev {
+        frame,
+        a,
+        d,
+        e1,
+        e2: d.cross(e1),
+        o2,
+        du,
+        eu,
+        region: Arc::new(region),
+        wedge,
+        tmin,
+        tmax,
+        rmax: smax.max(0.0),
+    })))
+}
+
+/// A polygon's vertices and whether it runs counter-clockwise.
+type Polygon = (Vec<(f64, f64)>, bool);
+
+/// The start points of a profile that is one convex polygon of lines (no
+/// holes), and whether it runs counter-clockwise; or why not.
+fn convex_polygon(profile: &cadview_core::solid::Profile2d) -> Result<Polygon, &'static str> {
+    if !profile.holes.is_empty() {
+        return Err("the profile has a hole");
+    }
+    let mut pts = Vec::with_capacity(profile.outer.len());
+    for s in &profile.outer {
+        match s {
+            Seg2::Line(l) => pts.push((l.p0.x, l.p0.y)),
+            _ => return Err("the profile has a curved segment"),
+        }
+    }
+    let n = pts.len();
+    if n < 3 {
+        return Err("the profile is not a polygon");
+    }
+    let area2: f64 = (0..n)
+        .map(|k| {
+            let (a, b) = (pts[k], pts[(k + 1) % n]);
+            a.0 * b.1 - a.1 * b.0
+        })
+        .sum();
+    let ccw = area2 > 0.0;
+    for k in 0..n {
+        let (a, b, c) = (pts[k], pts[(k + 1) % n], pts[(k + 2) % n]);
+        let cr = (b.0 - a.0) * (c.1 - b.1) - (b.1 - a.1) * (c.0 - b.0);
+        let scale = ((b.0 - a.0).hypot(b.1 - a.1)) * ((c.0 - b.0).hypot(c.1 - b.1));
+        if cr * if ccw { 1.0 } else { -1.0 } <= 1e-9 * scale {
+            return Err("the profile has a concave or straight corner");
+        }
+    }
+    Ok((pts, ccw))
+}
+
+/// A loft's reference: defined for two sections on planes with the same
+/// axes (so parallel, one moved along the other), each one convex polygon
+/// of lines with the same number of sides, side `i` of one exactly
+/// parallel to and in the same direction as side `i` of the other
+/// (certified in interval arithmetic, so the inputs must make it exact).
+/// Then every side face of the ruled loft is a plane, and the solid is the
+/// convex hull of the two polygons: the intersection of the side planes'
+/// and the caps' half-spaces, a convex polytope.
+fn loft(sections: &[(cadview_core::solid::Profile2d, Plane3)]) -> Result<Node, NotDefined> {
+    let nd = |why: &str| undefined(None, format!("loft: {why}"));
+    let [(pa, pla), (pb, plb)] = sections else {
+        return Err(nd("defined only for two sections"));
+    };
+    if pla.x_axis != plb.x_axis || pla.normal != plb.normal {
+        return Err(nd("defined only for sections on planes with the same axes"));
+    }
+    let fa = frame_of(pla).map_err(|e| invalid(None, e))?;
+    let fb = frame_of(plb).map_err(|e| invalid(None, e))?;
+    let (a, ccw_a) = convex_polygon(pa).map_err(nd)?;
+    let (b, ccw_b) = convex_polygon(pb).map_err(nd)?;
+    if a.len() != b.len() || ccw_a != ccw_b {
+        return Err(nd("the sections differ in side count or in orientation"));
+    }
+    let n = a.len();
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let ea = (
+            Iv::point(a[j].0) - Iv::point(a[i].0),
+            Iv::point(a[j].1) - Iv::point(a[i].1),
+        );
+        let eb = (
+            Iv::point(b[j].0) - Iv::point(b[i].0),
+            Iv::point(b[j].1) - Iv::point(b[i].1),
+        );
+        let cross = ea.0 * eb.1 - ea.1 * eb.0;
+        let dot = ea.0 * eb.0 + ea.1 * eb.1;
+        if cross != Iv::ZERO || !dot.pos() {
+            return Err(nd(
+                "corresponding sides are not certainly parallel: the side faces are not planes",
+            ));
+        }
+    }
+    let lift = |f: &IFrame, p: (f64, f64)| {
+        f.origin + f.x.scale(Iv::point(p.0)) + f.y.scale(Iv::point(p.1))
+    };
+    let va: Vec<Iv3> = a.iter().map(|p| lift(&fa, *p)).collect();
+    let vb: Vec<Iv3> = b.iter().map(|p| lift(&fb, *p)).collect();
+    let h = (vb[0] - va[0]).dot(fa.z);
+    let up = h
+        .sign()
+        .ok_or_else(|| nd("the sections are not certainly in two planes"))?;
+    let mut centre = Iv3::point(0.0, 0.0, 0.0);
+    for p in va.iter().chain(&vb) {
+        centre = centre + *p;
+    }
+    let centre = centre.scale(Iv::point(1.0) / Iv::point(2.0 * n as f64));
+    let mut planes = Vec::with_capacity(n + 2);
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let nrm = (va[j] - va[i]).cross(vb[i] - va[i]);
+        let g = nrm.scale(Iv::point(1.0) / nrm.norm());
+        let g = match g.dot(centre - va[i]).sign() {
+            Some(true) => -g,
+            Some(false) => g,
+            None => return Err(nd("a side face is not certainly oriented")),
+        };
+        planes.push(Linear { g, c: g.dot(va[i]) });
+    }
+    let z = if up { fa.z } else { -fa.z };
+    planes.push(Linear {
+        g: -z,
+        c: (-z).dot(va[0]),
+    });
+    planes.push(Linear {
+        g: z,
+        c: z.dot(vb[0]),
+    });
+    // Bounds in the first section's frame.
+    let (mut rb, mut w0, mut w1) = (
+        [
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        ],
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    );
+    for p in va.iter().chain(&vb) {
+        let (u, v, w) = fa.local(*p);
+        rb = [
+            rb[0].min(u.lo),
+            rb[1].min(v.lo),
+            rb[2].max(u.hi),
+            rb[3].max(v.hi),
+        ];
+        w0 = w0.min(w.lo);
+        w1 = w1.max(w.hi);
+    }
+    Ok(Node::Polytope {
+        planes,
+        frame: fa,
+        rb,
+        w0,
+        w1,
+    })
+}
+
+/// A sweep's reference: the module note's definition, piece by piece.
+fn sweep(
+    profile: &cadview_core::solid::Profile2d,
+    plane: &Plane3,
+    path: &cadview_core::solid::Path3,
+) -> Result<Node, NotDefined> {
+    path.check(plane)
+        .map_err(|e| invalid(None, e.to_string()))?;
+    let region = Arc::new(region_of(profile)?);
+    let mut fr = frame_of(plane).map_err(|e| invalid(None, e))?;
+    let mut body: Option<Node> = None;
+    for seg in &path.segs {
+        let piece = match seg {
+            Seg3::Line { from, to } => {
+                let len = (iv3(*to) - iv3(*from)).norm();
+                let n = Node::Prism {
+                    frame: fr,
+                    region: region.clone(),
+                    w0: Iv::ZERO,
+                    w1: len,
+                };
+                fr.origin = fr.origin + fr.z.scale(len);
+                n
+            }
+            Seg3::Arc { from, via, to } => {
+                let (n, next) = sweep_arc(&fr, &region, *from, *via, *to)?;
+                fr = next;
+                n
+            }
+        };
+        body = Some(match body {
+            None => piece,
+            Some(b) => Node::Union(Box::new(b), Box::new(piece)),
+        });
+    }
+    body.ok_or_else(|| invalid(None, "a sweep path has no segments"))
+}
+
+/// One arc of a sweep: the revolve of the section about the arc's axis by
+/// the arc's angle, and the section's frame at the arc's end.
+fn sweep_arc(
+    fr: &IFrame,
+    region: &Arc<Region>,
+    from: Point3,
+    via: Point3,
+    to: Point3,
+) -> Result<(Node, IFrame), NotDefined> {
+    let nd = |why: &str| undefined(None, format!("sweep: {why}"));
+    let (pa, pb, pc) = (iv3(from), iv3(via), iv3(to));
+    let (u, v) = (pb - pa, pc - pa);
+    let w = u.cross(v);
+    let w2 = w.norm2();
+    if w2.lo <= 0.0 {
+        return Err(nd("an arc's points are not certainly off a line"));
+    }
+    // The circumcentre; the points run counter-clockwise about w.
+    let c =
+        pa + (v.cross(w).scale(u.norm2()) + w.cross(u).scale(v.norm2())).scale(Iv::point(0.5) / w2);
+    let b = w.scale(Iv::point(1.0) / w.norm());
+    let flat = |r: Iv3| {
+        let p = r - b.scale(r.dot(b));
+        p.scale(Iv::point(1.0) / p.norm())
+    };
+    let (es, ee) = (flat(pa - c), flat(pc - c));
+    let (cos_t, sin_t) = (es.dot(ee), es.cross(ee).dot(b));
+    // The meridian in the section's own coordinates.
+    let co = c - fr.origin;
+    let c2 = Iv2::new(co.dot(fr.x), co.dot(fr.y));
+    let bu = Iv2::new(b.dot(fr.x), b.dot(fr.y));
+    let bu = bu.scale(Iv::point(1.0) / bu.norm());
+    let perp = Iv2::new(-bu.y, bu.x);
+    // `eu` points from the axis towards the section's origin.
+    let eu = match (-c2.dot(perp)).sign() {
+        Some(true) => perp,
+        Some(false) => neg2(perp),
+        None => return Err(nd("the section's origin is on the arc's axis")),
+    };
+    let (tmin, tmax, smin, smax) = meridian_extent(region, c2, bu, eu);
+    if smin < -AXIS_SIDE_TOL {
+        return Err(nd(
+            "the section reaches across the arc's axis (the bend is tighter than the section)",
+        ));
+    }
+    let e1 = fr.x.scale(eu.x) + fr.y.scale(eu.y);
+    let node = Node::Revolve(Box::new(Rev {
+        frame: *fr,
+        a: c,
+        d: b,
+        e1,
+        e2: b.cross(e1),
+        o2: c2,
+        du: bu,
+        eu,
+        region: region.clone(),
+        wedge: Some(Wedge {
+            s: sin_t,
+            c: cos_t,
+            convex: sin_t.sign(),
+        }),
+        tmin,
+        tmax,
+        rmax: smax.max(0.0),
+    }));
+    let one = Iv::point(1.0);
+    let rot = |x: Iv3| x.scale(cos_t) + b.cross(x).scale(sin_t) + b.scale(b.dot(x) * (one - cos_t));
+    let next = IFrame {
+        origin: c + rot(fr.origin - c),
+        x: rot(fr.x),
+        y: rot(fr.y),
+        z: rot(fr.z),
+    };
+    Ok((node, next))
+}
+
+/// A fillet's reference: the module note's definition.
+fn fillet(
+    def: &PartDef,
+    index: usize,
+    edges: &EdgeSel,
+    r: f64,
+    st: &ChamferState,
+) -> Result<Node, NotDefined> {
+    let at = Some(def.features[index].id());
+    let nd = |why: &str| undefined(at, format!("fillet: {why}"));
+    if !(r.is_finite() && r > 0.0) {
+        return Err(invalid(at, "fillet radius must be finite and positive"));
+    }
+    if !matches!(edges, EdgeSel::All) {
+        return Err(nd("only EdgeSel::All has a reference meaning"));
+    }
+    let Some(Feature::Extrude {
+        profile,
+        plane,
+        distance: h,
+        ..
+    }) = def.features.first()
+    else {
+        return Err(nd("defined only on a first, adding extrude"));
+    };
+    if index != 1 || st.base != Some(def.features[0].id()) {
+        return Err(nd(
+            "defined only directly after the part's first, adding, untapered extrude",
+        ));
+    }
+    let (pts, ccw) = convex_polygon(profile).map_err(nd)?;
+    if 2.0 * r >= h.abs() - 1e-6 {
+        return Err(nd("the round uses the whole height of the extrude"));
+    }
+    let n = pts.len();
+    let lens = offset_polygon_edge_lengths(&pts, ccw, &vec![r; n]);
+    if lens.iter().any(|&l| l.is_nan() || l <= 1e-6) {
+        return Err(nd(
+            "the round is too large for the profile: a side of the shrunk polygon vanishes",
+        ));
+    }
+    let frame = frame_of(plane).map_err(|e| invalid(at, e))?;
+    let lines: Vec<(Iv2, Iv)> = (0..n)
+        .map(|k| {
+            let (a, b) = (pts[k], pts[(k + 1) % n]);
+            let dir = Iv2::point(b.0, b.1) - Iv2::point(a.0, a.1);
+            let nrm = if ccw {
+                Iv2::new(-dir.y, dir.x)
+            } else {
+                Iv2::new(dir.y, -dir.x)
+            };
+            let nrm = nrm.scale(Iv::point(1.0) / dir.norm());
+            (nrm, nrm.dot(Iv2::point(a.0, a.1)) + r)
+        })
+        .collect();
+    // Vertex k: where line k - 1 meets line k (Cramer's rule).
+    let mut verts = Vec::with_capacity(n);
+    for k in 0..n {
+        let (n1, c1) = lines[(k + n - 1) % n];
+        let (n2, c2) = lines[k];
+        let det = n1.cross(n2);
+        if det.contains_zero() {
+            return Err(nd(
+                "two sides of the shrunk polygon are not certainly apart",
+            ));
+        }
+        verts.push(Iv2::new(
+            (c1 * n2.y - c2 * n1.y) / det,
+            (n1.x * c2 - n2.x * c1) / det,
+        ));
+    }
+    let (w0, w1) = (h.min(0.0), h.max(0.0));
+    let region = Region::new(profile).map_err(|e| match e {
+        RegionError::Invalid(s) => invalid(at, s),
+        RegionError::Undefined(s) => undefined(at, s),
+    })?;
+    Ok(Node::Opening(Box::new(Opening {
+        frame,
+        lines,
+        verts,
+        w0: Iv::point(w0) + r,
+        w1: Iv::point(w1) - r,
+        r,
+        rb: region.bbox,
+        ow0: w0,
+        ow1: w1,
+    })))
 }
 
 /// The kept half-spaces of a chamfer, or why it is not defined.
@@ -1059,6 +1825,110 @@ mod tests {
         let r = Reference::build(&e.parts[1].def, &e).unwrap();
         assert!(is_in(&r, 315.0, 30.0, 10.0));
         assert!(is_out(&r, 315.0, 5.0, 10.0));
+    }
+
+    #[test]
+    fn curved_corpus_points_classify_by_hand() {
+        use cadview_core::solid::corpus::curved;
+        let build = |e: cadview_core::solid::corpus::CorpusEntry| {
+            Reference::build(&e.parts[0].def, &e).expect("defined")
+        };
+        // Rounded slab: the inner box starts 4 in; a corner column of
+        // radius 4 about (4, 4) and a top-edge round about (y, z) = (4, 16).
+        let r = build(curved::rounded_slab());
+        assert!(is_in(&r, 200.0, 100.0, 10.0));
+        assert!(is_out(&r, 0.5, 0.5, 10.0)); // 4.95 from (4, 4)
+        assert!(is_in(&r, 2.0, 2.0, 10.0)); // 2.83 from (4, 4)
+        assert!(is_out(&r, 200.0, 0.5, 19.5));
+        assert!(is_in(&r, 200.0, 2.0, 18.0));
+        assert!(is_out(&r, 200.0, 100.0, 20.5));
+        // Tapered bar: half width 16 at z = 150.
+        let r = build(curved::tapered_square_bar());
+        assert!(is_in(&r, 0.0, 0.0, 150.0));
+        assert!(is_in(&r, 15.5, -15.5, 150.0));
+        assert!(is_out(&r, 16.5, 0.0, 150.0));
+        assert!(is_out(&r, 0.0, 0.0, 300.5));
+        // Bead (to radius 21 at z = 26) and cove (to radius 11 at z = 56).
+        let r = build(curved::revolved_beads_and_coves());
+        // On the axis the meridian touches its own axis segment: the band.
+        assert_eq!(r.classify(Point3::new(0.0, 0.0, 10.0)), Class::Band);
+        assert!(is_in(&r, 0.5, 0.0, 10.0));
+        assert!(is_out(&r, 16.0, 0.0, 10.0));
+        assert!(is_in(&r, 20.5, 0.0, 26.0));
+        assert!(is_in(&r, 0.0, -20.5, 26.0));
+        assert!(is_out(&r, 21.5, 0.0, 26.0));
+        assert!(is_out(&r, -12.0, 0.0, 56.0));
+        assert!(is_in(&r, 0.0, 10.5, 56.0));
+        assert!(is_out(&r, 0.0, 0.0, 80.5));
+        // Swept bar: legs along x and y, a bend about (100, 40).
+        let r = build(curved::swept_round_bar());
+        assert!(is_in(&r, 50.0, 5.9, 0.0));
+        assert!(is_out(&r, 50.0, 6.1, 0.0));
+        assert!(is_out(&r, -0.1, 0.0, 0.0));
+        let (c, s) = (
+            std::f64::consts::FRAC_1_SQRT_2,
+            std::f64::consts::FRAC_1_SQRT_2,
+        );
+        for (rad, inside) in [
+            (40.0, true),
+            (45.9, true),
+            (46.1, false),
+            (34.1, true),
+            (33.9, false),
+        ] {
+            let (x, y) = (100.0 + rad * s, 40.0 - rad * c);
+            assert_eq!(is_in(&r, x, y, 0.0), inside, "bend at radius {rad}");
+            assert_eq!(is_out(&r, x, y, 0.0), !inside, "bend at radius {rad}");
+        }
+        assert!(is_in(&r, 140.0, 100.0, 5.9));
+        assert!(is_out(&r, 140.0, 140.1, 0.0));
+        // Wedges: a quarter and three quarters of a turn from +X to +Y.
+        let quarter = Feature::Revolve {
+            id: FeatId(1),
+            profile: cadview_core::solid::Profile2d::rect(10.0, 0.0, 20.0, 5.0),
+            plane: Plane3::XZ,
+            axis: kurbo::Line::new((0.0, 0.0), (0.0, 1.0)),
+            angle_deg: 90.0,
+            op: Op::Add,
+        };
+        let three = match quarter.clone() {
+            Feature::Revolve {
+                id,
+                profile,
+                plane,
+                axis,
+                op,
+                ..
+            } => Feature::Revolve {
+                id,
+                profile,
+                plane,
+                axis,
+                angle_deg: 270.0,
+                op,
+            },
+            _ => unreachable!(),
+        };
+        let one = |f: Feature| {
+            Reference::build(
+                &PartDef {
+                    id: DefId(1),
+                    name: "w".into(),
+                    features: vec![f],
+                },
+                &NoTools,
+            )
+            .unwrap()
+        };
+        let (q, t) = (one(quarter), one(three));
+        let p = 15.0 * std::f64::consts::FRAC_1_SQRT_2;
+        assert!(is_in(&q, p, p, 2.5));
+        assert!(is_out(&q, 15.0, -1.0, 2.5));
+        assert!(is_out(&q, -1.0, 15.0, 2.5));
+        assert!(is_in(&t, -15.0, 0.5, 2.5));
+        assert!(is_in(&t, -p, -p, 2.5));
+        assert!(is_out(&t, p, -p, 2.5));
+        assert!(is_in(&t, p, p, 2.5));
     }
 
     #[test]

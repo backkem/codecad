@@ -19,3 +19,27 @@ kurbo = "0.13"
 # that anyway, as a panic the adapter turns into the same error).
 arris = { version = "=0.11.1", default-features = false, features = ["paranoid"] }
 cad-kernel = "=0.15.0"
+# Only for the development-time wasm timing runner (examples/wasm_timings.rs):
+# the version the workspace already locks through the script sandbox.
+wasmtime = { version = "=50.0.1", optional = true }
+
+[features]
+# The native host that runs the corpus as a wasm module.
+wasm-runner = ["dep:wasmtime"]
+
+# The corpus as wasm modules, built for wasm32-unknown-unknown: with arris
+# (timed by wasm_timings) and without a kernel (the size baseline).
+[[example]]
+name = "wasm_corpus"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "wasm_corpus_base"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "wasm_timings"
+required-features = ["wasm-runner"]
+
+[dev-dependencies]
+cadview-render3d = { path = "../cadview-render3d" }

@@ -10,10 +10,10 @@
 
 use std::f64::consts::{PI, TAU};
 
-use cadview_core::solid::corpus::prismatic;
+use cadview_core::solid::corpus::{curved, prismatic};
 use cadview_core::solid::{
-    Aabb3, CapSide, DefId, Depth, EdgeSel, FeatId, Feature, Op, PartDef, Placement, Plane3, Point3,
-    Profile2d, Seg2, ToolRef, ToolResolver, Vec3,
+    Aabb3, CapSide, DefId, Depth, EdgeSel, FeatId, Feature, Op, PartDef, Path3, Placement, Plane3,
+    Point3, Profile2d, Seg2, Seg3, ToolRef, ToolResolver, Vec3,
 };
 use cadview_core::types::{LwVertex, Shape as Shape2d};
 use kurbo::{Line, Point};
@@ -262,6 +262,11 @@ pub fn moved_def(d: &PartDef, m: &Placement) -> PartDef {
         let r = qrot(q, Vec3::new(p.x, p.y, p.z)) + m.translation;
         Point3::new(r.x, r.y, r.z)
     };
+    let moved_plane = |plane: &Plane3| Plane3 {
+        origin: pt(plane.origin),
+        x_axis: qrot(q, plane.x_axis),
+        normal: qrot(q, plane.normal),
+    };
     let features = d
         .features
         .iter()
@@ -327,6 +332,64 @@ pub fn moved_def(d: &PartDef, m: &Placement) -> PartDef {
                 },
                 d1,
                 d2,
+            },
+            Feature::Revolve {
+                id,
+                profile,
+                plane,
+                axis,
+                angle_deg,
+                op,
+            } => Feature::Revolve {
+                id,
+                profile,
+                plane: moved_plane(&plane),
+                axis,
+                angle_deg,
+                op,
+            },
+            Feature::Sweep {
+                id,
+                profile,
+                plane,
+                path,
+                op,
+            } => Feature::Sweep {
+                id,
+                profile,
+                plane: moved_plane(&plane),
+                path: Path3 {
+                    segs: path
+                        .segs
+                        .iter()
+                        .map(|s| match *s {
+                            Seg3::Line { from, to } => Seg3::Line {
+                                from: pt(from),
+                                to: pt(to),
+                            },
+                            Seg3::Arc { from, via, to } => Seg3::Arc {
+                                from: pt(from),
+                                via: pt(via),
+                                to: pt(to),
+                            },
+                        })
+                        .collect(),
+                },
+                op,
+            },
+            Feature::Loft {
+                id,
+                sections,
+                ruled,
+                op,
+            } => Feature::Loft {
+                id,
+                sections: sections
+                    .into_iter()
+                    .map(|(p, pl)| (p, moved_plane(&pl)))
+                    .collect(),
+                ruled,
+                op,
             },
             other => other,
         })
@@ -418,6 +481,28 @@ pub fn mirrored_def(d: &PartDef, x0: f64, id_shift: u64) -> PartDef {
                 d1,
                 d2,
             },
+            // The plane as for an extrude keeps the profile's coordinates.
+            // A reflection turns the other way round its axis, so the
+            // mirrored revolve runs about the reversed axis.
+            Feature::Revolve {
+                id,
+                profile,
+                plane,
+                axis,
+                angle_deg,
+                op,
+            } => Feature::Revolve {
+                id,
+                profile,
+                plane: Plane3 {
+                    origin: pt(plane.origin),
+                    x_axis: l(plane.x_axis),
+                    normal: -l(plane.normal),
+                },
+                axis: Line::new(axis.p1, axis.p0),
+                angle_deg,
+                op,
+            },
             other => other,
         })
         .collect();
@@ -503,6 +588,332 @@ fn corpus_parts() -> Vec<PartCase> {
         }
     }
     out
+}
+
+/// The curved corpus parts (rung 3D0b) as cases, with their closed forms.
+/// Each is one closed shell with no through hole: Euler characteristic 2.
+fn curved_corpus_parts() -> Vec<PartCase> {
+    let mut out = Vec::new();
+    for entry in curved::entries() {
+        for p in &entry.parts {
+            out.push(
+                part(&p.def.name, p.def.clone(), entry.tools.clone())
+                    .closed(p.volume, p.bbox)
+                    .euler(2),
+            );
+        }
+    }
+    out
+}
+
+/// A rectangle `rho` in `[r0, r1]`, `z` in `[0, h]` on the XZ plane,
+/// revolved about the z axis by `deg` degrees (right-handed, from +X
+/// towards +Y).
+fn revolved_rect(id: u64, name: &str, r0: f64, r1: f64, h: f64, deg: f64) -> PartCase {
+    part(
+        name,
+        def(
+            id,
+            name,
+            vec![Feature::Revolve {
+                id: FeatId(1),
+                profile: Profile2d::rect(r0, 0.0, r1, h),
+                plane: Plane3::XZ,
+                axis: Line::new((0.0, 0.0), (0.0, 1.0)),
+                angle_deg: deg,
+                op: Op::Add,
+            }],
+        ),
+        vec![],
+    )
+}
+
+/// Curved parts beyond the corpus, each with a closed form:
+///
+/// - a quarter and a three-quarter revolve of the rectangle `rho` in
+///   `[10, 20]`, `z` in `[0, 5]`: a whole turn is `pi (400 - 100) 5 =
+///   1 500 pi`, so `375 pi` and `1 125 pi`. From +X turning towards +Y,
+///   the quarter spans `x, y` in `[0, 20]`; the three-quarter turn
+///   reaches -X at 180 degrees and -Y at 270: `x, y` in `[-20, 20]`.
+fn curved_extra() -> Vec<PartCase> {
+    vec![
+        revolved_rect(41, "quarter revolve of a rectangle", 10.0, 20.0, 5.0, 90.0)
+            .closed(375.0 * PI, aabb([0.0, 0.0, 0.0], [20.0, 20.0, 5.0]))
+            .euler(2),
+        revolved_rect(
+            42,
+            "three-quarter revolve of a rectangle",
+            10.0,
+            20.0,
+            5.0,
+            270.0,
+        )
+        .closed(1125.0 * PI, aabb([-20.0, -20.0, 0.0], [20.0, 20.0, 5.0]))
+        .euler(2),
+    ]
+}
+
+/// Pairs of recipes for the same curved solid (layer 5).
+fn curved_equivalences() -> (Vec<PartCase>, Vec<Relation>) {
+    let mut parts = Vec::new();
+    let mut rel = Vec::new();
+    let mut pair = |name: &str, a: PartCase, b: PartCase| {
+        rel.push(Relation::Equivalent {
+            name: name.into(),
+            a: a.name.clone(),
+            b: b.name.clone(),
+        });
+        parts.push(a);
+        parts.push(b);
+    };
+
+    // A tube: the rectangle rho in [4, 10], z in [0, 3] turned a whole
+    // turn, and the annulus extruded 3: V = pi (100 - 16) 3 = 252 pi. One
+    // shell with one through hole.
+    let tube_v = 252.0 * PI;
+    let tube_b = aabb([-10.0, -10.0, 0.0], [10.0, 10.0, 3.0]);
+    let annulus = Profile2d::circle(Point::new(0.0, 0.0), 10.0)
+        .with_hole(vec![Seg2::Circle(kurbo::Circle::new((0.0, 0.0), 4.0))]);
+    pair(
+        "tube: revolved rectangle = extruded annulus",
+        revolved_rect(43, "revolved rectangle tube", 4.0, 10.0, 3.0, 360.0)
+            .closed(tube_v, tube_b)
+            .euler(0),
+        part(
+            "extruded annulus",
+            def(
+                44,
+                "extruded annulus",
+                vec![extrude(1, annulus, Plane3::XY, 3.0, Op::Add)],
+            ),
+            vec![],
+        )
+        .closed(tube_v, tube_b)
+        .euler(0),
+    );
+
+    // A square bar: a loft between two equal 40 x 40 squares 300 apart,
+    // and the square extruded 300: V = 480 000.
+    let bar_v = 480_000.0;
+    let bar_b = aabb([-20.0, -20.0, 0.0], [20.0, 20.0, 300.0]);
+    let sq = Profile2d::rect(-20.0, -20.0, 20.0, 20.0);
+    pair(
+        "square bar: loft of equal sections = extrude",
+        part(
+            "loft of equal squares",
+            def(
+                45,
+                "loft of equal squares",
+                vec![Feature::Loft {
+                    id: FeatId(1),
+                    sections: vec![
+                        (sq.clone(), Plane3::XY),
+                        (sq.clone(), Plane3::XY.offset(300.0)),
+                    ],
+                    ruled: true,
+                    op: Op::Add,
+                }],
+            ),
+            vec![],
+        )
+        .closed(bar_v, bar_b)
+        .euler(2),
+        part(
+            "extruded square bar",
+            def(
+                46,
+                "extruded square bar",
+                vec![extrude(1, sq, Plane3::XY, 300.0, Op::Add)],
+            ),
+            vec![],
+        )
+        .closed(bar_v, bar_b)
+        .euler(2),
+    );
+
+    // A round bar: a disc r = 6 on the YZ plane swept 100 along +X, and
+    // the disc extruded 100: V = 3 600 pi.
+    let rod_v = 3600.0 * PI;
+    let rod_b = aabb([0.0, -6.0, -6.0], [100.0, 6.0, 6.0]);
+    let disc = Profile2d::circle(Point::new(0.0, 0.0), 6.0);
+    pair(
+        "round bar: sweep along a line = extrude",
+        part(
+            "disc swept along a line",
+            def(
+                47,
+                "disc swept along a line",
+                vec![Feature::Sweep {
+                    id: FeatId(1),
+                    profile: disc.clone(),
+                    plane: Plane3::YZ,
+                    path: Path3 {
+                        segs: vec![Seg3::Line {
+                            from: Point3::ORIGIN,
+                            to: Point3::new(100.0, 0.0, 0.0),
+                        }],
+                    },
+                    op: Op::Add,
+                }],
+            ),
+            vec![],
+        )
+        .closed(rod_v, rod_b)
+        .euler(2),
+        part(
+            "extruded disc",
+            def(
+                48,
+                "extruded disc",
+                vec![extrude(1, disc.clone(), Plane3::YZ, 100.0, Op::Add)],
+            ),
+            vec![],
+        )
+        .closed(rod_v, rod_b)
+        .euler(2),
+    );
+
+    // A quarter torus: the same disc swept along a quarter circle of
+    // radius 40 about the axis through (0, 40, 0) along +Z, from the
+    // origin to (40, 40, 0), and the disc revolved 90 degrees about that
+    // axis (in the YZ plane's coordinates the line u = 40, pointing +Z).
+    // Pappus: V = pi 36 * 40 pi / 2 = 720 pi^2. The start disc lies in
+    // x = 0 and the end disc in y = 40; the outside of the bend reaches
+    // x = 46: box [0, -6, -6] to [46, 40, 6].
+    let s = std::f64::consts::FRAC_1_SQRT_2;
+    let qt_v = 720.0 * PI * PI;
+    let qt_b = aabb([0.0, -6.0, -6.0], [46.0, 40.0, 6.0]);
+    pair(
+        "quarter torus: sweep along an arc = revolve by its angle",
+        part(
+            "disc swept along a quarter arc",
+            def(
+                49,
+                "disc swept along a quarter arc",
+                vec![Feature::Sweep {
+                    id: FeatId(1),
+                    profile: disc.clone(),
+                    plane: Plane3::YZ,
+                    path: Path3 {
+                        segs: vec![Seg3::Arc {
+                            from: Point3::ORIGIN,
+                            via: Point3::new(40.0 * s, 40.0 - 40.0 * s, 0.0),
+                            to: Point3::new(40.0, 40.0, 0.0),
+                        }],
+                    },
+                    op: Op::Add,
+                }],
+            ),
+            vec![],
+        )
+        .closed(qt_v, qt_b)
+        .euler(2),
+        part(
+            "disc revolved a quarter turn",
+            def(
+                50,
+                "disc revolved a quarter turn",
+                vec![Feature::Revolve {
+                    id: FeatId(1),
+                    profile: disc,
+                    plane: Plane3::YZ,
+                    axis: Line::new((40.0, 0.0), (40.0, 1.0)),
+                    angle_deg: 90.0,
+                    op: Op::Add,
+                }],
+            ),
+            vec![],
+        )
+        .closed(qt_v, qt_b)
+        .euler(2),
+    );
+    (parts, rel)
+}
+
+/// Motion and mirroring of curved parts, and `A + A`, `A n A`, `A - A`
+/// on one of them (layer 6).
+fn curved_algebra(all: &[PartCase]) -> (Vec<PartCase>, Vec<Relation>) {
+    let named = |n: &str| all.iter().find(|p| p.name == n).cloned().expect(n);
+    let mut parts = Vec::new();
+    let mut rel = Vec::new();
+    let m = generic_motion();
+    for bn in [
+        "rounded slab",
+        "tapered square bar",
+        "revolved profile with bead and cove",
+        "swept round bar",
+        "three-quarter revolve of a rectangle",
+    ] {
+        let b = named(bn);
+        let mut mv = moved_case(&b, &m);
+        mv.euler = b.euler;
+        rel.push(Relation::Motion {
+            name: format!("motion: {bn}"),
+            base: b.name.clone(),
+            moved: mv.name.clone(),
+            motion: m,
+        });
+        parts.push(mv);
+    }
+    for bn in [
+        "revolved profile with bead and cove",
+        "three-quarter revolve of a rectangle",
+    ] {
+        let b = named(bn);
+        let x0 = 37.0;
+        let mut mr = mirrored_case(&b, x0);
+        mr.euler = b.euler;
+        rel.push(Relation::Mirror {
+            name: format!("mirror: {bn}"),
+            base: b.name.clone(),
+            mirrored: mr.name.clone(),
+            x0,
+        });
+        parts.push(mr);
+    }
+    let bn = "revolved profile with bead and cove";
+    let b = named(bn);
+    let tid = 51_000;
+    let (t, tt) = as_tool(&b, tid);
+    let tools = merge_tools(vec![vec![t], tt]);
+    let id = Placement::IDENTITY;
+    let mut aa = assembly(
+        &format!("{bn} + itself"),
+        (tid, id),
+        &[(Op::Add, tid, id)],
+        tools.clone(),
+    );
+    aa.euler = b.euler;
+    let mut ai = assembly(
+        &format!("{bn} n itself"),
+        (tid, id),
+        &[(Op::Intersect, tid, id)],
+        tools.clone(),
+    );
+    ai.euler = b.euler;
+    let am = assembly(
+        &format!("{bn} - itself"),
+        (tid, id),
+        &[(Op::Subtract, tid, id)],
+        tools,
+    );
+    rel.push(Relation::Same {
+        name: format!("A + A = A: {bn}"),
+        a: b.name.clone(),
+        b: aa.name.clone(),
+    });
+    rel.push(Relation::Same {
+        name: format!("A n A = A: {bn}"),
+        a: b.name.clone(),
+        b: ai.name.clone(),
+    });
+    rel.push(Relation::Empty {
+        name: format!("A - A = empty: {bn}"),
+        part: am.name.clone(),
+        of: b.name.clone(),
+    });
+    parts.extend([aa, ai, am]);
+    (parts, rel)
 }
 
 /// A stadium 40 long, radius 5, from a bulge polyline, extruded 10:
@@ -1877,6 +2288,47 @@ fn sweeps() -> Vec<Sweep> {
         direction: 1.0,
         area: 28_000.0,
     });
+
+    // A box tool approaching a cylinder of radius R = 20 and height 30
+    // made by a revolve (the rectangle rho in [0, 20], z in [0, 30] turned
+    // about the z axis): the tool's face y = 20 - s touches the curved
+    // face along a line at s = 0 (a tangency) and cuts a flat above. The
+    // removed area grows at the chord 2 sqrt(2 R s - s^2) <= 2 R = 40 per
+    // unit of s, times the height 30: never increases, slope 1 200. Area:
+    // the cylinder's 2 pi 20 30 + 2 pi 400 < 6 300 plus a flat of at
+    // most 40 x 30.
+    let flat = def(
+        84,
+        "flat tool",
+        vec![cuboid(1, [0.0; 3], [60.0, 20.0, 40.0], Op::Add)],
+    );
+    out.push(Sweep {
+        name: "box tool through tangency with a revolved cylinder".into(),
+        steps: mk("revolved cylinder flat", &|s| {
+            (
+                vec![
+                    Feature::Revolve {
+                        id: FeatId(1),
+                        profile: Profile2d::rect(0.0, 0.0, 20.0, 30.0),
+                        plane: Plane3::XZ,
+                        axis: Line::new((0.0, 0.0), (0.0, 1.0)),
+                        angle_deg: 360.0,
+                        op: Op::Add,
+                    },
+                    boolean(
+                        2,
+                        Op::Subtract,
+                        84,
+                        Placement::translation(-30.0, 20.0 - s, -5.0),
+                    ),
+                ],
+                vec![flat.clone()],
+            )
+        }),
+        slope: 1200.0,
+        direction: -1.0,
+        area: 8_000.0,
+    });
     out
 }
 
@@ -1903,6 +2355,15 @@ pub fn catalogue() -> Catalogue {
     parts.extend(al_parts);
     relations.extend(al_rel);
     parts.extend(fuzz_findings());
+    // Rung 3D0b: the curved features.
+    parts.extend(curved_corpus_parts());
+    parts.extend(curved_extra());
+    let (ce_parts, ce_rel) = curved_equivalences();
+    parts.extend(ce_parts);
+    relations.extend(ce_rel);
+    let (ca_parts, ca_rel) = curved_algebra(&parts);
+    parts.extend(ca_parts);
+    relations.extend(ca_rel);
     let names: std::collections::HashSet<&str> = parts.iter().map(|p| p.name.as_str()).collect();
     assert_eq!(names.len(), parts.len(), "part names must be unique");
     Catalogue {

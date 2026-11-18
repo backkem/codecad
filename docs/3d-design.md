@@ -87,7 +87,7 @@ wasm was run in Node with stubbed imports.
 
 | Renderer | Status (verified) | Verdict |
 |---|---|---|
-| **[Kiss3d](https://github.com/dimforge/kiss3d) 0.47.0** (2026-10-04, BSD-3-Clause) | The claim holds, and it goes further than the brief said. **wgpu 30**. PBR StandardMaterial (clearcoat, anisotropy, transmission). **Equirectangular HDRI skybox + IBL**. Shadow maps, SSAO, OIT. Linear HDR film with **AgX, ACES, Khronos PBR Neutral (default) and Tony McMapface** tone mapping. A **progressive Monte-Carlo path tracer** (`RayTracer`) with one WGSL kernel and two backends: a software **compute BVH** (works on WebGPU) and a HW ray-query backend picked at runtime. It has a two-level BVH, MIS with area lights, HDRI IBL and an à-trous denoiser. `OffscreenSurface` renders headless natively and **on wasm** (GPU side), and `output_view` exposes the tone-mapped texture. `Context::init(instance, device, queue, adapter, format)` **accepts an external device**. glTF loader. Mostly one author (sebcrozet, 655 commits). The path tracer is about 1.7 k lines of WGSL. Source: [CHANGELOG](https://github.com/dimforge/kiss3d/blob/master/CHANGELOG.md). | **Adopted** as the 3D render backend behind our own trait (§9). The "dry renders" concern becomes a gate in 3D5b: a look bake-off against a Cycles reference. If it fails, we fork its BSD-3 tracer kernel into our crate rather than starting from zero. |
+| **[Kiss3d](https://github.com/dimforge/kiss3d) 0.47.0** (2026-10-04, BSD-3-Clause) | The claim holds, and it goes further than the brief said. **wgpu 30**. PBR StandardMaterial (clearcoat, anisotropy, transmission). **Equirectangular HDRI skybox + IBL**. Shadow maps, SSAO, OIT. Linear HDR film with **AgX, ACES, Khronos PBR Neutral (default) and Tony McMapface** tone mapping. A **progressive Monte-Carlo path tracer** (`RayTracer`) with one WGSL kernel and two backends: a software **compute BVH** (works on WebGPU) and a HW ray-query backend picked at runtime. It has a two-level BVH, MIS with area lights, HDRI IBL and an à-trous denoiser. `OffscreenSurface` renders headless natively and **on wasm** (GPU side), and `output_view` exposes the tone-mapped texture. `Context::init(instance, device, queue, adapter, format)` **accepts an external device**. glTF loader. Mostly one author (sebcrozet, 655 commits). The path tracer is about 1.7 k lines of WGSL. Source: [CHANGELOG](https://github.com/dimforge/kiss3d/blob/master/CHANGELOG.md). | **Adopted** as the 3D render backend behind our own trait (§9). Revised 2026-11-18 after a run-time test: the working render is our own raster, Kiss3d stays the presentation candidate (§9, decision update). The "dry renders" concern becomes a gate in 3D5b: a look bake-off against a Cycles reference. If it fails, we fork its BSD-3 tracer kernel into our crate rather than starting from zero. |
 | [Renderling](https://github.com/schell/renderling) | "Alpha", NLnet-funded, actively pushed (2026-10-11). **crates.io 0.4.9 dates from 2024-09**, and main is an unreleased 0.6.0. **Main is on wgpu 26**, while Vello 0.11 and Kiss3d are on wgpu 30, so it **cannot share a device with Vello** without an upstream bump. PBR, IBL, shadows and bloom, but **no path tracer**. Main builds for wasm32 (our smoke test). | Not adopted. The earlier recommendation is revised. |
 | Bevy 0.20 (2026-10-08) | A full engine that owns the app loop. Its ray-traced GI (Solari) needs **hardware** ray tracing, which WebGPU lacks ([0.17 notes](https://bevy.org/news/bevy-0-17/), [0.20 notes](https://bevy.org/news/bevy-0-20/)). MSRV 1.97. | Too heavy to embed, and its GI is not available on the web. |
 | three-d 0.19 | OpenGL/WebGL (glow), so it cannot share a wgpu device with Vello. | Excluded. |
@@ -187,12 +187,10 @@ The revision, which overrides the sections below wherever they disagree:
   given frame, volume, distance, interference), projection and sections.
   A different domain (sheet metal, circuit boards, 3D printing) uses the
   same calls with a different library.
-- **Scripts need a proper way to load a library.** Today an example
-  loads its helpers with `new Function(cad.readFile("lib/drafting.js"))()`.
-  That works but is a workaround. Loading a library by name or path is a
-  generic mechanism the sandbox and the browser should offer. It is rung
-  A7 on `LADDER-API.md` and starts with research; shipping domain
-  libraries is not a priority before then.
+- **Scripts load a library by name.** `const draft = await cad.use("drafting")`
+  runs `lib/drafting.js` once and returns what it offers (rung A7 on
+  `LADDER-API.md`, landed). Shipping domain libraries is still not a
+  priority.
 - **The examples and the vision are unchanged.** The bookshelf script in
   section 10.1 still reads the same; `board`, `cutList` and
   `cutListTable` come from the library it loads.
@@ -225,7 +223,7 @@ pub enum Feature {
     Extrude  { id: FeatId, profile: Profile2d, plane: Plane3, distance: f64,
                taper_deg: f64, op: Op },
     Revolve  { id: FeatId, profile: Profile2d, plane: Plane3, axis: Line2, angle_deg: f64, op: Op },
-    Sweep    { id: FeatId, profile: Profile2d, path: Path3, op: Op },
+    Sweep    { id: FeatId, profile: Profile2d, plane: Plane3, path: Path3, op: Op }, // path starts at plane origin along its normal
     Loft     { id: FeatId, sections: Vec<(Profile2d, Plane3)>, ruled: bool, op: Op },
     Hole     { id: FeatId, at: Point3, dir: Vec3, dia: f64, depth: Depth, cbore: Option<(f64, f64)> },
     Boolean  { id: FeatId, op: Op, tool: ToolRef },             // joinery
@@ -424,9 +422,11 @@ still die or change terms. The plan:
    we vendor the pinned crate set and maintain the subset we use
    (booleans, blends, measure, mesh, section). A licence change upstream
    only affects versions after the pin.
-3. **A differential corpus.** It runs in CI on both backends, natively and
-   in wasm (rungs 3D0a/3D0b), so a regression from a version bump is caught before
-   it reaches users.
+3. **A differential corpus.** It runs in the test harness's scoreboards
+   on both backends (arris and, since slice 4, cad-kernel in place of
+   Truck), so a regression from a version bump is caught before it
+   reaches users. The wasm run (3D0b) is a development-time wasmtime host,
+   not a CI step (research/3d-corpus-timings.md).
 4. **Swappable without migration.** Documents store feature trees, not
    kernel data, so switching backends never rewrites a document.
 
@@ -499,7 +499,9 @@ Rules:
   re-evaluate. Smoke timings (ogeom): about 10 ms for a flat part with two
   cuts, about 1 s natively and 3 s in wasm for a fully rounded board. arris
   builds the fully rounded board in about 22 ms natively (release, 3D0a);
-  its wasm time is measured in 3D0b. Evaluation
+  in wasm (wasmtime, 3D0b) the rounded slab of the curved corpus takes
+  15 ms and the slowest corpus part, a swept round bar, 283 ms
+  (research/3d-corpus-timings.md). Evaluation
   therefore runs off the input path: in the browser it is time-sliced
   between frames, and fully rounded parts show their previous B-rep until
   the new one is ready. Moving evaluation into a Web Worker is an open
@@ -675,6 +677,42 @@ projection rung:
 
 ## 9. Renderer architecture
 
+### Decision update (2026-11-18): our own raster for the working render
+
+Two render qualities draw the same scene and camera: a fast **working**
+render (shaded raster with edges) and a **presentation** render (path
+traced). The first 3D2b slice ran Kiss3d 0.47.0 at run time, on a GPU,
+for the first time:
+
+- **What held.** It resolves to the workspace's single wgpu 30.0.2 (no
+  second wgpu, naga or vello). `Context::init` accepted the `GpuContext`
+  device, `OffscreenSurface` rendered a correct shaded box headless, and
+  two renders were byte-identical (554 ms first, 137 ms warm, debug).
+- **What failed.** Its context and resource managers are thread-local.
+  On a second thread it panicked in its texture manager and then aborted
+  the process during thread-local teardown. Dropping its last surface
+  calls `destroy()` on the device it was handed, which is the device Vello
+  shares; avoiding that means bumping an internal window counter, and
+  then teardown panics at exit instead. A server renders on any worker
+  thread, so this does not fit the headless path. It would also add 98
+  crates to `Cargo.lock` (all permissive licences; among them an AV1
+  encoder from `image`'s default formats, a parser generator for `wesl`,
+  and `winit`, which cannot be switched off). A debug probe binary was
+  39 MB against 17 MB for our own backend.
+
+So the working render is a small rasterizer of our own in
+`cadview-render3d` (§9.1's `KissBackend` row becomes `RasterRenderer`),
+and the decisions it needs (normals, edges, camera, shading, tone curve)
+live in `cadview-core/src/scene3d.rs`. Every face pixel it draws equals
+core's reference `shade` plus `tone_map`, which a Kiss3d backend could
+not offer. The `Renderer3d` trait lets a frame take several calls, so
+the presentation render can be Kiss3d's `RayTracer` behind the same
+trait, run on one dedicated thread that owns all Kiss3d state, or its
+BSD-3 tracer kernel forked into the crate (§9.5). That choice is made at
+3D5a. Easy with our backend: per-part colours, edges, cutaway clip planes
+(a plane test in the fragment shader). A soft ground contact shadow needs
+a shadow or ambient-occlusion pass of our own, which Kiss3d already has.
+
 ### 9.1 Layers
 
 ```
@@ -812,7 +850,7 @@ and emits a cut list. It is the target script for the 🎯 rung
 (`examples/07-bookshelf.js`).
 
 ```js
-new Function(cad.readFile("lib/drafting.js"))();
+const draft = await cad.use("drafting");
 const { P, dim } = draft;
 
 // ── Parameters ─────────────────────────────────────────────────────
@@ -932,7 +970,8 @@ except through `cad_call` or core's public query functions.
   be too slow for 1024 spp. Fallbacks: fewer spp plus the denoiser, a
   GPU-enabled runner for releases, or the Chromium path.
 - **wasm size** grows by the kernel (ogeom measured 3.2 MB; arris is
-  measured in 3D0b) and a few MB for Kiss3d. That is acceptable against today's 24 MB, but rungs 3D0b and 3D2a record it.
+  measured in 3D0b: about 4.1 MB of code and data, 1.4 MB gzipped,
+  research/3d-corpus-timings.md) and a few MB for Kiss3d. That is acceptable against today's 24 MB, but rungs 3D0b and 3D2a record it.
 - **Floating-point divergence between peers** (wasm vs native) in kernel
   results. Nothing synced depends on it (§4.2). Projections are written
   once by one peer.

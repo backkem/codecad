@@ -4,16 +4,16 @@
 # Outcomes: correct, refused (typed error), undecided (inside the band), WRONG, n/a.
 #
 # Counts per layer:
-#   closed     28 correct, 2 refused, 148 n/a
-#   enclosure  104 correct, 1 refused, 6 WRONG, 67 n/a
-#   shell      100 correct, 1 refused, 3 WRONG, 74 n/a
-#   mesh       99 correct, 1 refused, 6 WRONG, 72 n/a
-#   valid      109 correct, 1 refused, 3 WRONG, 65 n/a
-#   equiv      12 correct, 166 n/a
-#   algebra    41 correct, 6 refused, 131 n/a
-#   continuity 2 correct, 1 refused, 3 undecided, 172 n/a
-#   overall    14 WRONG, 151 correct, 10 refused, 3 undecided
-# Cases recorded WRONG (findings against this kernel; the gate keeps them, a kernel that ships must have none): 14
+#   closed     42 correct, 2 refused, 173 n/a
+#   enclosure  128 correct, 1 refused, 3 undecided, 3 WRONG, 82 n/a
+#   shell      114 correct, 1 refused, 12 WRONG, 90 n/a
+#   mesh       120 correct, 1 refused, 8 WRONG, 88 n/a
+#   valid      133 correct, 1 refused, 3 WRONG, 80 n/a
+#   equiv      16 correct, 201 n/a
+#   algebra    51 correct, 6 refused, 160 n/a
+#   continuity 3 correct, 1 refused, 3 undecided, 210 n/a
+#   overall    20 WRONG, 181 correct, 10 refused, 6 undecided
+# Cases recorded WRONG (findings against this kernel; the gate keeps them, a kernel that ships must have none): 20
 #
 # case | overall | closed | enclosure | shell | mesh | valid | equiv | algebra | continuity
 part: board | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
@@ -187,9 +187,9 @@ part: fuzz: small box far from the origin (s1 i34) | correct | n/a | correct | c
 part: fuzz: two near-tangent blind holes breaking out (s1 i24) | WRONG | n/a | correct | correct | WRONG | correct | n/a | n/a | n/a
 #   closed: n/a: no closed form
 #   mesh: WRONG: chord 1e-1: not closed (2 bad directed edges, 0 degenerate triangles); chord 1e-2: not closed (2 bad directed edges, 0 degenerate triangles); chord 1e-3: not closed (2 bad directed edges, 0 degenerate triangles); chord 1e-4: not closed (2 bad directed edges, 0 degenerate triangles)
-part: fuzz: tiny box with a face 1e-9 off (s4 i20) | WRONG | n/a | WRONG | correct | correct | correct | n/a | n/a | n/a
+part: fuzz: tiny box with a face 1e-9 off (s4 i20) | undecided | n/a | undecided | correct | correct | correct | n/a | n/a | n/a
 #   closed: n/a: no closed form
-#   enclosure: WRONG: volume 0.00006000000019999997 outside [5.9999640001e-5, 6.0000000000e-5], rel width 6.0e-6
+#   enclosure: undecided: volume 0.00006000000019999997 outside [5.9999640001e-5, 6.0000000000e-5], rel width 6.0e-6 by 1.400e-13, within the positional band 2.240e-8 (area bound 2.2400e-2 mm^2 times 1e-6 mm)
 part: fuzz: through hole tangent to a side face (s1 i196) | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
 #   closed: n/a: no closed form
 part: fuzz: thin pin almost tangent to a side face (s2 i463) | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
@@ -205,15 +205,15 @@ part: fuzz: notched prism with collinear vertices far away (s3 i966) | correct |
 part: fuzz: two tangent blind holes breaking out (s4 i0) | WRONG | n/a | correct | correct | WRONG | correct | n/a | n/a | n/a
 #   closed: n/a: no closed form
 #   mesh: WRONG: chord 1e-1: not closed (2 bad directed edges, 0 degenerate triangles); chord 1e-2: not closed (2 bad directed edges, 0 degenerate triangles); chord 1e-3: not closed (2 bad directed edges, 0 degenerate triangles); chord 1e-4: not closed (2 bad directed edges, 0 degenerate triangles)
-part: fuzz: intersection 1e-7 above a face (s3 i114) | WRONG | n/a | WRONG | correct | correct | correct | n/a | n/a | n/a
+part: fuzz: intersection 1e-7 above a face (s3 i114) | undecided | n/a | undecided | correct | correct | correct | n/a | n/a | n/a
 #   closed: n/a: no closed form
-#   enclosure: WRONG: volume 263.9999955999999 outside [2.6399840280e2, 2.6399998680e2], rel width 6.0e-6
-part: fuzz: thin plate intersection 1e-3 up, far away (s2 i101) | WRONG | n/a | WRONG | correct | correct | correct | n/a | n/a | n/a
+#   enclosure: undecided: volume 263.9999955999999 outside [2.6399840280e2, 2.6399998680e2], rel width 6.0e-6 by 8.536e-6, within the positional band 7.520e-4 (area bound 7.5200e2 mm^2 times 1e-6 mm)
+part: fuzz: thin plate intersection 1e-3 up, far away (s2 i101) | undecided | n/a | undecided | correct | correct | correct | n/a | n/a | n/a
 #   closed: n/a: no closed form
-#   enclosure: WRONG: volume 3.8190000324199596 outside [3.8189770860e0, 3.8190000000e0], rel width 6.0e-6
+#   enclosure: undecided: volume 3.8190000324199596 outside [3.8189770860e0, 3.8190000000e0], rel width 6.0e-6 by 2.864e-8, within the positional band 8.093e-4 (area bound 8.0932e2 mm^2 times 1e-6 mm)
 part: fuzz: hole along the corner of a thin rod far away (s1 i857) | WRONG | n/a | WRONG | correct | WRONG | correct | n/a | n/a | n/a
 #   closed: n/a: no closed form
-#   enclosure: WRONG: volume 0.0050139231607317924 outside [6.8906935190e-3, 6.2100000000e-2], rel width 8.0e0
+#   enclosure: WRONG: volume 0.0050139231607317924 outside [6.8906935190e-3, 6.2100000000e-2], rel width 8.0e0 by 1.877e-3, beyond the positional band 1.392e-5
 #   mesh: WRONG: chord 1e-3: mesh volume 0.05317505715607853 vs stated 0.0050139231607317924: off by 4.816e-2, bound 2.271e-2; chord 1e-4: mesh volume 0.053000207185430886 vs stated 0.0050139231607317924: off by 4.799e-2, bound 1.683e-3
 part: fuzz: turned thin intersection 1e-7 off a side (s3 i547) | WRONG | n/a | correct | correct | WRONG | correct | n/a | n/a | n/a
 #   closed: n/a: no closed form
@@ -241,7 +241,7 @@ part: fuzz: small washer and turned cylinder (s4 i801) | WRONG | n/a | correct |
 #   valid: WRONG: kernel check: valid=false solids=1 ["Failed: face 2 (p1.l0s0): edge 2's pcurve is 1.183855085181054e-9 off it, at 3/8 of its bspline"]
 part: fuzz: tiny corner box far from the origin (s13 i455) | WRONG | n/a | WRONG | correct | correct | correct | n/a | n/a | n/a
 #   closed: n/a: no closed form
-#   enclosure: WRONG: volume 0.0008003492557691061 outside [7.9999520001e-4, 8.0000000000e-4], rel width 6.0e-6
+#   enclosure: WRONG: volume 0.0008003492557691061 outside [7.9999520001e-4, 8.0000000000e-4], rel width 6.0e-6 by 3.493e-7, beyond the positional band 1.920e-7
 part: fuzz: cylinder tangent inside a box corner, fused (s14 i325) | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
 #   closed: n/a: no closed form
 part: fuzz: turned plate intersected at the top of a tall box (s11 i337) | WRONG | n/a | correct | correct | WRONG | correct | n/a | n/a | n/a
@@ -254,6 +254,53 @@ part: fuzz: side hole along a thin prism (s11 i61) | WRONG | n/a | correct | WRO
 #   shell: WRONG: 26 steps on the wrong side (3864 certified, 0 band, 110 skipped); step in at (0.0006, 0.1028, 0.0001) along normal (-0.001, -1.000, -0.000): reference says Outside { margin: 0.0009999999999999454 }; step in at (0.0005, 0.1028, 0.0001) along normal (-0.001, -1.000, -0.000): reference says Outside { margin: 0.0009999999999999176 }
 part: fuzz: cylinder intersection far from the origin (s2 i11) | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
 #   closed: n/a: no closed form
+part: rounded slab | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: tapered square bar | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: revolved profile with bead and cove | WRONG | correct | correct | WRONG | correct | correct | n/a | n/a | n/a
+#   shell: WRONG: 16 steps on the wrong side (3983 certified, 0 band, 1 skipped); step out at (-18.9205, 9.0735, 26.4410) along normal (-0.900, 0.429, 0.074): reference says Inside { margin: 0.00017179195167393857 }; step out at (19.9771, 5.9816, 24.6833) along normal (0.935, 0.285, -0.212): reference says Inside { margin: 0.00032452107402924923 }
+part: swept round bar | WRONG | correct | correct | WRONG | correct | correct | n/a | n/a | n/a
+#   shell: WRONG: 37 steps on the wrong side (3961 certified, 0 band, 2 skipped); step out at (134.6096, 27.5011, 5.0733) along normal (-0.509, 0.164, 0.845): reference says Inside { margin: 0.0003690738363717472 }; step out at (139.8115, 17.0157, -0.5912) along normal (0.858, -0.503, -0.106): reference says Inside { margin: 0.0009058631195575373 }
+part: quarter revolve of a rectangle | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: three-quarter revolve of a rectangle | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: revolved rectangle tube | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: extruded annulus | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: loft of equal squares | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: extruded square bar | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: disc swept along a line | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: extruded disc | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: disc swept along a quarter arc | WRONG | correct | correct | WRONG | WRONG | correct | n/a | n/a | n/a
+#   shell: WRONG: 127 steps on the wrong side (3871 certified, 0 band, 2 skipped); step out at (24.9721, 12.5976, -5.2377) along normal (-0.331, 0.368, -0.869): reference says Inside { margin: 0.0004986374353954659 }; step out at (16.6917, -2.5172, 1.9416) along normal (0.351, -0.879, 0.322): reference says Inside { margin: 0.0008271915914743744 }
+#   mesh: WRONG: chord 1e-4: mesh volume 7104.941596922911 vs stated 7106.11516878434: off by 1.174e0, bound 5.246e-1
+part: disc revolved a quarter turn | WRONG | correct | correct | WRONG | WRONG | correct | n/a | n/a | n/a
+#   shell: WRONG: 125 steps on the wrong side (3873 certified, 0 band, 2 skipped); step out at (36.6859, 27.3845, 5.8773) along normal (-0.185, 0.057, 0.981): reference says Inside { margin: 0.0002981485409305762 }; step out at (30.5103, 5.8106, -1.4415) along normal (0.648, -0.728, -0.223): reference says Inside { margin: 0.0006982013137735166 }
+#   mesh: WRONG: chord 1e-4: mesh volume 7104.941596923007 vs stated 7106.115168784338: off by 1.174e0, bound 5.246e-1
+part: rounded slab moved | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: tapered square bar moved | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: revolved profile with bead and cove moved | WRONG | n/a | correct | WRONG | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   shell: WRONG: 17 steps on the wrong side (3982 certified, 0 band, 1 skipped); step out at (9.5849, 5.8513, 34.7211) along normal (-0.687, 0.702, 0.185): reference says Inside { margin: 1.0587671837036794e-5 }; step out at (15.7880, -28.4282, 29.7806) along normal (-0.380, -0.925, -0.022): reference says Inside { margin: 9.167664570952638e-5 }
+part: swept round bar moved | WRONG | n/a | correct | WRONG | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   shell: WRONG: 36 steps on the wrong side (3963 certified, 0 band, 1 skipped); step out at (98.6266, 59.3732, -33.2437) along normal (-0.480, 0.126, -0.868): reference says Inside { margin: 0.0001858842448632103 }; step out at (104.0891, 58.4252, -33.7885) along normal (0.254, -0.308, -0.917): reference says Inside { margin: 0.001306890817832418 }
+part: three-quarter revolve of a rectangle moved | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: revolved profile with bead and cove mirrored | WRONG | n/a | correct | WRONG | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   shell: WRONG: 17 steps on the wrong side (3982 certified, 0 band, 1 skipped); step out at (80.1636, -18.6280, 29.8268) along normal (0.243, -0.729, 0.639): reference says Inside { margin: 3.515189822955733e-5 }; step out at (94.7959, 1.0581, 27.4426) along normal (0.969, 0.069, 0.237): reference says Inside { margin: 0.0011222393347471993 }
+part: three-quarter revolve of a rectangle mirrored | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: revolved profile with bead and cove + itself | WRONG | n/a | correct | WRONG | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   shell: WRONG: 20 steps on the wrong side (3977 certified, 0 band, 3 skipped); step out at (-20.9672, 0.9032, 25.6004) along normal (-0.997, 0.032, -0.065): reference says Inside { margin: 5.852355110302909e-5 }; step out at (-13.8180, -15.8053, 25.7556) along normal (-0.652, -0.756, -0.062): reference says Inside { margin: 0.0010572010721698888 }
+part: revolved profile with bead and cove n itself | WRONG | n/a | correct | WRONG | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   shell: WRONG: 11 steps on the wrong side (3987 certified, 0 band, 2 skipped); step out at (-20.9746, 0.0711, 25.4549) along normal (-0.996, 0.001, -0.084): reference says Inside { margin: 0.0004239524557876351 }; step out at (-14.4606, 14.6778, 23.8577) along normal (-0.651, 0.663, -0.370): reference says Inside { margin: 9.481129828792234e-6 }
+part: revolved profile with bead and cove - itself | correct | n/a | correct | n/a | n/a | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   shell: n/a: the mesh has no triangles
+#   mesh: n/a: chord 1e-1: no triangles; chord 1e-2: no triangles; chord 1e-3: no triangles; chord 1e-4: no triangles
 equiv: box: one extrude = two fused halves | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a | n/a
 equiv: box: extrude up = extrude down | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a | n/a
 equiv: box: extrude down = flipped plane | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a | n/a
@@ -319,6 +366,20 @@ algebra: operand order (intersection): side with dado and rail with half-lap | c
 algebra: split by a plane: board with hole | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
 algebra: split by a plane: block with counterbore | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
 algebra: split by a plane: slot | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+equiv: tube: revolved rectangle = extruded annulus | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: square bar: loft of equal sections = extrude | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: round bar: sweep along a line = extrude | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: quarter torus: sweep along an arc = revolve by its angle | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a | n/a
+algebra: motion: rounded slab | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: motion: tapered square bar | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: motion: revolved profile with bead and cove | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: motion: swept round bar | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: motion: three-quarter revolve of a rectangle | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: mirror: revolved profile with bead and cove | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: mirror: three-quarter revolve of a rectangle | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A + A = A: revolved profile with bead and cove | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A n A = A: revolved profile with bead and cove | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A - A = empty: revolved profile with bead and cove | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
 sweep: box tool through a flush top face | undecided | n/a | n/a | n/a | n/a | n/a | n/a | n/a | undecided
 #   continuity: undecided: jump within the band from s = 1e-6 to 1e-5: dV -3.867e-3
 sweep: dado tool through a flush end face | undecided | n/a | n/a | n/a | n/a | n/a | n/a | n/a | undecided
@@ -329,3 +390,4 @@ sweep: two holes through tangency | refused | n/a | n/a | n/a | n/a | n/a | n/a 
 #   continuity: refused: 1 of 21 steps refused, first s = 1e-6: feature 3: kernel: Failed: a shell of the arrangement is kept on one side of a plane (`p0.l0s0`) and dropped on another: two of its cells joined round an edge
 sweep: fused box through face contact | undecided | n/a | n/a | n/a | n/a | n/a | n/a | n/a | undecided
 #   continuity: undecided: jump within the band from s = -1e-5 to -1e-6: dV 3.867e-3; wrong direction within the band from s = 1e-7 to 1e-6: dV -1.333e-5
+sweep: box tool through tangency with a revolved cylinder | correct | n/a | n/a | n/a | n/a | n/a | n/a | n/a | correct

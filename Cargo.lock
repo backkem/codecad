@@ -5958,7 +5958,9 @@ dependencies = [
  "arris",
  "cad-kernel",
  "cadview-core",
+ "cadview-render3d",
  "kurbo",
+ "wasmtime",
 ]
 
 [[package]]

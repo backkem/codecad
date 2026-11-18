@@ -282,6 +282,33 @@ impl Region {
         Ok(region)
     }
 
+    /// An upper bound on the length of the region's boundary: every
+    /// piece's length rounded up (a line's chord; an arc's `max(rx, ry)`
+    /// times its sweep, which bounds an elliptic arc's length too).
+    pub fn perimeter_bound(&self) -> f64 {
+        let mut total = Iv::ZERO;
+        for lp in &self.loops {
+            for p in lp {
+                total = total
+                    + match p {
+                        Piece::Line { a, b, .. } => (*b - *a).norm(),
+                        Piece::Arc(arc) => {
+                            Iv::point(arc.rx.max(arc.ry)) * Iv::point(arc.sweep.abs())
+                        }
+                    };
+            }
+        }
+        total.hi
+    }
+
+    /// An upper bound on the region's area: its box's.
+    pub fn area_bound(&self) -> f64 {
+        let b = self.bbox;
+        let w = (Iv::point(b[2]) - Iv::point(b[0])).max(Iv::ZERO);
+        let h = (Iv::point(b[3]) - Iv::point(b[1])).max(Iv::ZERO);
+        (w * h).hi
+    }
+
     /// The edges (start point, inward unit normal) of a region that is one
     /// convex polygon with no holes.
     pub fn convex_outer(&self) -> Option<Vec<(Iv2, Iv2)>> {
@@ -425,7 +452,7 @@ fn piece_angle(piece: &Piece, p: P) -> Option<f64> {
 /// min(|q - a|, |q - b|)` (every point of the segment is within its length
 /// of both ends). The second keeps short join segments, whose direction
 /// is poorly known, tight.
-fn segment_distance(a: Iv2, b: Iv2, q: Iv2) -> Iv {
+pub(crate) fn segment_distance(a: Iv2, b: Iv2, q: Iv2) -> Iv {
     let d = b - a;
     let len2 = d.norm2();
     let len = len2.sqrt();

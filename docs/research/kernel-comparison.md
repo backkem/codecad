@@ -12,6 +12,17 @@ are not closed (docs/3d-test-harness.md, "After the kernel decision"), so
 8 of the 11 arris cases listed as wrong in section 4 are refusals in the
 committed scoreboard, and its fuzzing figures would shift the same way.
 
+Since rung 3D0b (docs/3d-test-harness.md, "Slice 5"): the enclosure
+layer has a positional band, which moved arris's last three wrong cases
+and three of cad-kernel's to undecided; both adapters build revolves,
+lofts, sweeps and fillets, and both kernels build the curved corpus to
+about 1e-15 of its closed forms. On the curved catalogue rows arris has
+no wrong case; cad-kernel has 10, all from its mesher on torus faces at
+the finest chord (the mesh strays up to 1.3e-2 mm from the torus at a
+requested chord of 1e-4). Scoreboards now: arris 180 correct, 31
+refused, 6 undecided, 0 wrong of 217; cad-kernel 181 correct, 10
+refused, 6 undecided, 20 wrong.
+
 Everything below was run on one Windows x64 machine (24 hardware
 threads), release builds unless a line says otherwise, on 2026-11-18. The
 commands are at the end of each section.

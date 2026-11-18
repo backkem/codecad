@@ -6,7 +6,7 @@
 
 use cadview_core::solid::{
     Aabb3, DefId, EvalError, Evaluated, Feature, MassProps, Op, PartDef, Placement, Point3,
-    SolidKernel, ToolRef, ToolResolver, TriMesh, Validity, Vec3,
+    Profile2d, Seg2, SolidKernel, ToolRef, ToolResolver, TriMesh, Validity, Vec3,
 };
 
 use crate::cases::Tools;
@@ -41,6 +41,14 @@ pub enum Mutation {
     /// The first vertex of every mesh is moved this far (mm) along
     /// (1, 1, 1) / sqrt(3).
     MoveVertex(f64),
+    /// Every fillet's radius grown by this much (mm).
+    FilletRadius(f64),
+    /// Every revolve axis moved this far (mm) along -u in its profile's
+    /// coordinates.
+    RevolveAxisShift(f64),
+    /// The last section of every loft scaled by this factor about its
+    /// plane's origin.
+    LoftSectionScale(f64),
 }
 
 impl Mutation {
@@ -57,6 +65,9 @@ impl Mutation {
             Mutation::DropTriangle => "mesh: triangle dropped".into(),
             Mutation::FlipTriangle => "mesh: triangle flipped".into(),
             Mutation::MoveVertex(d) => format!("mesh: vertex moved {d} mm"),
+            Mutation::FilletRadius(d) => format!("fillet radius +{d} mm"),
+            Mutation::RevolveAxisShift(d) => format!("revolve axis shifted {d} mm"),
+            Mutation::LoftSectionScale(f) => format!("last loft section scaled by {f}"),
         }
     }
 }
@@ -79,6 +90,30 @@ fn map_tools(def: &PartDef, f: &dyn Fn(Placement) -> Placement) -> PartDef {
         }
     }
     d
+}
+
+/// A profile scaled by `k` about its own origin (lines and circles; other
+/// segments unchanged).
+fn scaled(p: &Profile2d, k: f64) -> Profile2d {
+    let s = |lp: &Vec<Seg2>| -> Vec<Seg2> {
+        lp.iter()
+            .map(|seg| match seg {
+                Seg2::Line(l) => Seg2::Line(kurbo::Line::new(
+                    (l.p0.x * k, l.p0.y * k),
+                    (l.p1.x * k, l.p1.y * k),
+                )),
+                Seg2::Circle(c) => Seg2::Circle(kurbo::Circle::new(
+                    (c.center.x * k, c.center.y * k),
+                    c.radius * k,
+                )),
+                other => other.clone(),
+            })
+            .collect()
+    };
+    Profile2d {
+        outer: s(&p.outer),
+        holes: p.holes.iter().map(s).collect(),
+    }
 }
 
 /// Every tool definition reachable from `def`.
@@ -127,6 +162,36 @@ impl<K: SolidKernel> Broken<K> {
                     for f in &mut d.features {
                         if let Feature::Hole { dia, .. } = f {
                             *dia += e;
+                        }
+                    }
+                    d
+                }
+                Mutation::FilletRadius(e) => {
+                    let mut d = d.clone();
+                    for f in &mut d.features {
+                        if let Feature::Fillet { radius, .. } = f {
+                            *radius += e;
+                        }
+                    }
+                    d
+                }
+                Mutation::RevolveAxisShift(e) => {
+                    let mut d = d.clone();
+                    for f in &mut d.features {
+                        if let Feature::Revolve { axis, .. } = f {
+                            axis.p0.x -= e;
+                            axis.p1.x -= e;
+                        }
+                    }
+                    d
+                }
+                Mutation::LoftSectionScale(k) => {
+                    let mut d = d.clone();
+                    for f in &mut d.features {
+                        if let Feature::Loft { sections, .. } = f {
+                            if let Some((p, _)) = sections.last_mut() {
+                                *p = scaled(p, k);
+                            }
                         }
                     }
                     d

@@ -27,6 +27,9 @@ fn mutants() -> Vec<Mutation> {
         Mutation::DropTriangle,
         Mutation::FlipTriangle,
         Mutation::MoveVertex(0.01),
+        Mutation::FilletRadius(1e-3),
+        Mutation::RevolveAxisShift(0.01),
+        Mutation::LoftSectionScale(1.001),
     ]
 }
 

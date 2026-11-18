@@ -25,19 +25,35 @@
 //! [`REL_TARGET`] or after [`BUDGET`] cell evaluations, whichever comes
 //! first; the widths reached are reported.
 //!
-//! The layer: a kernel whose stated volume lies outside `[V_lo, V_hi]`,
-//! widened by the harness volume tolerance `1e-9` relative on each side
-//! (a kernel reports a rounded float even of an exact volume), is
-//! wrong. The width is set by the boundary area times the smallest cell
-//! the budget reaches, so the layer catches a missing or extra feature
-//! (a dropped hole, a swapped op, a lost cavity) but not a 0.01 mm shift;
-//! that is the shell test's job.
+//! The layer, with `slack = 1e-9 |V|` (a kernel reports a rounded float
+//! even of an exact volume) and the positional band `A * BAND`:
+//!
+//! - correct: the stated volume `V` lies in `[V_lo - slack, V_hi + slack]`;
+//! - undecided: outside that, but within `A * BAND` of it;
+//! - wrong: further out.
+//!
+//! `BAND = 1e-6` mm is the harness band of design section 8 (two faces
+//! closer than that cannot be judged), the same one the continuity layer
+//! uses. `A` is a certified upper bound on the area of the solid's
+//! boundary, from the recipe alone ([`Reference::area_bound`]), never from
+//! anything a kernel reports. A boundary moved by at most `BAND` along
+//! its normal changes the volume by at most `A * BAND` (to first order;
+//! the second-order term, about `BAND^2` times the edge length, is below
+//! the `1e-9` slack on every catalogue part). So a volume outside the
+//! enclosure by less than that could come from faces placed within the
+//! band, which the harness does not judge; one further out cannot.
+//!
+//! The enclosure's width is set by the boundary area times the smallest
+//! cell the budget reaches, so the layer catches a missing or extra
+//! feature (a dropped hole, a swapped op, a lost cavity) but not a
+//! 0.01 mm shift; that is the shell test's job.
 
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
 use crate::interval::{Iv, Iv3};
 use crate::layers::closed_form::VOLUME_REL_TOL;
+use crate::layers::continuity::BAND;
 use crate::outcome::Verdict;
 use crate::reference::Reference;
 use crate::run::PartRun;
@@ -54,9 +70,16 @@ pub struct Enclosure {
     pub lo: f64,
     pub hi: f64,
     pub evals: usize,
+    /// A certified upper bound on the boundary's area (mm^2).
+    pub area: f64,
 }
 
 impl Enclosure {
+    /// The positional band in volume: `area * BAND` (mm^3), rounded up.
+    pub fn band(&self) -> f64 {
+        (Iv::point(self.area) * BAND).hi
+    }
+
     pub fn rel_width(&self) -> f64 {
         if self.lo > 0.0 {
             (self.hi - self.lo) / self.lo
@@ -104,11 +127,13 @@ pub fn enclose(r: &Reference, budget: usize, rel_target: f64) -> Option<Enclosur
             lo: 0.0,
             hi: 0.0,
             evals: 0,
+            area: 0.0,
         });
     }
     if !b.is_bounded() {
         return None;
     }
+    let area = r.area_bound()?;
     let mut heap = BinaryHeap::new();
     let root_vol = cell_volume(b.min, b.max);
     heap.push(Cell {
@@ -233,6 +258,7 @@ pub fn enclose(r: &Reference, budget: usize, rel_target: f64) -> Option<Enclosur
         lo: inside.lo.max(0.0),
         hi: (inside + unknown + residue).hi,
         evals,
+        area,
     })
 }
 
@@ -258,10 +284,23 @@ pub fn check<B>(run: &PartRun<B>, enc: Option<&Enclosure>) -> Verdict {
             // The kernel reports a rounded float of its volume: allow the
             // harness-wide relative volume tolerance on either side.
             let slack = VOLUME_REL_TOL * m.volume.abs();
-            if m.volume >= enc.lo - slack && m.volume <= enc.hi + slack {
+            let out = (enc.lo - slack - m.volume).max(m.volume - enc.hi - slack);
+            if out <= 0.0 {
                 Verdict::correct(format!("volume {:.10e} in {width}", m.volume))
+            } else if out <= enc.band() {
+                Verdict::undecided(format!(
+                    "volume {} outside {width} by {out:.3e}, within the positional band {:.3e} \
+                     (area bound {:.4e} mm^2 times {BAND:e} mm)",
+                    m.volume,
+                    enc.band(),
+                    enc.area
+                ))
             } else {
-                Verdict::wrong(format!("volume {} outside {width}", m.volume))
+                Verdict::wrong(format!(
+                    "volume {} outside {width} by {out:.3e}, beyond the positional band {:.3e}",
+                    m.volume,
+                    enc.band()
+                ))
             }
         }
         Err(f) => super::closed_form::fail_verdict(f),

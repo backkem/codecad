@@ -109,6 +109,33 @@ pub fn enclosures(cat: &Catalogue) -> Enclosures {
     }
 }
 
+/// One line per part with an enclosure: its volume (the enclosure's
+/// middle), the certified area bound, the positional band `A * BAND`, and
+/// the band and the enclosure's width relative to the volume.
+pub fn band_table(cat: &Catalogue, enc: &Enclosures) -> String {
+    let mut s = format!(
+        "{:<64} {:>14} {:>12} {:>10} {:>9} {:>9}\n",
+        "part", "volume", "area bound", "band", "band/V", "width/V"
+    );
+    for p in &cat.parts {
+        let Some(Some(e)) = enc.map.get(&p.name) else {
+            continue;
+        };
+        let v = 0.5 * (e.lo + e.hi);
+        let rel = |x: f64| if v > 0.0 { x / v } else { f64::INFINITY };
+        s.push_str(&format!(
+            "{:<64} {:>14.6e} {:>12.4e} {:>10.3e} {:>9.1e} {:>9.1e}\n",
+            p.name.chars().take(64).collect::<String>(),
+            v,
+            e.area,
+            e.band(),
+            rel(e.band()),
+            rel(e.hi - e.lo)
+        ));
+    }
+    s
+}
+
 fn na_row(name: String, layer: Layer, v: Verdict) -> Row {
     let verdicts: Vec<Verdict> = Layer::ALL
         .iter()

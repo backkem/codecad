@@ -242,6 +242,29 @@ impl Iv {
     pub fn contains(self, x: f64) -> bool {
         self.lo <= x && x <= self.hi
     }
+
+    /// pi: the float `PI` is the nearest float below it.
+    pub fn pi() -> Iv {
+        Iv::new(std::f64::consts::PI, std::f64::consts::PI.next_up())
+    }
+
+    /// The sine over the interval: the end values widened by the width
+    /// (`|sin'| <= 1`, so every value is within the width of an end's).
+    pub fn sin(self) -> Iv {
+        self.lipschitz(Iv::sin_of)
+    }
+
+    /// The cosine over the interval, as [`Iv::sin`].
+    pub fn cos(self) -> Iv {
+        self.lipschitz(Iv::cos_of)
+    }
+
+    fn lipschitz(self, f: fn(f64) -> Iv) -> Iv {
+        let ends = f(self.lo).hull(f(self.hi));
+        let w = (Iv::point(self.hi) - Iv::point(self.lo)).hi;
+        let r = ends + Iv::new(-w, w);
+        Iv::new(r.lo.max(-1.0), r.hi.min(1.0))
+    }
 }
 
 fn widen_elementary(v: f64) -> Iv {

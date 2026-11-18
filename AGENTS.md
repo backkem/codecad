@@ -99,7 +99,8 @@ crates/
                               #   2D segments), EdgeSel, Plane3, Placement
         kernel.rs             #   SolidKernel trait (optional capabilities default
                               #   to Unsupported: tessellate), TriMesh, EvalError,
-                              #   MassProps, Aabb3. Core links no kernel
+                              #   MassProps (centroid optional), Aabb3. Core links
+                              #   no kernel
         select.rs             #   EdgeSel -> exact 3D target curves (kernel-neutral)
         corpus/               #   reference parts with closed-form volume + bbox,
                               #   generic over SolidKernel (prismatic.rs: 3D0a)
@@ -142,13 +143,22 @@ crates/
                               #   sign-exact distance bounds in interval arithmetic
       src/interval.rs         # outward-rounded intervals (no dependency)
       src/layers/             # evidence layers: closed_form, enclosure, shell,
-                              #   mesh_invariants, equivalence, algebra, continuity
+                              #   mesh_invariants, validity (the kernel's own check),
+                              #   equivalence, algebra, continuity
       src/cases.rs            # catalogue: corpus parts, extra closed forms,
-                              #   equivalent pairs, algebra/motion cases, sweeps
+                              #   equivalent pairs, algebra/motion cases, sweeps,
+                              #   regression cases found by the fuzzer
       src/kernels/arris.rs    # ArrisKernel (arris =0.11.1), the only file naming arris
+      src/kernels/cad_kernel.rs # CadKernel (cad-kernel =0.15.0), the only file
+                              #   naming cad-kernel
       src/kernels/broken.rs   # broken adapters (mutants) that test the harness
+      src/fuzz.rs             # fuzzer library: seeded recipe generator, judge
+                              #   without closed forms, shrinker, case printer
       src/scoreboard.rs       # committed per-kernel scoreboard + ratchet
-      scoreboards/arris.txt   # the arris scoreboard
+      scoreboards/<kernel>.txt # one scoreboard per kernel (arris, cad-kernel)
+      examples/fuzz.rs        # the fuzzer driver (development-time, never in CI)
+      examples/compare.rs     # both kernels on the catalogue and the sweeps
+      examples/timings.rs     # evaluation and tessellation times per kernel
   cad-client/                 # build output for sandbox
     cad-api-setup.js          # Vite-built IIFE (from cad-api.ts), a codelib prelude
   web/                        # frontend (TypeScript + React + Vite)
@@ -650,18 +660,42 @@ live in `solid-harness` (docs/3d-test-harness.md). Core links no kernel.
 ```bash
 # 3D0a gate: the prismatic corpus on arris, per-part table with timings
 cargo test -p solid-harness --test corpus -- --nocapture
-# Every case on every layer, compared with scoreboards/arris.txt (ratchet)
+# Every case on every layer, for every kernel with a file in scoreboards/
+# (arris.txt, cad-kernel.txt), compared with that file (ratchet)
 cargo test -p solid-harness --release --test scoreboard -- --nocapture
-# Regenerate the scoreboard after an accepted change
+# Regenerate the scoreboards after an accepted change (filter by test name,
+# e.g. cad_kernel_scoreboard, to regenerate one)
 SOLID_HARNESS_BLESS=1 cargo test -p solid-harness --release --test scoreboard
 # Broken adapters: every mutant must be caught; prints which layer caught it
 cargo test -p solid-harness --release --test mutants -- --nocapture
+# Capability evidence per kernel (revolve, sweep, loft, rounds, offsets,
+# sections, tessellation), each against a closed form
+cargo test -p solid-harness --release --lib forward_look -- --nocapture
 ```
 
 The scoreboard and mutant runs take a few minutes in a debug build; use
-`--release`. The scoreboard test fails on any wrong case, on any case or
-layer that got worse than the committed file, and on a closed form that
-falls outside the reference's certified volume enclosure.
+`--release`. The scoreboard test fails on any wrong case the committed
+file does not record as wrong (fuzzer findings against a candidate
+kernel are recorded and printed), on any case or layer that got worse
+than the committed file, on a closed form that falls outside the
+reference's certified volume enclosure, and on a scoreboard file that no
+test runs.
+
+The fuzzer is a development-time tool and never runs in `cargo test` or
+CI. It generates seeded random recipes biased toward flush and coplanar
+faces, tangent and breaking-out holes, near contacts (1e-12 to 1e-3 mm),
+tiny tools and far-away parts, judges each without a closed form
+(enclosure, shell test, mesh invariants, validity, and the two kernels
+against each other), runs each batch in a child process so a hang costs
+one case, and shrinks every distinct failure to a recipe to paste into
+`src/cases.rs`:
+
+```bash
+cargo run -p solid-harness --release --example fuzz -- run --seed 1 --cases 1000 --kernels arris,cad-kernel
+cargo run -p solid-harness --release --example fuzz -- one --seed 1 --index 34 --kernels arris,cad-kernel
+# A planted bug must be found before a clean run is trusted:
+cargo run -p solid-harness --release --example fuzz -- run --seed 101 --cases 300 --kernels broken-arris:hole
+```
 
 ## Key design decisions
 

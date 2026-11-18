@@ -7,6 +7,7 @@ pub mod enclosure;
 pub mod equivalence;
 pub mod mesh_invariants;
 pub mod shell;
+pub mod validity;
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -147,6 +148,7 @@ pub fn run_all<K: SolidKernel>(kernel: &K, cat: &Catalogue, enc: &Enclosures) ->
                 Layer::Enclosure => enclosure::check(r, e),
                 Layer::Shell => shell::check(r),
                 Layer::Mesh => mesh_invariants::check(r),
+                Layer::Validity => validity::check(r, e.is_some_and(|e| e.lo == 0.0)),
                 _ => Verdict::na(""),
             })
             .collect();

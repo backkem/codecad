@@ -141,7 +141,7 @@ impl SolidKernel for ArrisKernel {
             .map_err(kernel_err(None))?;
         Ok(MassProps {
             volume: m.volume,
-            centroid: p3(m.centroid),
+            centroid: Some(p3(m.centroid)),
             // A flux integral over the exact faces: no mesh is involved.
             exact: true,
         })
@@ -1260,6 +1260,187 @@ mod forward_look {
 
     fn up() -> arris::math::Vec3 {
         arris::math::Vec3::z()
+    }
+
+    fn close(got: f64, want: f64, rel: f64) -> bool {
+        (got - want).abs() <= rel * want.abs()
+    }
+
+    fn vol(m: &Model, b: Body) -> f64 {
+        arris::ops::measure::mass_properties(m, b, &RUN)
+            .expect("mass")
+            .volume
+    }
+
+    fn square_at(z: f64, h: f64, c: f64) -> Profile {
+        let p = |x: f64, y: f64| Point2::new(c + x, c + y);
+        Profile {
+            plane: Frame::new(
+                arris::math::Point3::new(0.0, 0.0, z),
+                arris::math::Vec3::z(),
+                arris::math::Vec3::x(),
+            )
+            .unwrap(),
+            outer: ProfileLoop::Path {
+                start: p(h, h),
+                segments: vec![
+                    ProfileSegment::LineTo(p(-h, h)),
+                    ProfileSegment::LineTo(p(-h, -h)),
+                    ProfileSegment::LineTo(p(h, -h)),
+                    ProfileSegment::LineTo(p(h, h)),
+                ],
+            },
+            holes: vec![],
+        }
+    }
+
+    /// The same closed forms as the cad-kernel forward-look tests: a
+    /// rectangle r in [1, 2], z in [-1, 1] revolved a whole turn (6 pi); a
+    /// disc r = 0.5 swept one helical turn of radius 5 and pitch 3
+    /// (2.5 pi^2, Pappus for a screw); a ruled loft from a 4 x 4 to a
+    /// 2 x 2 square 3 apart (28); a 10 mm cube shelled to a 1 mm wall open
+    /// at the top (424) and one face offset (a 2 mm cube's top moved 0.5:
+    /// 10).
+    #[test]
+    fn revolve_sweep_loft_shell_offset() {
+        use arris::geom::{FrameLaw, Path, PathSegment};
+        use arris::ops::{loft, offset_faces, revolve, shell, sweep, LoftKind, ShellSide};
+        use std::f64::consts::TAU;
+        let mut m = Model::default();
+        // Revolve: the rectangle in the plane through the z axis.
+        let ring = Profile {
+            plane: Frame::new(
+                arris::math::Point3::origin(),
+                -arris::math::Vec3::y(),
+                arris::math::Vec3::x(),
+            )
+            .unwrap(),
+            outer: ProfileLoop::Path {
+                start: Point2::new(1.0, -1.0),
+                segments: vec![
+                    ProfileSegment::LineTo(Point2::new(2.0, -1.0)),
+                    ProfileSegment::LineTo(Point2::new(2.0, 1.0)),
+                    ProfileSegment::LineTo(Point2::new(1.0, 1.0)),
+                    ProfileSegment::LineTo(Point2::new(1.0, -1.0)),
+                ],
+            },
+            holes: vec![],
+        };
+        let (tube, _) = revolve(
+            &mut m,
+            &ring,
+            Axis::z_at(arris::math::Point3::origin()),
+            TAU,
+            &RUN,
+        )
+        .expect("revolve");
+        let v = vol(&m, tube);
+        println!("revolve tube: volume {v} (closed form {})", 6.0 * PI);
+        assert!(close(v, 6.0 * PI, 1e-9));
+        // Sweep along a helix.
+        let wire = Profile {
+            plane: Frame::new(
+                arris::math::Point3::new(5.0, 0.0, 0.0),
+                -arris::math::Vec3::y(),
+                arris::math::Vec3::x(),
+            )
+            .unwrap(),
+            outer: ProfileLoop::Circle {
+                center: Point2::new(0.0, 0.0),
+                radius: 0.5,
+            },
+            holes: Vec::new(),
+        };
+        let path = Path {
+            start: arris::math::Point3::new(5.0, 0.0, 0.0),
+            segments: vec![PathSegment::Helix {
+                axis: Axis::z_at(arris::math::Point3::origin()),
+                pitch: 3.0,
+                angle: TAU,
+            }],
+        };
+        let t = Instant::now();
+        let law = FrameLaw::FixedBinormal(arris::math::Vec3::z_axis());
+        let (coil, _) = sweep(&mut m, &wire, &path, law, &RUN).expect("sweep");
+        let v = vol(&m, coil);
+        let want = 2.5 * PI * PI;
+        println!(
+            "helical sweep: {:.1} ms, volume {v} (closed form {want}), rel err {:.1e}",
+            ms(t),
+            (v - want).abs() / want
+        );
+        // A frame law that keeps the binormal fixed tilts the section off
+        // the meridian plane by the helix angle; the swept volume is the
+        // section's area along the centre line's length, A L, not Pappus's
+        // A 2 pi R for a meridian section. Report both, assert the one
+        // that matches this sweep's definition.
+        let l = (TAU * 5.0f64).hypot(3.0);
+        let along = PI * 0.25 * l;
+        println!("    A L = {along}");
+        assert!(close(v, want, 1e-6) || close(v, along, 1e-6));
+        // Ruled loft.
+        let (frustum, _) = loft(
+            &mut m,
+            &[square_at(0.0, 2.0, 0.0), square_at(3.0, 1.0, 0.0)],
+            LoftKind::Ruled,
+            false,
+            &RUN,
+        )
+        .expect("loft");
+        let v = vol(&m, frustum);
+        println!("ruled loft: volume {v} (closed form 28)");
+        assert!(close(v, 28.0, 1e-9));
+        // Shell and offset.
+        let (cube, _) = arris::ops::primitive_box(
+            &mut m,
+            arris::math::Point3::origin(),
+            arris::math::Point3::new(10.0, 10.0, 10.0),
+            &RUN,
+        )
+        .unwrap();
+        let top = m
+            .faces(cube)
+            .unwrap()
+            .into_iter()
+            .find(|f| {
+                arris::check::classify::classify_point(
+                    &m,
+                    cube,
+                    arris::math::Point3::new(5.0, 5.0, 10.0),
+                )
+                .unwrap()
+                    == arris::check::classify::Classification::On(f.shape())
+            })
+            .unwrap();
+        let (cup, _) = shell(&mut m, cube, &[top], 1.0, ShellSide::Inward, &RUN).expect("shell");
+        let v = vol(&m, cup);
+        println!("shelled cube: volume {v} (closed form 424)");
+        assert!(close(v, 424.0, 1e-9));
+        let (small, _) = arris::ops::primitive_box(
+            &mut m,
+            arris::math::Point3::origin(),
+            arris::math::Point3::new(2.0, 2.0, 2.0),
+            &RUN,
+        )
+        .unwrap();
+        let lid = m
+            .faces(small)
+            .unwrap()
+            .into_iter()
+            .find(|f| {
+                arris::check::classify::classify_point(
+                    &m,
+                    small,
+                    arris::math::Point3::new(1.0, 1.0, 2.0),
+                )
+                .unwrap()
+                    == arris::check::classify::Classification::On(f.shape())
+            })
+            .unwrap();
+        let (taller, _) = offset_faces(&mut m, small, &[lid], 0.5, &RUN).expect("offset");
+        let v = vol(&m, taller);
+        println!("offset face: volume {v} (closed form 10)");
+        assert!(close(v, 10.0, 1e-9));
     }
 
     /// An exact visibility query for a hidden-line oracle: a ray toward

@@ -167,7 +167,10 @@ Every case on every kernel ends in exactly one of:
 The scoreboard is a committed file per kernel listing every case and its
 outcome. It works as a ratchet: **wrong must be zero**, and a case may
 only move toward correct. CI fails on any regression. A kernel version
-bump is accepted by re-running the scoreboard.
+bump is accepted by re-running the scoreboard. (Since slice 4, a
+candidate kernel's scoreboard may record a fuzzer finding against it as
+wrong: the gate keeps it visible and fails on any wrong it does not
+record. Wrong must be zero for the kernel that ships.)
 
 ## 6. What the trait needs
 
@@ -303,11 +306,60 @@ it, and cadview-core links no kernel any more).
   test alone or by the enclosure alone, because the relational layers
   compare centroids and the Euler characteristic sees a lost cavity.
 - **Not built yet:** point classification as a capability, topology and
-  geometry access and layer 3, layers 8 to 10, a second kernel, curved
-  features. The enclosure is wide where boxes fit the solid badly
-  (rotated unions, small curved parts: up to 65 % relative width at the
-  default budget), so it catches missing or extra features there, not
-  small shifts.
+  geometry access and layer 3, layers 8 and 9, curved features. The
+  enclosure is wide where boxes fit the solid badly (rotated unions,
+  small curved parts: up to 65 % relative width at the default budget),
+  so it catches missing or extra features there, not small shifts.
+
+### Slice 4 built (2026-11-18): a second kernel and fuzzing
+
+- **Second kernel: cad-kernel `=0.15.0`** (crates.io, from the geomsolver
+  repository; `MIT OR Apache-2.0`, no dependencies, one entry in
+  `Cargo.lock`), adapter `src/kernels/cad_kernel.rs`, the only file that
+  names it. Same feature subset as arris. It computes no centroid, so
+  `MassProps::centroid` became an `Option` (core's `kernel.rs`) and the
+  centroid comparison of layers 5 and 6 is not applicable for it. Its
+  chamfer is built from the kernel's per-edge flat (`fillet::flat_along`)
+  and a cut, edge by edge, and refuses where one flat cuts away another
+  picked edge (no multi-edge chamfer exists in the kernel).
+- **Scoreboards for every kernel.** `tests/scoreboard.rs` runs every
+  kernel that has a file in `scoreboards/` and fails on a file no test
+  runs. The kernel's own validity check became a column of its own
+  (`valid`) on every part; before, only parts with a closed form had it.
+- **Recorded findings.** A wrong verdict that the committed file records
+  as wrong is kept and printed, not failed: the fuzzer's findings enter
+  the catalogue as named cases (`cases.rs`, "Fuzzer findings") and their
+  wrong verdicts stay visible in the scoreboard until the kernel is
+  fixed. Any wrong verdict the file does not record, and any move away
+  from correct, still fails. A case recorded wrong that is still wrong
+  stays the recorded finding even if other columns say so: arris returns
+  a solid its own checker rejects in a release build and panics on the
+  same recipe in a debug build (its checker runs on every operation
+  there). A kernel that ships must have no recorded wrong case. (This
+  replaces "wrong must be zero" in section 5 for candidate kernels.)
+- **Fuzzer** (layer 10): `src/fuzz.rs` (generator, judge, shrinker,
+  printer) and the driver `examples/fuzz.rs`, a development-time tool,
+  never run by `cargo test` or CI. A case is reproducible from (seed,
+  index). Judging needs no closed form: enclosure, shell test, mesh
+  invariants, the kernel's validity, and between two kernels their
+  volumes and sampled membership; a disagreement neither kernel's layers
+  decide gets a forty times finer enclosure. Batches run in child
+  processes so a hang costs one case. Planted bugs are found (a hole
+  0.02 mm too wide on arris: 112 of 297 cases wrong; tool positions
+  snapped to 0.01 mm on cad-kernel: 143 of 298).
+- **What it found** is in `docs/research/kernel-comparison.md`, with the
+  smallest recipes: 25 of them are now catalogue parts (113 in all), on
+  which arris has 11 recorded wrong cases and cad-kernel 14. Neither has
+  a wrong case on the 153 rows from slice 1. In our own code: the cad-kernel adapter skipped a
+  picked edge that an earlier flat had cut away, which is wrong at a
+  convex corner that turns less than the chamfer (now a refusal).
+- **Limits found.** The harness has no time limit on a kernel call, so a
+  case on which a kernel hangs (cad-kernel's mesher, several found)
+  cannot enter the catalogue; the fuzzer records it. The enclosure has
+  no positional band: a kernel that moves a face by less than its own
+  tolerance (well under the 1e-6 mm band of section 8) is wrong there
+  when the volume moves by more than 1e-9 relative. Whether that should
+  be undecided, as it is in the continuity layer, is open (section 11).
 
 ## 10. Effect on the ladder
 
@@ -343,4 +395,11 @@ Decided:
 
 Open:
 
-- Nothing at the moment.
+- **A positional band for the enclosure.** Layer 1b calls a volume
+  outside the certified enclosure (plus 1e-9 relative) wrong, even when
+  the difference is a face moved by less than the kernel's own tolerance
+  and the 1e-6 mm band of section 8. The continuity layer calls such
+  evidence undecided. Both kernels have recorded wrong cases of this
+  kind (`docs/research/kernel-comparison.md`).
+- **A time limit on kernel calls**, so that a hang can be a recorded
+  outcome in the catalogue rather than only a fuzzer note.

@@ -250,7 +250,7 @@ pub fn check<B>(run: &PartRun<B>, enc: Option<&Enclosure>) -> Verdict {
     match &run.mass {
         Ok(m) => {
             let width = format!(
-                "[{:.6}, {:.6}], rel width {:.1e}",
+                "[{:.10e}, {:.10e}], rel width {:.1e}",
                 enc.lo,
                 enc.hi,
                 enc.rel_width()
@@ -259,7 +259,7 @@ pub fn check<B>(run: &PartRun<B>, enc: Option<&Enclosure>) -> Verdict {
             // harness-wide relative volume tolerance on either side.
             let slack = VOLUME_REL_TOL * m.volume.abs();
             if m.volume >= enc.lo - slack && m.volume <= enc.hi + slack {
-                Verdict::correct(format!("volume {:.6} in {width}", m.volume))
+                Verdict::correct(format!("volume {:.10e} in {width}", m.volume))
             } else {
                 Verdict::wrong(format!("volume {} outside {width}", m.volume))
             }

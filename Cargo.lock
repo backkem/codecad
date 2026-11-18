@@ -975,6 +975,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
+name = "cad-kernel"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3c58ab2adb87a1a79aa60bdc9a832506513261389bd0be288642d218cb29866"
+
+[[package]]
 name = "cadview-core"
 version = "0.1.0"
 dependencies = [
@@ -5939,6 +5945,7 @@ name = "solid-harness"
 version = "0.1.0"
 dependencies = [
  "arris",
+ "cad-kernel",
  "cadview-core",
  "kurbo",
 ]

@@ -12,6 +12,7 @@ publish = false
 [dependencies]
 cadview-core = { path = "../cadview-core" }
 kurbo = "0.13"
-# The candidate kernel under test, pinned exactly. Only src/kernels/arris.rs
-# names it.
+# The candidate kernels under test, pinned exactly. Only src/kernels/arris.rs
+# names arris and only src/kernels/cad_kernel.rs names cad-kernel.
 arris = { version = "=0.11.1", default-features = false }
+cad-kernel = "=0.15.0"

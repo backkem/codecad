@@ -44,6 +44,15 @@ pub fn render(report: &Report) -> String {
     }
     let c: Vec<String> = overall.iter().map(|(o, n)| format!("{n} {o}")).collect();
     let _ = writeln!(s, "#   {:<10} {}", "overall", c.join(", "));
+    let wrong = report
+        .rows
+        .iter()
+        .filter(|r| r.overall == Outcome::Wrong)
+        .count();
+    let _ = writeln!(
+        s,
+        "# Cases recorded WRONG (findings against this kernel; the gate keeps them, a kernel that ships must have none): {wrong}"
+    );
     let _ = writeln!(s, "#");
     let header: Vec<&str> = std::iter::once("case")
         .chain(std::iter::once("overall"))
@@ -104,26 +113,53 @@ pub fn parse(text: &str) -> Result<BTreeMap<String, Line>, String> {
 /// What the ratchet found.
 #[derive(Debug, Default)]
 pub struct Diff {
-    /// Failures: wrong cases, regressions, missing or new cases.
+    /// Failures: wrong cases not recorded as wrong, regressions, missing
+    /// or new cases.
     pub problems: Vec<String>,
     /// Improvements over the committed file (regenerate to keep them).
     pub improvements: Vec<String>,
+    /// Wrong verdicts the committed file records as wrong: findings
+    /// against the kernel, kept visible. A kernel that ships must have
+    /// none.
+    pub recorded_wrong: Vec<String>,
 }
 
+/// Compares a run with the committed file. Every wrong verdict is a
+/// problem unless the committed file records that same verdict as wrong
+/// (a finding the scoreboard keeps: then it is listed in
+/// `recorded_wrong`); any move away from correct is a problem.
+///
+/// A case the file records as wrong overall that is still wrong overall
+/// stays a recorded finding whichever layers say so: a kernel can be
+/// wrong on it in different ways in different builds (arris returns a
+/// solid its checker rejects in a release build and panics on the same
+/// recipe in a debug build), and the finding is the case, not the column.
+/// Its column changes are listed, not failed.
 pub fn compare(committed: &BTreeMap<String, Line>, report: &Report) -> Diff {
     let mut d = Diff::default();
     for r in &report.rows {
-        for (l, v) in Layer::ALL.iter().zip(&r.verdicts) {
+        let old = committed.get(&r.name);
+        let still_wrong =
+            r.overall == Outcome::Wrong && old.is_some_and(|o| o.overall == Outcome::Wrong);
+        for (i, (l, v)) in Layer::ALL.iter().zip(&r.verdicts).enumerate() {
             if v.outcome == Outcome::Wrong {
-                d.problems
-                    .push(format!("{} is WRONG on {}: {}", r.name, l.name(), v.detail));
+                let line = format!("{} is WRONG on {}: {}", r.name, l.name(), v.detail);
+                if still_wrong || old.is_some_and(|o| o.layers[i] == Outcome::Wrong) {
+                    d.recorded_wrong.push(line);
+                } else {
+                    d.problems.push(line);
+                }
             }
         }
         if r.overall == Outcome::Wrong && !r.verdicts.iter().any(|v| v.outcome == Outcome::Wrong) {
-            d.problems
-                .push(format!("{} is WRONG (a kernel panic)", r.name));
+            let line = format!("{} is WRONG (a kernel panic)", r.name);
+            if old.is_some_and(|o| o.overall == Outcome::Wrong) {
+                d.recorded_wrong.push(line);
+            } else {
+                d.problems.push(line);
+            }
         }
-        let Some(old) = committed.get(&r.name) else {
+        let Some(old) = old else {
             d.problems.push(format!(
                 "{} is not in the committed scoreboard: regenerate it ({}=1)",
                 r.name, BLESS_ENV
@@ -137,7 +173,12 @@ pub fn compare(committed: &BTreeMap<String, Line>, report: &Report) -> Diff {
                 .map(|(l, (o, n))| (l.name(), *o, n.outcome)),
         );
         for (what, o, n) in pairs {
-            if n.regressed_from(o) {
+            if n.regressed_from(o) && still_wrong {
+                d.recorded_wrong.push(format!(
+                    "{} (recorded wrong) changed on {what}: {o} -> {n}",
+                    r.name
+                ));
+            } else if n.regressed_from(o) {
                 d.problems
                     .push(format!("{} got worse on {what}: {o} -> {n}", r.name));
             } else if n != o {
@@ -162,8 +203,11 @@ mod tests {
     use crate::layers::Row;
     use crate::outcome::Verdict;
 
+    /// A one-row report; the validity column (index 4) is n/a.
     fn report(outcomes: [Outcome; 7]) -> Report {
-        let verdicts: Vec<Verdict> = outcomes.iter().map(|&o| Verdict::new(o, "why")).collect();
+        let mut verdicts: Vec<Verdict> = outcomes.iter().map(|&o| Verdict::new(o, "why")).collect();
+        verdicts.insert(4, Verdict::na(""));
+        assert_eq!(verdicts.len(), Layer::ALL.len());
         let overall = crate::outcome::overall(&verdicts, false);
         Report {
             kernel: "test 1".into(),
@@ -235,8 +279,23 @@ mod tests {
             NotApplicable,
             NotApplicable,
         ]);
-        assert!(!compare(&parse(&render(&f)).unwrap(), &f)
-            .problems
-            .is_empty());
+        // A wrong the committed file does not record is a problem; one it
+        // records stays visible as a recorded finding.
+        assert!(!compare(&parsed, &f).problems.is_empty());
+        let recorded = compare(&parse(&render(&f)).unwrap(), &f);
+        assert!(recorded.problems.is_empty() && recorded.recorded_wrong.len() == 1);
+        // Still wrong, but on another layer (a panic in another build):
+        // still the recorded finding, not a new problem.
+        let g = report([
+            Correct,
+            Wrong,
+            Undecided,
+            Correct,
+            NotApplicable,
+            NotApplicable,
+            NotApplicable,
+        ]);
+        let moved = compare(&parse(&render(&f)).unwrap(), &g);
+        assert!(moved.problems.is_empty() && !moved.recorded_wrong.is_empty());
     }
 }

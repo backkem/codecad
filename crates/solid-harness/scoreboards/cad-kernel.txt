@@ -1,0 +1,331 @@
+# Solid harness scoreboard (docs/3d-test-harness.md section 5).
+# kernel: cad-kernel 0.15.0
+# Regenerate: SOLID_HARNESS_BLESS=1 cargo test -p solid-harness --release --test scoreboard
+# Outcomes: correct, refused (typed error), undecided (inside the band), WRONG, n/a.
+#
+# Counts per layer:
+#   closed     28 correct, 2 refused, 148 n/a
+#   enclosure  104 correct, 1 refused, 6 WRONG, 67 n/a
+#   shell      100 correct, 1 refused, 3 WRONG, 74 n/a
+#   mesh       99 correct, 1 refused, 6 WRONG, 72 n/a
+#   valid      109 correct, 1 refused, 3 WRONG, 65 n/a
+#   equiv      12 correct, 166 n/a
+#   algebra    41 correct, 6 refused, 131 n/a
+#   continuity 2 correct, 1 refused, 3 undecided, 172 n/a
+#   overall    14 WRONG, 151 correct, 10 refused, 3 undecided
+# Cases recorded WRONG (findings against this kernel; the gate keeps them, a kernel that ships must have none): 14
+#
+# case | overall | closed | enclosure | shell | mesh | valid | equiv | algebra | continuity
+part: board | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: board with hole | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: side with dado | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: back with rabbet | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: stile with mortise | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: rail with tenon | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: rail with half-lap | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: block with counterbore | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: chamfered slab | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: slot | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: washer | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: ellipse | refused | refused | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: refused: a tight bounding box of a bspline edge is not supported by this kernel yet
+part: half ellipse | refused | refused | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: refused: a tight bounding box of a bspline edge is not supported by this kernel yet
+part: cube with one chamfered edge | correct | correct | n/a | n/a | correct | correct | n/a | n/a | n/a
+#   enclosure: n/a: reference not defined at feature 2: chamfer: only a Cap selector has a reference meaning
+#   shell: n/a: reference not defined at feature 2: chamfer: only a Cap selector has a reference meaning
+part: L with chamfered top | correct | n/a | n/a | n/a | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   enclosure: n/a: reference not defined at feature 2: chamfer: the profile has a concave or straight corner
+#   shell: n/a: reference not defined at feature 2: chamfer: the profile has a concave or straight corner
+part: cube with internal cavity | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: hole entering below the surface | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: box | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: box from two halves | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: box extruded down | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: box on a flipped plane | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: box as an intersection | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: plate with hole | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: plate with drilled tool | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: block with two cylinder cuts | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: rabbet as an L section | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: dado as a subtracted extrude | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: mortise as a boolean tool | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: washer as a subtracted cylinder | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: slot as a box and two cylinders | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: box chamfered on both caps | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: box chamfered cap by cap | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: board with hole moved | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: board with hole mirrored | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: board with hole + itself | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: board with hole n itself | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: board with hole - itself | correct | n/a | correct | n/a | n/a | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   shell: n/a: the mesh has no triangles
+#   mesh: n/a: chord 1e-1: no triangles; chord 1e-2: no triangles; chord 1e-3: no triangles; chord 1e-4: no triangles
+part: side with dado moved | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: side with dado mirrored | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: side with dado + itself | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: side with dado n itself | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: side with dado - itself | correct | n/a | correct | n/a | n/a | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   shell: n/a: the mesh has no triangles
+#   mesh: n/a: chord 1e-1: no triangles; chord 1e-2: no triangles; chord 1e-3: no triangles; chord 1e-4: no triangles
+part: rail with half-lap moved | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: rail with half-lap mirrored | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: rail with half-lap + itself | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: rail with half-lap n itself | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: rail with half-lap - itself | correct | n/a | correct | n/a | n/a | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   shell: n/a: the mesh has no triangles
+#   mesh: n/a: chord 1e-1: no triangles; chord 1e-2: no triangles; chord 1e-3: no triangles; chord 1e-4: no triangles
+part: block with counterbore moved | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: block with counterbore mirrored | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: block with counterbore + itself | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: block with counterbore n itself | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: block with counterbore - itself | correct | n/a | correct | n/a | n/a | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   shell: n/a: the mesh has no triangles
+#   mesh: n/a: chord 1e-1: no triangles; chord 1e-2: no triangles; chord 1e-3: no triangles; chord 1e-4: no triangles
+part: chamfered slab moved | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: chamfered slab mirrored | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: chamfered slab + itself | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: chamfered slab n itself | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: chamfered slab - itself | correct | n/a | correct | n/a | n/a | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   shell: n/a: the mesh has no triangles
+#   mesh: n/a: chord 1e-1: no triangles; chord 1e-2: no triangles; chord 1e-3: no triangles; chord 1e-4: no triangles
+part: slot moved | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: slot mirrored | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: slot + itself | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: slot n itself | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: slot - itself | correct | n/a | correct | n/a | n/a | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   shell: n/a: the mesh has no triangles
+#   mesh: n/a: chord 1e-1: no triangles; chord 1e-2: no triangles; chord 1e-3: no triangles; chord 1e-4: no triangles
+part: ellipse moved | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: ellipse mirrored | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: ellipse + itself | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: ellipse n itself | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: ellipse - itself | correct | n/a | correct | n/a | n/a | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   shell: n/a: the mesh has no triangles
+#   mesh: n/a: chord 1e-1: no triangles; chord 1e-2: no triangles; chord 1e-3: no triangles; chord 1e-4: no triangles
+part: board with hole and block with counterbore: A u B | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: board with hole and block with counterbore: B u A | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: board with hole and block with counterbore: A n B | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: board with hole and block with counterbore: B n A | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: board with hole and block with counterbore: B placed | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: slot and ellipse: A u B | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: slot and ellipse: B u A | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: slot and ellipse: A n B | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: slot and ellipse: B n A | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: slot and ellipse: B placed | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: side with dado and rail with half-lap: A u B | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: side with dado and rail with half-lap: B u A | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: side with dado and rail with half-lap: A n B | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: side with dado and rail with half-lap: B n A | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: side with dado and rail with half-lap: B placed | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: board with hole split: above | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: board with hole split: below | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: block with counterbore split: above | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: block with counterbore split: below | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: slot split: above | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: slot split: below | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: fuzz: small box far from the origin (s1 i34) | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: fuzz: two near-tangent blind holes breaking out (s1 i24) | WRONG | n/a | correct | correct | WRONG | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   mesh: WRONG: chord 1e-1: not closed (2 bad directed edges, 0 degenerate triangles); chord 1e-2: not closed (2 bad directed edges, 0 degenerate triangles); chord 1e-3: not closed (2 bad directed edges, 0 degenerate triangles); chord 1e-4: not closed (2 bad directed edges, 0 degenerate triangles)
+part: fuzz: tiny box with a face 1e-9 off (s4 i20) | WRONG | n/a | WRONG | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   enclosure: WRONG: volume 0.00006000000019999997 outside [5.9999640001e-5, 6.0000000000e-5], rel width 6.0e-6
+part: fuzz: through hole tangent to a side face (s1 i196) | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: fuzz: thin pin almost tangent to a side face (s2 i463) | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: fuzz: tiny notch 1e-7 inside a face (s4 i733) | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: fuzz: hole pointing out of the bottom face (s3 i353) | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: fuzz: box cut 1e-6 off a cylinder's tangent line (s2 i179) | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: fuzz: notched prism with collinear vertices far away (s3 i966) | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: fuzz: two tangent blind holes breaking out (s4 i0) | WRONG | n/a | correct | correct | WRONG | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   mesh: WRONG: chord 1e-1: not closed (2 bad directed edges, 0 degenerate triangles); chord 1e-2: not closed (2 bad directed edges, 0 degenerate triangles); chord 1e-3: not closed (2 bad directed edges, 0 degenerate triangles); chord 1e-4: not closed (2 bad directed edges, 0 degenerate triangles)
+part: fuzz: intersection 1e-7 above a face (s3 i114) | WRONG | n/a | WRONG | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   enclosure: WRONG: volume 263.9999955999999 outside [2.6399840280e2, 2.6399998680e2], rel width 6.0e-6
+part: fuzz: thin plate intersection 1e-3 up, far away (s2 i101) | WRONG | n/a | WRONG | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   enclosure: WRONG: volume 3.8190000324199596 outside [3.8189770860e0, 3.8190000000e0], rel width 6.0e-6
+part: fuzz: hole along the corner of a thin rod far away (s1 i857) | WRONG | n/a | WRONG | correct | WRONG | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   enclosure: WRONG: volume 0.0050139231607317924 outside [6.8906935190e-3, 6.2100000000e-2], rel width 8.0e0
+#   mesh: WRONG: chord 1e-3: mesh volume 0.05317505715607853 vs stated 0.0050139231607317924: off by 4.816e-2, bound 2.271e-2; chord 1e-4: mesh volume 0.053000207185430886 vs stated 0.0050139231607317924: off by 4.799e-2, bound 1.683e-3
+part: fuzz: turned thin intersection 1e-7 off a side (s3 i547) | WRONG | n/a | correct | correct | WRONG | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   mesh: WRONG: chord 1e-4: mesh volume 3.7479129510270055 vs stated 3.7254772168045136: off by 2.244e-2, bound 1.135e-2
+part: fuzz: cylinder turned 1e-9 rad fused to a box (s2 i730) | WRONG | n/a | WRONG | WRONG | WRONG | WRONG | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   enclosure: WRONG: kernel panicked: a vertex at [-4.999000299900035e-8, 0.0, -5000999900019.994]
+#   shell: WRONG: kernel panicked: a vertex at [-4.999000299900035e-8, 0.0, -5000999900019.994]
+#   mesh: WRONG: kernel panicked: a vertex at [-4.999000299900035e-8, 0.0, -5000999900019.994]
+#   valid: WRONG: kernel panicked: a vertex at [-4.999000299900035e-8, 0.0, -5000999900019.994]
+part: fuzz: blind hole leaving a 1e-7 floor (s2 i152) | WRONG | n/a | correct | WRONG | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   shell: WRONG: 226 steps on the wrong side (3544 certified, 0 band, 230 skipped); step in at (0.5770, 0.4574, -0.0010) along normal (-0.000, -0.000, 1.000): reference says Outside { margin: 0.000999926366659309 }; step in at (0.0757, 0.3613, 0.0010) along normal (0.000, 0.000, -1.000): reference says Outside { margin: 0.0009999437043504145 }
+part: fuzz: heptagon chamfered on both caps (s4 i218) | refused | n/a | refused | refused | refused | refused | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   enclosure: refused: feature 2: a chamfer whose flat on one edge cuts away another picked edge (cad-kernel has no chamfer of several edges at once) is not supported by this kernel yet
+#   shell: refused: feature 2: a chamfer whose flat on one edge cuts away another picked edge (cad-kernel has no chamfer of several edges at once) is not supported by this kernel yet
+#   mesh: refused: feature 2: a chamfer whose flat on one edge cuts away another picked edge (cad-kernel has no chamfer of several edges at once) is not supported by this kernel yet
+#   valid: refused: feature 2: a chamfer whose flat on one edge cuts away another picked edge (cad-kernel has no chamfer of several edges at once) is not supported by this kernel yet
+part: fuzz: intersection at the end of a long bar with a side hole (s2 i300) | WRONG | n/a | correct | correct | correct | WRONG | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   valid: WRONG: kernel check: valid=false solids=1 ["Failed: edge 9: its first vertex is 9.99999883788405e-7 off its curve"]
+part: fuzz: small washer and turned cylinder (s4 i801) | WRONG | n/a | correct | correct | correct | WRONG | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   valid: WRONG: kernel check: valid=false solids=1 ["Failed: face 2 (p1.l0s0): edge 2's pcurve is 1.183855085181054e-9 off it, at 3/8 of its bspline"]
+part: fuzz: tiny corner box far from the origin (s13 i455) | WRONG | n/a | WRONG | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   enclosure: WRONG: volume 0.0008003492557691061 outside [7.9999520001e-4, 8.0000000000e-4], rel width 6.0e-6
+part: fuzz: cylinder tangent inside a box corner, fused (s14 i325) | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: fuzz: turned plate intersected at the top of a tall box (s11 i337) | WRONG | n/a | correct | correct | WRONG | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   mesh: WRONG: chord 1e-3: mesh volume 4.730460608227916 vs stated 4.7853495366046745: off by 5.489e-2, bound 4.290e-2; chord 1e-4: mesh volume 4.730460608227916 vs stated 4.7853495366046745: off by 5.489e-2, bound 4.268e-3
+part: fuzz: cylinder cut by a box turned 1e-4 rad (s12 i128) | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: fuzz: side hole along a thin prism (s11 i61) | WRONG | n/a | correct | WRONG | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   shell: WRONG: 26 steps on the wrong side (3864 certified, 0 band, 110 skipped); step in at (0.0006, 0.1028, 0.0001) along normal (-0.001, -1.000, -0.000): reference says Outside { margin: 0.0009999999999999454 }; step in at (0.0005, 0.1028, 0.0001) along normal (-0.001, -1.000, -0.000): reference says Outside { margin: 0.0009999999999999176 }
+part: fuzz: cylinder intersection far from the origin (s2 i11) | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+equiv: box: one extrude = two fused halves | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: box: extrude up = extrude down | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: box: extrude down = flipped plane | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: box: one extrude = intersection of prisms | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: through hole: hole = cylinder tool | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: counterbore: hole = two cylinder tools | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: rabbet: subtracted extrude = L section | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: dado: boolean tool = subtracted extrude | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: mortise: subtracted extrude = boolean tool | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: washer: hole loop = subtracted cylinder | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: slot: bulges = box and cylinders | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: chamfer: both caps = one cap then the other | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a | n/a
+algebra: motion: board with hole | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: mirror: board with hole | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A + A = A: board with hole | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A n A = A: board with hole | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A - A = empty: board with hole | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: motion: side with dado | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: mirror: side with dado | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A + A = A: side with dado | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A n A = A: side with dado | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A - A = empty: side with dado | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: motion: rail with half-lap | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: mirror: rail with half-lap | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A + A = A: rail with half-lap | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A n A = A: rail with half-lap | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A - A = empty: rail with half-lap | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: motion: block with counterbore | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: mirror: block with counterbore | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A + A = A: block with counterbore | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A n A = A: block with counterbore | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A - A = empty: block with counterbore | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: motion: chamfered slab | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: mirror: chamfered slab | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A + A = A: chamfered slab | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A n A = A: chamfered slab | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A - A = empty: chamfered slab | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: motion: slot | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: mirror: slot | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A + A = A: slot | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A n A = A: slot | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A - A = empty: slot | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: motion: ellipse | refused | n/a | n/a | n/a | n/a | n/a | n/a | refused | n/a
+#   algebra: refused: a tight bounding box of a bspline edge is not supported by this kernel yet
+algebra: mirror: ellipse | refused | n/a | n/a | n/a | n/a | n/a | n/a | refused | n/a
+#   algebra: refused: a tight bounding box of a bspline edge is not supported by this kernel yet
+algebra: A + A = A: ellipse | refused | n/a | n/a | n/a | n/a | n/a | n/a | refused | n/a
+#   algebra: refused: a tight bounding box of a bspline edge is not supported by this kernel yet
+algebra: A n A = A: ellipse | refused | n/a | n/a | n/a | n/a | n/a | n/a | refused | n/a
+#   algebra: refused: a tight bounding box of a bspline edge is not supported by this kernel yet
+algebra: A - A = empty: ellipse | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: union identity: board with hole and block with counterbore | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: operand order (union): board with hole and block with counterbore | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: operand order (intersection): board with hole and block with counterbore | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: union identity: slot and ellipse | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: operand order (union): slot and ellipse | refused | n/a | n/a | n/a | n/a | n/a | n/a | refused | n/a
+#   algebra: refused: a tight bounding box of a bspline edge is not supported by this kernel yet
+algebra: operand order (intersection): slot and ellipse | refused | n/a | n/a | n/a | n/a | n/a | n/a | refused | n/a
+#   algebra: refused: a tight bounding box of a bspline edge is not supported by this kernel yet
+algebra: union identity: side with dado and rail with half-lap | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: operand order (union): side with dado and rail with half-lap | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: operand order (intersection): side with dado and rail with half-lap | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: split by a plane: board with hole | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: split by a plane: block with counterbore | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: split by a plane: slot | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct | n/a
+sweep: box tool through a flush top face | undecided | n/a | n/a | n/a | n/a | n/a | n/a | n/a | undecided
+#   continuity: undecided: jump within the band from s = 1e-6 to 1e-5: dV -3.867e-3
+sweep: dado tool through a flush end face | undecided | n/a | n/a | n/a | n/a | n/a | n/a | n/a | undecided
+#   continuity: undecided: wrong direction within the band from s = -1e-5 to -1e-6: dV -2.400e-3; jump within the band from s = -1e-6 to -1e-7: dV 2.100e-3; jump within the band from s = -1e-7 to -1e-8: dV 2.700e-4; jump within the band from s = -1e-8 to -1e-9: dV 2.700e-5; jump within the band from s = 1e-9 to 1e-8: dV 2.700e-5; jump within the band from s = 1e-8 to 1e-7: dV 2.700e-4; jump within the band from s = 1e-7 to 
+sweep: cylinder tool through tangency with a face | correct | n/a | n/a | n/a | n/a | n/a | n/a | n/a | correct
+sweep: hole breaking out through a face | correct | n/a | n/a | n/a | n/a | n/a | n/a | n/a | correct
+sweep: two holes through tangency | refused | n/a | n/a | n/a | n/a | n/a | n/a | n/a | refused
+#   continuity: refused: 1 of 21 steps refused, first s = 1e-6: feature 3: kernel: Failed: a shell of the arrangement is kept on one side of a plane (`p0.l0s0`) and dropped on another: two of its cells joined round an edge
+sweep: fused box through face contact | undecided | n/a | n/a | n/a | n/a | n/a | n/a | n/a | undecided
+#   continuity: undecided: jump within the band from s = -1e-5 to -1e-6: dV 3.867e-3; wrong direction within the band from s = 1e-7 to 1e-6: dV -1.333e-5

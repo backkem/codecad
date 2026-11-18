@@ -45,8 +45,9 @@ pub struct Evaluated<B> {
 pub struct MassProps {
     /// Enclosed volume (mm^3).
     pub volume: f64,
-    /// Centre of volume.
-    pub centroid: Point3,
+    /// Centre of volume, or `None` when the kernel computes no first
+    /// moments (a harness reads that as "not applicable", never a pass).
+    pub centroid: Option<Point3>,
     /// True when the kernel integrated on the exact surfaces; false when
     /// any part of it came from a tessellation.
     pub exact: bool,

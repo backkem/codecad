@@ -763,6 +763,294 @@ fn hole_below_surface() -> PartCase {
     .euler(4)
 }
 
+// ── Fuzzer findings ───────────────────────────────────────────────────
+//
+// Each case below is a failure the fuzzer (`examples/fuzz.rs`) found, as
+// the shrinker printed it, so the gate keeps running it. The doc comment
+// says on which kernel it failed, how, and with what numbers. None has a
+// closed form: the enclosure, the shell test and the mesh layer judge it.
+
+/// Found by the fuzzer (seed 1, index 34) on arris 0.11.1, shrunk: a
+/// 187 x 9 x 50 box at x = 2 285 813 mm intersected with a 0.0135 x 0.3
+/// x 88 tool at its corner, a 0.0135 x 0.3 x 50 box (about 0.2 mm^3) far
+/// from the origin. arris's volume, 0.2026571097, lies 1.9e-9 (9.6e-9
+/// relative) above the certified enclosure [0.2026558918,
+/// 0.2026571077]: its flux integral loses precision far from the origin
+/// (the case before shrinking was 8.2e-7 relative off). cad-kernel is
+/// correct.
+fn fuzz_far_small_box() -> PartCase {
+    let name = "fuzz: small box far from the origin (s1 i34)";
+    let tools = vec![def(
+        1000,
+        "tool",
+        vec![Feature::Extrude {
+            id: FeatId(1),
+            profile: Profile2d {
+                outer: vec![
+                    Seg2::Line(Line::new((0.0, 0.0), (0.013510473847674346, 0.0))),
+                    Seg2::Line(Line::new(
+                        (0.013510473847674346, 0.0),
+                        (0.013510473847674346, 0.3),
+                    )),
+                    Seg2::Line(Line::new((0.013510473847674346, 0.3), (0.0, 0.3))),
+                    Seg2::Line(Line::new((0.0, 0.3), (0.0, 0.0))),
+                ],
+                holes: vec![],
+            },
+            plane: Plane3::XY,
+            distance: 88.0,
+            taper_deg: 0.0,
+            op: Op::Add,
+        }],
+    )];
+    part(
+        name,
+        def(
+            7000,
+            name,
+            vec![
+                extrude(
+                    1,
+                    Profile2d::rect(0.0, 0.0, 187.0, 9.0),
+                    Plane3::XY.at(Point3::new(2285813.0, 0.0, 0.0)),
+                    50.0,
+                    Op::Add,
+                ),
+                boolean(
+                    2,
+                    Op::Intersect,
+                    1000,
+                    Placement::translation(2285813.0, 0.0, 0.0),
+                ),
+            ],
+        ),
+        tools,
+    )
+    .euler(2)
+}
+
+/// Found by the fuzzer (seed 1, index 24) on cad-kernel 0.15.0, shrunk: a
+/// 65 x 65 x 147 block with two blind holes, diameter 58.5, depth 111,
+/// from the top, centred 1e-6 inside the x = 0 face and 58.500001 along
+/// it (1e-6 apart, so not touching), both breaking out of the y = 65 face.
+/// cad-kernel returns a valid B-rep at a volume inside the enclosure,
+/// but its mesh is open at every chord (2 bad directed edges). arris
+/// refuses it ("the faces touch along a curve interior to both result
+/// faces").
+fn fuzz_tangent_holes_breaking_out() -> PartCase {
+    let name = "fuzz: two near-tangent blind holes breaking out (s1 i24)";
+    part(
+        name,
+        def(
+            7001,
+            name,
+            vec![
+                cuboid(1, [0.0; 3], [65.0, 65.0, 147.0], Op::Add),
+                hole(
+                    2,
+                    [1e-6, 61.074071, 147.0],
+                    [0.0, 0.0, -1.0],
+                    58.5,
+                    Depth::Blind(111.0),
+                ),
+                hole(
+                    3,
+                    [58.500001, 61.074071, 147.0],
+                    [0.0, 0.0, -1.0],
+                    58.5,
+                    Depth::Blind(111.0),
+                ),
+            ],
+        ),
+        vec![],
+    )
+}
+
+/// A fuzzer finding in its compact form: the recipe as the shrinker
+/// printed it (`fuzz::Recipe::encode`), built by the same code the fuzzer
+/// judged it with.
+fn fuzz_case(name: &str, recipe: &str) -> PartCase {
+    crate::fuzz::Recipe::decode(recipe)
+        .unwrap_or_else(|| panic!("{name}: not a fuzz recipe"))
+        .case(name)
+}
+
+/// Every fuzzer finding, as catalogue parts.
+fn fuzz_findings() -> Vec<PartCase> {
+    let mut out = vec![fuzz_far_small_box(), fuzz_tangent_holes_breaking_out()];
+    out.extend(FUZZ_FINDINGS.iter().map(|(n, r)| fuzz_case(n, r)));
+    out
+}
+
+/// The other findings, shrunk, in compact form (`fuzz_case`). Each line
+/// says which kernel the fuzzer found wrong (or refusing, or disagreeing)
+/// and how; docs/research/kernel-comparison.md has the numbers.
+const FUZZ_FINDINGS: &[(&str, &str)] = &[
+    // Both kernels: a 0.02 x 0.1 x 0.03 box whose y faces are 1e-9 mm off
+    // the base's; both volumes are 5e-9 and 3e-9 relative above the
+    // enclosure (a face moved by about 5e-10 mm).
+    (
+        "fuzz: tiny box with a face 1e-9 off (s4 i20)",
+        "box 24.0 79.0 37.0 tool Intersect b 0.02 0.1 0.03 0.0 0.0 0.0 0.0 0.0 1e-9 0.0",
+    ),
+    // arris: a through hole tangent to a side face (centre exactly one
+    // radius in) through a box and a fused bar; arris's own check finds
+    // the result invalid ("loop 0 intersects itself").
+    (
+        "fuzz: through hole tangent to a side face (s1 i196)",
+        "box 17.0 17.0 7.0 tool Add b 80.0 7.0 4.0 0.0 0.0 0.0 0.0 0.0 0.0 6.557502359971457 \
+         hole 28.0 7.728844132020787 6.557502359971457 0.0 0.0 -1.0 15.457688264041574 through nocb",
+    ),
+    // arris: a pin of radius 0.0113 fused 1.1e-6 inside a side face of a
+    // plate; arris's own check finds the result invalid ("loops 0 and 1
+    // intersect").
+    (
+        "fuzz: thin pin almost tangent to a side face (s2 i463)",
+        "box 113.0 1108.1386016658328 1.0 tool Add c 0.011269122502257131 104.0 \
+         0.0 0.0 0.0 0.0 7.0 1108.1273326433304 0.0",
+    ),
+    // arris: a 0.1 x 0.001 x 0.0001 notch 1e-7 inside a face; arris's own
+    // check finds the result invalid (pcurves jump 1e-7).
+    (
+        "fuzz: tiny notch 1e-7 inside a face (s4 i733)",
+        "box 47.0 2.0 156.0 tool Subtract b 0.1 0.001 0.0001 0.0 0.0 0.0 0.0 0.0 1e-7 0.0",
+    ),
+    // arris: a blind hole whose entry disc lies on the bottom face and
+    // points out of the part (it removes nothing), half out of a side,
+    // far from the origin; arris's own check finds the result invalid.
+    (
+        "fuzz: hole pointing out of the bottom face (s3 i353)",
+        "box 319.8958400652496 17.0 49.0 hole 312.44490874650796 0.0 0.0 0.0 0.0 -1.0 \
+         14.901862837483371 30.0 nocb motion 0.0 0.0 0.0 0.0 364002.0 0.0 0.0",
+    ),
+    // arris: a cylinder cut by a box whose face is 1e-6 mm off the
+    // cylinder's tangent line; one shell step lands outside the reference.
+    (
+        "fuzz: box cut 1e-6 off a cylinder's tangent line (s2 i179)",
+        "cyl 11.0 3238.0 tool Subtract b 67.0 191.0 96.0 0.0 0.0 0.0 0.0 0.0 1e-6 1136.0",
+    ),
+    // arris: a prism with collinear vertices, notched 1e-7 off its end,
+    // far from the origin; 39 shell steps land outside the reference.
+    (
+        "fuzz: notched prism with collinear vertices far away (s3 i966)",
+        "prism 7 127.0 0.0 87.0 1.0 35.0 1.0 0.0 0.0 18.0 0.0 88.0 0.0 118.0 0.0 966.0 \
+         tool Subtract b 149.0 6.0 33.0 0.0 0.0 0.0 0.0 1e-7 -2.0 273.0 \
+         motion 0.0 0.0 0.0 0.0 3103784.0 0.0 0.0",
+    ),
+    // cad-kernel: two blind holes exactly tangent, both breaking out of a
+    // side; the mesh is open at every chord.
+    (
+        "fuzz: two tangent blind holes breaking out (s4 i0)",
+        "box 5.0 5.0 170.0 hole 1.7098512661973304 3.183616 170.0 0.0 0.0 -1.0 4.5 11.0 nocb \
+         hole 6.20985126619733 3.183616 170.0 0.0 0.0 -1.0 4.5 11.0 nocb",
+    ),
+    // Both kernels: a box intersected with a tool whose bottom is 1e-7 mm
+    // above the base's (exact volume 6 x 22 x (2 - 1e-7) = 263.9999868);
+    // both return 263.9999956, as if that face had moved 6.7e-8 mm down,
+    // within each kernel's own tolerance.
+    (
+        "fuzz: intersection 1e-7 above a face (s3 i114)",
+        "box 162.0 22.0 2.0 tool Intersect b 6.0 150.0 67.0 0.0 0.0 0.0 0.0 0.0 0.0 1e-7",
+    ),
+    // cad-kernel: a 0.02 thick plate intersected with a tool 0.001 above
+    // it, far from the origin; the volume is outside the enclosure.
+    (
+        "fuzz: thin plate intersection 1e-3 up, far away (s2 i101)",
+        "box 882.0 3.0 0.02 tool Intersect b 67.0 136.0 0.02 0.0 0.0 0.0 0.0 0.0 0.0 0.001 \
+         motion 0.0 0.0 0.0 0.0 73264.0 0.0 18316.0",
+    ),
+    // cad-kernel: a 0.03 square rod with a 0.026 hole along its corner,
+    // far from the origin; the mesh volume is half the stated volume.
+    (
+        "fuzz: hole along the corner of a thin rod far away (s1 i857)",
+        "box 0.03 0.03 69.0 hole 0.0 0.0 69.0 0.0 0.0 -1.0 0.026 69.0 nocb \
+         motion 0.0 0.0 0.0 0.0 6285032.0 -3142516.0 0.0",
+    ),
+    // cad-kernel: a 1 mm slab intersected with a turned 0.3 mm plate 1e-7
+    // off its side, away from the origin; the mesh volume is off the
+    // stated one by more than the chord's bound.
+    (
+        "fuzz: turned thin intersection 1e-7 off a side (s3 i547)",
+        "box 1.0 117.0 168.0 tool Intersect b 0.3 128.0 43.0 0.0 0.0 0.0 2.0 0.5 1e-7 0.0 \
+         motion 0.0 0.0 0.0 0.0 15653.0 0.0 0.0",
+    ),
+    // cad-kernel: panics ("a vertex at [1.7e12, ...]") fusing a cylinder
+    // turned 1e-9 rad onto a tall box.
+    (
+        "fuzz: cylinder turned 1e-9 rad fused to a box (s2 i730)",
+        "box 134.0 20.0 3754.0 tool Add c 100.0 2.0 -0.02 0.0 -1.0 -1e-9 0.0 0.0 0.0",
+    ),
+    // cad-kernel: a blind hole at a corner ending 1e-7 above the bottom
+    // face; shell steps land outside the reference.
+    (
+        "fuzz: blind hole leaving a 1e-7 floor (s2 i152)",
+        "box 2.0 2.0 64.0 hole 0.0 0.0 64.0 0.0 0.0 -1.0 2.0 63.9999999 nocb",
+    ),
+    // The cad-kernel adapter: both caps of a heptagon chamfered 0.3. The
+    // flat on one edge cut away the next picked edge, which the adapter
+    // then skipped (0.3 mm^3 too much material). The adapter now refuses.
+    (
+        "fuzz: heptagon chamfered on both caps (s4 i218)",
+        "prism 7 1.4 10.0 1.0 12.0 0.0 11.0 0.0 4.0 0.2 0.0 1.0 0.0 2.0 4.0 198.0 chamfer 0.3 Both",
+    ),
+    // cad-kernel: its own check finds the result invalid (a vertex 1.6e-6
+    // off its edge's curve).
+    (
+        "fuzz: intersection at the end of a long bar with a side hole (s2 i300)",
+        "box 1839.742847 10.0 15.0 tool Intersect b 31.0 0.3 177.0 0.0 0.0 0.0 0.0 1808.742846 0.0 0.0 \
+         hole 0.0 0.0 0.0 1.0 0.0 0.0 9.0 through nocb",
+    ),
+    // cad-kernel: its own check finds the result invalid (a pcurve 1.6e-9
+    // off its B-spline edge) for a small washer cut by a turned cylinder.
+    (
+        "fuzz: small washer and turned cylinder (s4 i801)",
+        "washer 0.1 0.09 22.0 tool Intersect c 0.03 0.04 0.0 -1.0 0.0 1.0 0.2 0.0 0.0",
+    ),
+    // cad-kernel: a 0.2 x 0.02 x 0.2 corner of a box 1e6 mm from the
+    // origin; its volume is 4.4e-4 relative above the certified enclosure
+    // (8.0035e-4 against at most 8.0000e-4). arris is correct.
+    (
+        "fuzz: tiny corner box far from the origin (s13 i455)",
+        "box 27.0 136.0 95.0 tool Intersect b 0.2 0.02 0.2 0.0 0.0 0.0 0.0 0.0 0.0 0.0 \
+         motion 0.0 0.0 0.0 0.0 0.0 -900032.0 450016.0",
+    ),
+    // arris: a cylinder inside a box, tangent to two of its sides, its
+    // base on the box's: the union is the box, and arris returns a solid
+    // its own check rejects ("loops 0 and 1 intersect") and cannot mesh.
+    (
+        "fuzz: cylinder tangent inside a box corner, fused (s14 i325)",
+        "cyl 0.3 1.0 tool Add b 19.0 34.0 29.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0",
+    ),
+    // cad-kernel: a tall box intersected with a small plate turned 0.4
+    // rad, 1e-5 off a side, at the top; its volume is 1.1e-2 relative off
+    // its own mesh's (4.7853 against 4.7305; arris says 4.7304).
+    (
+        "fuzz: turned plate intersected at the top of a tall box (s11 i337)",
+        "box 118.0 20.0 3482.0 tool Intersect b 1.0 10.0 2.0 1.0 0.0 0.0 0.4 1e-5 0.0 3480.0",
+    ),
+    // arris: a cylinder cut by a box turned 1e-4 rad; the mesh at chord
+    // 0.1 is open (2 bad directed edges). cad-kernel is correct.
+    (
+        "fuzz: cylinder cut by a box turned 1e-4 rad (s12 i128)",
+        "cyl 52.0 23.0 tool Subtract b 672.0 14.0 21.0 0.0 0.0 -1.0 -0.0001 0.0 0.0 0.0",
+    ),
+    // cad-kernel: a thin prism (0.1 wide at one end) with a side hole
+    // along it; 29 shell steps land outside the reference. arris refuses.
+    (
+        "fuzz: side hole along a thin prism (s11 i61)",
+        "prism 6 137.0 0.0 0.0 0.101768 0.0 0.1 0.0 0.0 70.0 0.0 136.0 0.0 1725.0 \
+         hole 0.0 0.055972 0.0 1.0 0.0 0.0 0.091591 61.0 nocb",
+    ),
+    // Both: a box intersected with a cylinder far from the origin; the
+    // volumes differ by more than 1e-9 relative and the fuzz enclosure
+    // could not say which is right.
+    (
+        "fuzz: cylinder intersection far from the origin (s2 i11)",
+        "box 182.0 1.0 55.0 tool Intersect c 67.0 72.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 \
+         motion 0.0 0.0 0.0 0.0 3633639.0 0.0 0.0",
+    ),
+];
+
 /// Pairs of recipes for the same solid (layer 5), with their parts.
 fn equivalences(corpus: &[PartCase]) -> (Vec<PartCase>, Vec<Relation>) {
     let named = |n: &str| corpus.iter().find(|p| p.name == n).cloned().expect(n);
@@ -1614,6 +1902,7 @@ pub fn catalogue() -> Catalogue {
     let (al_parts, al_rel) = algebra(&parts);
     parts.extend(al_parts);
     relations.extend(al_rel);
+    parts.extend(fuzz_findings());
     let names: std::collections::HashSet<&str> = parts.iter().map(|p| p.name.as_str()).collect();
     assert_eq!(names.len(), parts.len(), "part names must be unique");
     Catalogue {

@@ -347,7 +347,9 @@ bundle, so ogeom was dropped in 3D0a before anything with it landed.
   the backend below is a dev-dependency of cadview-core, used by the corpus
   tests only. The candidates are arris, another permissively licensed
   kernel, or one of our own. The rest of this document describes the plan
-  with arris in the kernel's place; read it as provisional.
+  with arris in the kernel's place; read it as provisional. The harness's
+  evidence on arris and a second candidate, cad-kernel, is in
+  [research/kernel-comparison.md](research/kernel-comparison.md).
 - **Reference backend: [arris](https://github.com/arris-labs/arris)**, pinned
   to `=0.11.1` (`MIT OR Apache-2.0`, pure Rust, no `unsafe`). Default
   features are off: no serde and no rayon, so it starts no threads, and it

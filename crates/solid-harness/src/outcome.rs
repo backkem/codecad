@@ -146,6 +146,11 @@ pub enum Layer {
     Shell,
     /// Layer 4: mesh invariants and volume convergence.
     Mesh,
+    /// The kernel's own validity check on every part (one or more valid
+    /// solids, or nothing where the reference is empty). Weaker evidence
+    /// than ours, but a kernel that calls its own result invalid has
+    /// returned a wrong solid.
+    Validity,
     /// Layer 5: equivalent constructions.
     Equivalence,
     /// Layer 6: algebra and motion.
@@ -155,11 +160,12 @@ pub enum Layer {
 }
 
 impl Layer {
-    pub const ALL: [Layer; 7] = [
+    pub const ALL: [Layer; 8] = [
         Layer::ClosedForm,
         Layer::Enclosure,
         Layer::Shell,
         Layer::Mesh,
+        Layer::Validity,
         Layer::Equivalence,
         Layer::Algebra,
         Layer::Continuity,
@@ -171,6 +177,7 @@ impl Layer {
             Layer::Enclosure => "enclosure",
             Layer::Shell => "shell",
             Layer::Mesh => "mesh",
+            Layer::Validity => "valid",
             Layer::Equivalence => "equiv",
             Layer::Algebra => "algebra",
             Layer::Continuity => "continuity",

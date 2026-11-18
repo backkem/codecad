@@ -123,18 +123,22 @@ pub fn compare<K: SolidKernel>(
                     d / scale
                 )));
             }
-            // Centroid.
-            let ca = map.forward(ma.centroid);
-            let tol = match &b.bbox {
-                Ok(bb) => POSITION_REL_TOL * (1.0 + diag(bb)),
-                Err(_) => POSITION_REL_TOL,
-            };
-            let e = ca.max_abs_diff(mb.centroid);
-            if e > tol {
-                parts.push(Verdict::wrong(format!(
-                    "centroids differ by {e:.1e} mm: {:?} mapped vs {:?}",
-                    ca, mb.centroid
-                )));
+            // Centroid, when the kernel computes one.
+            match (ma.centroid, mb.centroid) {
+                (Some(ca), Some(cb)) => {
+                    let ca = map.forward(ca);
+                    let tol = match &b.bbox {
+                        Ok(bb) => POSITION_REL_TOL * (1.0 + diag(bb)),
+                        Err(_) => POSITION_REL_TOL,
+                    };
+                    let e = ca.max_abs_diff(cb);
+                    if e > tol {
+                        parts.push(Verdict::wrong(format!(
+                            "centroids differ by {e:.1e} mm: {ca:?} mapped vs {cb:?}"
+                        )));
+                    }
+                }
+                _ => parts.push(Verdict::na("no centroid from the kernel")),
             }
         }
         (Err(f), _) | (_, Err(f)) => parts.push(fail_verdict(f)),
@@ -188,6 +192,22 @@ pub fn membership<B>(a: &PartRun<B>, b: &PartRun<B>, map: Map, seed_name: &str) 
         (Ok(x), Ok(y)) => (x, y),
         (Err(v), _) | (_, Err(v)) => return v,
     };
+    membership_meshes(ma, mb, map, seed_name, (&a.case.name, &b.case.name))
+}
+
+/// [`membership`] on two closed meshes at [`MEMBERSHIP_CHORD`], `names`
+/// saying whose they are (also used by the fuzzer to compare two kernels'
+/// meshes of one recipe).
+pub fn membership_meshes(
+    ma: &TriMesh,
+    mb: &TriMesh,
+    map: Map,
+    seed_name: &str,
+    names: (&str, &str),
+) -> Verdict {
+    if !(topology(ma).closed && topology(mb).closed) {
+        return Verdict::na("a mesh is not closed, membership not compared");
+    }
     let (lo, hi) = crate::mesh::aabb(mb);
     let grow = [0, 1, 2].map(|i| 0.05 * (hi[i] - lo[i]) + 1e-3);
     let (ga, gb) = (Grid::new(ma), Grid::new(mb));
@@ -221,9 +241,9 @@ pub fn membership<B>(a: &PartRun<B>, b: &PartRun<B>, map: Map, seed_name: &str) 
                     x[0],
                     x[1],
                     x[2],
-                    a.case.name,
+                    names.0,
                     if ra != 0.0 { "inside" } else { "outside" },
-                    b.case.name,
+                    names.1,
                     if rb != 0.0 { "inside" } else { "outside" }
                 ));
             }

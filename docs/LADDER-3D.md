@@ -28,6 +28,8 @@
   - exact planar sections, edge projection to exact 2D curves and exact ray hits, but **no built-in HLR**: the HLR adapter of design §7.3 is ours for every backend;
   - no threads and no process-wide state; core with arris checks for wasm32 (its wasm size and speed are measured in 3D0b).
 
+  The harness's evidence on arris and cad-kernel 0.15.0, side by side, is in [research/kernel-comparison.md](research/kernel-comparison.md); the choice stays open.
+
   Truck runs the same corpus as a differential check. vcad degraded to triangle soup after a fillet. csgrs failed box-minus-cylinder and does not resolve from crates.io. arris is about two months old with one author. That risk is handled with an exact pin, the trait, the corpus, and the right to vendor it (MIT/Apache) (design §5).
 - **Selections are semantic, never kernel ids.** Edges are named by `(feature, cap or lateral, profile segment)` or by nearest point, and resolved through the kernel's operation history. A selector that stops resolving is an error, never a silent re-pick.
 - **Roundovers are exact by default.** If the kernel refuses (interfering chains), `fallback: "visual"` gives a render-only bevel plus a 2D note. Every fallback is listed in `cad.parts()[i].degraded`.

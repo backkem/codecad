@@ -13,13 +13,16 @@
 //!   enclosure, boundary shell test, mesh invariants, equivalent
 //!   constructions, algebra and motion, continuity sweeps) and the runner.
 //! - [`cases`]: the catalogue of solids, relations and sweeps.
-//! - [`kernels`]: the adapters under test (arris) and the broken wrappers
+//! - [`fuzz`]: the fuzzer's generator, judge, shrinker and case printer
+//!   (the driver is `examples/fuzz.rs`, a development-time tool).
+//! - [`kernels`]: the adapters under test (arris, cad-kernel) and the broken wrappers
 //!   that test the harness itself.
 //! - [`scoreboard`]: the committed per-kernel file and its ratchet.
 //!
 //! This crate is a test tool. No shipped crate may depend on it.
 
 pub mod cases;
+pub mod fuzz;
 pub mod interval;
 pub mod kernels;
 pub mod layers;

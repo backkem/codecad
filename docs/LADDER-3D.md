@@ -496,6 +496,164 @@ What each simplifies is listed in 3d-examples.md.
   renders per example take 0.36 to 0.56 s together, the GPU device's
   creation included. Two runs give byte-identical PNGs.
 
+### 3D1b: what landed (2026-11-18)
+
+Checks between parts, and three fixes the gallery asked for. Reference:
+`docs/api-surface.md`, "Solid parts" and "Checks between parts". Not
+landed from the row above: tapered extrude (still refused) and the turned
+leg by `revolve` against its corpus volume (the corpus gate covers it on
+the trait; no API test was added).
+
+- **Evaluation is no longer quadratic.** The cache continues a definition
+  from its longest cached prefix of features (`Solids::solid`, keyed by
+  the prefix's features and the tools they reach) through a new optional
+  `SolidKernel::evaluate_from`, whose default evaluates from scratch. arris
+  continues on a copy of the prefix's model: a model is append-only with
+  ids minted in order, so the copy holds what a from-scratch run holds at
+  that point, the copy shares storage, and the result is the same B-rep.
+  Evidence: volume, centroid, box and mesh bit for bit against from
+  scratch on the enclosure base, a bookshelf side and a cross-bored
+  revolve (`cadview-solid/tests/checks.rs`), and on every evaluated prefix
+  of the harness catalogue (88 continuations equal, 21 refused alike,
+  `solid-harness/tests/capabilities.rs`). Enclosure example (release
+  server, headless, no renders): build 9.2 s before, 3.4 s after; its
+  20-call base 7.7 s before (calls growing from 9 to 944 ms), 2.5 s after
+  (9 to 218 ms). The piston 2.9 to 1.8 s. What a call still costs grows
+  with the part, not with its feature count: on the finished base, the
+  feature's own boolean 57 ms, the kernel's full validity check of the
+  result 71 ms, the volume integral 23 ms.
+- **Parts where two cylinders meet have boxes.** A new optional
+  `SolidKernel::bbox_within(brep, frame, tol) -> TightBox {aabb, tol}`
+  (default: the exact `bbox`); `bbox` stays exact-or-refused, so the
+  harness demands exact boxes as before and both scoreboards came out
+  byte-identical. arris brackets each NURBS edge's extremes: the curve
+  over a parameter range lies in the box of its segment's control points
+  (positive weights, knot insertion), pieces are halved until no control
+  box reaches more than the tolerance past the curve points found, and
+  boxes are padded for rounding. Parts report `bboxTol` (0 exact, else
+  1e-9 mm). Cross-bored cylinder: box off its closed form by 4.6e-10 mm;
+  two crossing cylinders (sides decided by the intersection curves)
+  5.2e-10 mm; a bored tee exact (its NURBS edges lie inside). A second
+  through hole on a cross-bored part works too (the hole's reach uses
+  the bracketed box). Catalogue: 236 boxes equal to the exact one with
+  tolerance 0, 2 bracketed. NURBS faces still have no box.
+- **Checks between parts** (`cadview-core/src/setquery3d.rs`):
+  `overlapping3d`, `pairsWithin3d`, `inside3d`, `distance3d`, named after
+  the 2D set queries with the part calls' `3d`, the same options (`differ`,
+  `attrs`, `limit`, `strict`) and `skipped` for pairs the kernel cannot
+  answer. A sweep-and-prune broad phase on world boxes; the kernel answers
+  candidates through new optional `distances` and `interferences` (arris:
+  every solid copied once into one scratch model, `query::distance` on the
+  exact carriers, `common` measured on its exact faces, and `V(a) - V(a -
+  b)` where `common` refuses). Gate: a shelf 2 mm too long gives exactly
+  one record, the right side and that shelf, 10584.000000000004 mm^3 against
+  10584 (3.4e-16 relative); the correct bookshelf gives none; two parallel
+  plates 3.5 apart come back 3.5 exactly, two shelves their 326.4 opening
+  to 1e-9. A hundred blocks: `overlapping3d` 26 ms, `pairsWithin3d` 0.7 s
+  (182 pairs), `inside3d` with a box 0.5 ms.
+- **`mirror3d`** makes a mirrored definition (a reflection is not a rigid
+  motion): every definition mirrors across its own YZ plane, so all images
+  of one definition share one mirrored definition, placed by `M P S`;
+  mirroring back finds the original definition.
+- **`near` at a seam.** The seam won because the point at +x of a revolve's
+  sketch lies on the circular edge and on the revolve's seam at once (they
+  meet there), at distance 0 to both, and the seam came first. Seams (both
+  sides one face) are never picked now, and among equally near edges one
+  the point lies inside beats one it meets at an end vertex. The flange's
+  chamfer near (82.5, 0, 18) gives its Pappus volume.
+- **Examples.** 03 and 11 check, through the new calls, that no two parts
+  overlap (none found in either), that every shelf touches both sides, the
+  shelf gap, and that the swing beam rests on the head rail and both legs.
+  They use the typed calls. The server test runs them and the ladder gate
+  through the script entry. The play tower gained a gabled timber roof
+  (27 parts: wall plates, rafters seated with a birdsmouth cut by the
+  plate, a ridge board, butted roof boards, ridge caps; 63 parts in all),
+  checked the same way: no overlaps, every rafter on a plate and the ridge,
+  and 328.8 mm from the swing beam to the nearest rafter, to its closed
+  form. Its committed picture changed.
+- **Open.** A shelf lengthened by `union` (its end face split by an edge
+  lying in the dado's bottom face) is a contact arris refuses for `common`
+  and both cuts: that pair lands in `skipped`. No `nearest3d`, no point
+  operand for `distance3d`, no interference against NURBS faces (arris
+  refuses those, so they are skipped). Example 05 still uses square pin
+  bosses; the box limit that forced them is gone.
+
+### 3D5a, first slice: what landed (2026-11-18)
+
+`cad.render({ quality: "presentation" })` path traces the document's parts:
+the same scene, camera and options as the working render, headless and
+deterministic, on the shared GPU device with plain compute shaders (no
+ray-tracing extensions). The browser viewport, `cad.view3d`, the perf
+harness, the denoiser, HDRI environments, texture sets and the look gate
+(3D5b) are still open.
+
+- **Origin.** A tracer of our own, not a fork of Kiss3d's: its kernel loses
+  sky light (an environment it never samples is weighted by multiple
+  importance sampling anyway) and its diffuse sampling and evaluation
+  disagree, so a fork would have meant rewriting the sampling core. The
+  evidence and what was given up are in design §9, "Decision update
+  (2026-11-18, 3D5a)". No code is derived from it; no new dependencies.
+- **Backend.** `PathTracer` (`cadview-render3d/src/trace.rs`, `trace.wgsl`,
+  `resolve.wgsl`) behind `Renderer3d`, progressive (`Partial` until the
+  target), with a two-level BVH (`bvh.rs`: binned SAH per mesh, instances
+  for shared meshes), next-event estimation of the sun with the power
+  heuristic, Russian roulette, a luminance clamp on indirect light only,
+  and the core's tone curve. `render_rgba_stats` and `render_radiance`
+  expose its statistics and its linear radiance.
+- **Core.** `Material` gains transmission, index of refraction, emission,
+  a clear coat and a `Pattern` without texture coordinates: `Bands`
+  (rings about an axis: wood grain) and `Brushed` (streaks along an axis or
+  in circles about it, anisotropic highlights). Axes can be the part's
+  longest, shortest or symmetry axis (principal axes of its surface), so
+  presets need not know how a part was modelled. `Environment` (a dome of
+  zenith, horizon and ground colours plus a `Sun` of adjustable direction,
+  frame and size), presets `studio` (default) and `sky`, and `exposure` in
+  stops. The working render ignores all of these except colour, metallic and
+  roughness.
+- **Options.** `quality`, `spp` (default 1024), `seed`, `materials: {attr,
+  map, default}` (attribute values to physical parameters, like `colorBy`),
+  `environment` and `exposure`; the result reports `samples` and a `trace`
+  block (passes, triangles, BVH, upload, trace and PNG times).
+  `examples/3d/lib/materials.js` holds the names: oak, walnut, ply,
+  timber, steel, stainless, aluminium, turned steel and aluminium, brass,
+  glass, pcb, plastics, paints, rubber.
+- **Evidence** (`cargo test -p cadview-render3d --test present`, one GPU
+  machine). Furnace, white objects in a uniform environment of radiance 1,
+  256 spp: a Lambert block with a pocket 0.99851, a smooth glass sphere
+  0.99991, a mirror sphere 0.99992 (tolerance 0.5 %). A Lambert plate under
+  a uniform upper hemisphere against `rho (1 + cos tilt) / 2`: -0.00, -0.05
+  and +0.09 % at 0, 60 and 90 degrees; under a small sun against the cosine
+  law: -0.00 % at 0 and 60 degrees (tolerance 1 %). Ground under a box in
+  the sun 5.5 times darker than open ground (threshold 4); open ground
+  0.4356 against the closed form 0.4353 (tolerance 2 %). A 20 mm glass slab
+  tilted 45 degrees moves an edge by 13.169 px against the closed form
+  13.166 px (tolerance 0.1 px). Same seed, same bytes; another seed,
+  different bytes. Error against a 4096-sample reference at 16, 64, 256 spp
+  falls by 2.04 and 1.94 (one over the square root of the samples). The
+  silhouette covers the working render's pixels within 0.03 to 0.16 px per
+  outline pixel over a box and a sphere in three views (tolerance 0.25), no
+  pixel flipped. The tracer's albedo equals the core's pattern to a median
+  of 0.0004. The clamp moves a studio scene's mean by -0.08 %; a glass
+  sphere in sunlight loses its caustic (-6.6 % of the mean, reported).
+- **Examples** (release, 960 x 640, 1024 spp, studio light, the
+  development machine's discrete GPU). Tracing 1.16 s (bracket) to 2.37 s
+  (enclosure with the lid lifted); BVH builds 0.1 to 3.3 ms, uploads under
+  1 ms, PNG encoding 4 to 7 ms; pipelines compile once per process (about
+  0.3 s on a cold driver cache). The bookshelf reaches 256 spp in 0.5 s
+  here, against the 3D5a aim of 30 s on a mid-range GPU in Chrome; the gate
+  itself is a browser measurement and is not claimed. Noise against
+  4096-sample references, root mean square in 8-bit levels: 1.1 to 2.9 at
+  256 spp, 0.7 to 1.6 at 1024 (the reference's own noise included). What
+  each example still lacks is in [3d-examples.md](3d-examples.md).
+- **Open.** A denoiser (deterministic, e.g. a-trous on albedo and normal
+  guides). HDRI environments (reading Radiance `.hdr` is a small decoder,
+  but sampling one well needs a 2D distribution and a third light strategy).
+  Image textures and Poly Haven sets (assets, a manifest, UVs from the
+  kernel). Next-event estimation of emissive surfaces (they are reached by
+  BSDF sampling only). Caustics from small lights (clamped away).
+  Low-discrepancy sampling (independent random numbers today). The look
+  gate against Cycles (3D5b). Examples 9 and 10.
+
 ## Risks
 
 - **arris is about two months old with one maintainer, and breaks its API every minor release (pre-1.0).** ogeom, the first choice, changed its licence within weeks. The mitigations are an exact pin on a permissive release, the Truck differential corpus from 3D0b onward, the right to vendor, and documents that store no kernel data. If arris stalls before 3D3a, `TruckKernel` plus our own HLR adapter and closed-form silhouettes carry 3D0–3D3 (the HLR adapter is ours in any case, since arris has no HLR). Roundovers then drop to `fallback: "visual"` until a kernel can do them.

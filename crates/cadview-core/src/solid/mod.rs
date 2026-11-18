@@ -34,6 +34,8 @@ pub mod types;
 mod fake;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_checks;
 
 pub use eval::{Evaluator, KernelEvaluator, SolidEnv};
 pub use kernel::{

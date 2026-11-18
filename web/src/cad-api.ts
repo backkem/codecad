@@ -260,8 +260,13 @@ export interface RenderOptions {
   backend?: "auto" | "gpu" | "cpu";
   /** Device pixels per CSS pixel; scales size and stroke width. Default 1. */
   pixelRatio?: number;
-  /** Samples per pixel for future path-traced renders; ignored today. */
+  /**
+   * 3D presentation renders: samples per pixel (1 to 65536). Default 1024,
+   * which leaves noise only inside polished metal bores at 960 x 640.
+   */
   spp?: number;
+  /** 3D presentation renders: seed of the random numbers. Default 0; the same scene, spp and seed give the same bytes. */
+  seed?: number;
 
   // ── 3D: the document's solid parts (server with a kernel and a GPU) ──
   /**
@@ -301,7 +306,12 @@ export interface RenderOptions {
   edges?: boolean;
   /** Ambient occlusion: true (default), false, or a strength 0..1. */
   occlusion?: boolean | number;
-  /** A ground with a contact shadow: true, or {height?, color?}. Default none. */
+  /**
+   * A ground: true, or {height?, color?}. Default none. The working render
+   * shows its contact shadow; the presentation render makes it an endless
+   * floor (colour = albedo, default the background's) that takes shadows
+   * and bounce light.
+   */
   ground?:
     | boolean
     | { height?: number; color?: [number, number, number] | string };
@@ -319,8 +329,104 @@ export interface RenderOptions {
   explode?: number | { factor?: number; axes?: string };
   /** Tessellation chord in mm. Default: a quarter pixel, as a power of two. */
   chord?: number;
-  /** "working" (default). "presentation" is not available yet. */
+  /**
+   * "working" (default): shaded raster with edges, milliseconds.
+   * "presentation": path traced (global illumination, soft shadows,
+   * materials), the same scene, camera and options; `spp` sets its quality.
+   * It draws no edge lines or ambient occlusion (the light does that).
+   */
   quality?: "working" | "presentation";
+  /**
+   * Physical materials by attribute value, like `colorBy`: parts whose
+   * attribute `attr` has a value in `map` get that material, others get
+   * `default` (if given) over their `colorBy` colour. The names are the
+   * script's (`examples/3d/lib/materials.js` has presets). The working
+   * render uses only `color`, `metallic` and `roughness`.
+   */
+  materials?: {
+    attr?: string;
+    map?: Record<string, MaterialSpec>;
+    default?: MaterialSpec;
+  };
+  /**
+   * Presentation renders: the light. "studio" (default: a grey dome and a
+   * soft key light that follows the camera) or "sky" (daylight, a sharp
+   * sun), or an object to adjust one. Colours are sRGB.
+   */
+  environment?:
+    | "studio"
+    | "sky"
+    | {
+        preset?: "studio" | "sky";
+        zenith?: [number, number, number] | string;
+        horizon?: [number, number, number] | string;
+        /** Below the horizon (a `ground` covers it). */
+        ground?: [number, number, number] | string;
+        /** Scales dome and sun together. Default 1. */
+        intensity?: number;
+        /** A distant disc light, or false for none. */
+        sun?:
+          | false
+          | {
+              /** Toward the light; a world direction unless `frame` is "camera" (x right, y up, z toward the viewer). */
+              direction?: Point3;
+              frame?: "world" | "camera";
+              /** Angular diameter in degrees: 0.53 the real sun, 10 to 30 a soft box. */
+              angle?: number;
+              /** Irradiance on a surface facing the light. */
+              irradiance?: number;
+              color?: [number, number, number] | string;
+            };
+      };
+  /** Presentation renders: exposure in stops (+1 doubles the light). Default 0. */
+  exposure?: number;
+}
+
+/**
+ * Physical parameters of one material. Every field is optional; a missing
+ * `color` keeps the part's `colorBy` colour.
+ */
+export interface MaterialSpec {
+  /** sRGB base colour. */
+  color?: [number, number, number] | string;
+  /** 0 dielectric, 1 metal. */
+  metallic?: number;
+  /** 0 mirror to 1 fully rough. Default 0.5. */
+  roughness?: number;
+  /** 0 to 1: light passing through as through glass. */
+  transmission?: number;
+  /** Index of refraction, 1 to 3. Default 1.5 (1 has no specular reflection). */
+  ior?: number;
+  /** Emitted light: a strength (white), or a colour and strength. */
+  emission?:
+    | number
+    | { color?: [number, number, number] | string; strength?: number };
+  /** A clear coat (lacquer, gloss paint), 0 to 1, and its roughness. */
+  clearcoat?: number;
+  clearcoatRoughness?: number;
+  /**
+   * A pattern without texture coordinates, in the part's own frame.
+   * "bands": rings about an axis, seen as grain along it (wood).
+   * "brushed": streaks along the axis, or in circles about it with
+   * `circular` (turned metal), and highlights stretched across them.
+   * `axis`: "long" (default, the part's longest direction), "short",
+   * "symmetry" (a turned part's axis) or a vector.
+   */
+  pattern?: {
+    kind: "flat" | "bands" | "brushed";
+    axis?: "long" | "short" | "symmetry" | Point3;
+    /** bands: mm between rings (default 4); ring colour; 0..1 strength; mm of wander; mm from the part's centre to the ring axis. */
+    spacing?: number;
+    color?: [number, number, number] | string;
+    strength?: number;
+    warp?: number;
+    distance?: number;
+    /** brushed: 0..1 stretch of highlights; 0..1 streak contrast; mm streak width; circles about the axis. */
+    anisotropy?: number;
+    streaks?: number;
+    scale?: number;
+    circular?: boolean;
+  };
 }
 
 export interface ClipPlane {
@@ -339,10 +445,25 @@ export interface RenderResult {
   ms: number;
   /** 3D renders only. */
   mode?: "3d";
+  quality?: "working" | "presentation";
   parts?: number;
   triangles?: number;
   chord?: number;
   kernel?: string;
+  /** Presentation renders: samples per pixel reached, and where the time went (ms). */
+  samples?: number;
+  trace?: {
+    samples: number;
+    passes: number;
+    instances: number;
+    /** Triangles traced (each shared mesh once). */
+    triangles: number;
+    meshesBuilt: number;
+    bvhMs: number;
+    uploadMs: number;
+    traceMs: number;
+    pngMs: number;
+  };
 }
 
 // ── Solid parts ──────────────────────────────────────────────────────
@@ -415,6 +536,12 @@ export interface PartJson {
   /** With a kernel: tight box in the world and in the part's own frame. */
   bbox?: { min: Point3; max: Point3 };
   localBbox?: { min: Point3; max: Point3 };
+  /**
+   * With a kernel: 0 when both boxes are exact; otherwise each side lies at
+   * most this far (mm) outside the solid (where an edge has no exact box,
+   * as where two cylinders meet).
+   */
+  bboxTol?: number;
   /** With a kernel: exact volume (mm^3) and centroid (world). */
   volume?: number;
   centroid?: Point3 | null;
@@ -454,6 +581,64 @@ export type EdgeSel =
 /** Positions in world coordinates (default) or in the part's own frame. */
 export interface FrameOpts {
   frame?: "world" | "local";
+}
+
+/** Options of the pair queries between parts, as in 2D. */
+export type PartPairOpts = PairOpts;
+
+/** A pair of parts, as the 3D set queries report it. */
+export interface PartPairBase {
+  a: string;
+  b: string;
+  aAttrs?: Attrs;
+  bAttrs?: Attrs;
+}
+
+/** Two parts that share volume (or touch, with `touching: true`). */
+export interface OverlapPair extends PartPairBase {
+  /** The shared volume (mm^3), 0 for a touch. */
+  volume: number;
+  /** The shared volume over the largest face of the box both parts' boxes share: the penetration depth for box-shaped overlaps. */
+  depth?: number;
+  /** a lies wholly in b; b wholly in a. */
+  aInB?: boolean;
+  bInA?: boolean;
+  /** The pair touches and shares no volume. */
+  touching?: boolean;
+  /** A point of the contact. */
+  at?: Point3;
+}
+
+/** Two parts and the closest points between them. */
+export interface GapPair extends PartPairBase {
+  /** 0 when they touch or overlap. */
+  distance: number;
+  pa: Point3;
+  pb: Point3;
+}
+
+export interface PartInsidePair {
+  a: string;
+  /** The part whose solid holds a; null for a box region. */
+  b: string | null;
+  aAttrs?: Attrs;
+  bAttrs?: Attrs;
+  /** Box regions: a touches the box's boundary. */
+  touches?: boolean;
+}
+
+export interface PartSetResult<P> {
+  pairs: P[];
+  /** Pairs the kernel could not answer, with the reason: no rule passes silently on them. */
+  skipped: { a: string; b: string; reason: string }[];
+  /** More pairs than `limit` (default 100 000). */
+  truncated?: boolean;
+}
+
+function normalizeParts(
+  t: PartTarget | null | undefined,
+): string | string[] | PartSelector | null {
+  return t == null ? null : normalizePartTarget(t);
 }
 
 function partRef(p: PartRef): string {
@@ -837,6 +1022,28 @@ export function buildCadApi({
       call("copy3d", { target: normalizePartTarget(t), ...opts }) as
         | PartJson
         | PartJson[],
+    /**
+     * Mirror parts across the plane through `point` (default the origin)
+     * with `normal`. A mirror image is not a rigid motion, so a mirrored part
+     * places a mirrored definition, made once per definition and shared by
+     * every part mirrored from it (a copy, not a live link: later edits of
+     * the original do not reach it). In place by default ({mirrored,
+     * defsMade, defsRemoved}); copy: keep the originals and return the
+     * images (one part in: one part out).
+     */
+    mirror3d: (
+      t: PartTarget,
+      opts: {
+        point?: Point3;
+        normal: Point3;
+        copy?: boolean;
+        attrs?: Record<string, AttrValue | null>;
+      },
+    ) =>
+      call("mirror3d", { target: normalizePartTarget(t), ...opts }) as
+        | PartJson
+        | PartJson[]
+        | { mirrored: string[]; defsMade: string[]; defsRemoved: string[] },
     /** Remove parts; definitions no part uses any more (directly or as a tool) go too. */
     remove3d: (t: PartTarget) =>
       call("remove3d", { target: normalizePartTarget(t) }) as {
@@ -875,6 +1082,68 @@ export function buildCadApi({
         features: unknown[];
         parts: string[];
         tools: string[];
+      },
+
+    // Set queries between parts: the 2D set queries' names plus "3d", whole
+    // selections in one call, on the exact solids (needs a kernel). A pair
+    // the kernel cannot answer is listed in `skipped`.
+    /**
+     * Every pair of a part of a and one of b (b null: pairs within a) that
+     * shares volume, with the shared volume (interference). A shared solid
+     * thinner than `tolerance` (mm, default 1e-6) is a touch; touching: also
+     * list touching pairs (volume 0).
+     */
+    overlapping3d: (
+      a: PartTarget | null,
+      b?: PartTarget | null,
+      opts: PartPairOpts & { tolerance?: number; touching?: boolean } = {},
+    ) =>
+      call("overlapping3d", {
+        a: normalizeParts(a),
+        b: normalizeParts(b),
+        ...opts,
+      }) as PartSetResult<OverlapPair>,
+    /** Every pair strictly closer than `distance` (clearance), with the distance and closest points. */
+    pairsWithin3d: (
+      a: PartTarget | null,
+      b: PartTarget | null | undefined,
+      distance: number,
+      opts: PartPairOpts = {},
+    ) =>
+      call("pairsWithin3d", {
+        a: normalizeParts(a),
+        b: normalizeParts(b),
+        distance,
+        ...opts,
+      }) as PartSetResult<GapPair>,
+    /**
+     * The parts of a inside a box {min, max} (touching its boundary counts
+     * unless strict), or inside the solid of each part of a selection.
+     */
+    inside3d: (
+      a: PartTarget | null,
+      region: { min: Point3; max: Point3 } | PartTarget,
+      opts: PartPairOpts & { strict?: boolean } = {},
+    ) =>
+      call("inside3d", {
+        a: normalizeParts(a),
+        region:
+          region &&
+          typeof region === "object" &&
+          "min" in region &&
+          "max" in region
+            ? region
+            : normalizeParts(region as PartTarget),
+        ...opts,
+      }) as PartSetResult<PartInsidePair>,
+    /** The distance between two parts and the closest points (0 when they touch or overlap). */
+    distance3d: (a: PartRef, b: PartRef) =>
+      call("distance3d", { a: partRef(a), b: partRef(b) }) as {
+        a: string;
+        b: string;
+        distance: number;
+        pa: Point3;
+        pb: Point3;
       },
 
     // Topology

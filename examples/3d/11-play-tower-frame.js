@@ -6,19 +6,29 @@
 // beam 90 x 140 whose underside is 2300 above the ground, running from a
 // head rail between the tower's right-hand posts out to an A-frame of two
 // 90 x 90 legs with a tie, and stairs up the left side (two 45 x 195
-// stringers, seven 28 mm treads). 36 parts in 12 definitions: repeated
-// members are copies of one definition.
+// stringers, seven 28 mm treads). Over the platform a gabled timber roof,
+// pitch 35 degrees, ridge along x: two 45 x 95 wall plates on the posts
+// (160 past them at the gable ends), four pairs of 45 x 95 rafters (150
+// past the plates at the eaves), a 45 x 145 ridge board, seven 22 mm roof
+// boards a side butted with 5 mm gaps, and two ridge caps. 63 parts in 17
+// definitions: repeated members are copies of one definition.
 //
 // The deck boards at the front and back are notched round the posts with
 // cut(board, {part: post}); the back one is the front one turned half a
-// turn, so they share a definition. The angled members (legs, stringers)
-// are built square to their length and cut level and plumb by
-// intersecting them with a box (lib/shapes.js, member and keep).
+// turn, so they share a definition, and so does the back half of the roof.
+// The angled members (legs, stringers, rafters) are built square to their
+// length and cut level and plumb by intersecting them with a box
+// (lib/shapes.js, member and keep); a rafter's seat on its plate is cut
+// with the plate itself. The roof boards are butted, not lapped, so that
+// every contact is a face the overlap check reads as a touch (lapped
+// boards would touch each other and the rafters along lines).
 //
-// Not here yet (later rungs): the cabin, roof, railings, sandbox, slide,
-// swings and fixings; the clearance rules (free space round the swings,
-// head and finger traps, railing heights) and the check that no two parts
-// overlap, which need interference and distance queries between parts.
+// The checks ask the kernel that no two parts overlap, that the swing beam
+// rests on the head rail and both A-frame legs, that every rafter rests on
+// a plate and the ridge, and how far the roof clears the swing beam. Not
+// here yet: the cabin, railings, sandbox, slide, swings and fixings, and
+// the clearance rules (free space round the swings, head and finger traps,
+// railing heights), which are script rules over the same queries.
 //
 // x = left to right (the swing beam runs out along +x), y = front to
 // back (front at y = 0), z = up.
@@ -45,7 +55,7 @@ const LEG = 90, LEG_SPREAD = 960, LEG_TOP = 60;   // feet and heads off the cent
 const TIE = { t: 45, h: 100, z: 1050, half: 570 };
 const STAIR = { width: 800, rises: 8, going: 200, nose: 20, stringer: [195, 45] };
 
-const timber = (member, extra = {}) => ({ name: member, attrs: { member, ...extra } });
+const timber = (member, extra = {}) => ({ name: member, attrs: { member, material: "timber", ...extra } });
 const mid = SIZE / 2;
 
 // ── Posts ────────────────────────────────────────────────────────────
@@ -112,12 +122,71 @@ const stringer = member(sFoot, sHead, [sd, st], { over: sd, ...timber("stringer"
 keep(stringer, [null, null, 0], [0, null, DECK]);
 cad.copy3d(stringer, { move: [0, STAIR.width + st, 0] });
 
+// ── Roof: wall plates, rafters, a ridge board, roof boards, ridge caps ─
+// A gable over the platform, the ridge along x at y = mid, both slopes at
+// ROOF.pitch. Everything on the back slope is the front's copy turned half
+// a turn about the platform's centre, so it shares the front's definitions.
+const ROOF = { pitch: 35, plate: [45, 95], rafter: [95, 45], ridge: [45, 145],
+  board: { t: 22, n: 7, gap: 5 }, cap: { t: 22, w: 100 }, overhang: 160, eave: 150 };
+const th = ROOF.pitch * PI / 180, tn = Math.tan(th), cs = cos(th), sn = Math.sin(th);
+const half = { rotate: { angle: 180, about: [mid, mid, 0] } };
+// Wall plates on edge, centred on the posts, overhanging the posts at the
+// gable ends.
+const [pw, ph] = ROOF.plate;
+const plateY = POST / 2 - pw / 2, zp = POST_H + ph;
+const X0 = -ROOF.overhang, X1 = SIZE + ROOF.overhang;
+const plate = box([X0, plateY, POST_H], [X1, plateY + pw, zp], timber("wall plate", { section: "45x95" }));
+cad.copy3d(plate, half);
+// Rafters: the underside runs through the plate's inner top edge; cut plumb
+// at the eave (ROOF.eave beyond the plate) and against the ridge board; a
+// birdsmouth seat cut with the plate itself.
+const [ra, rb] = ROOF.rafter, [rgT, rgD] = ROOF.ridge;
+const yIn = plateY + pw, yEave = plateY - ROOF.eave, yHead = mid - rgT / 2;
+const under = (y) => zp + (y - yIn) * tn;       // rafter underside
+const depthV = ra / cs;                          // rafter depth, measured vertically
+const top = (y) => under(y) + depthV;            // rafter top
+const rx0 = X0 + 10 + rb / 2;                    // first rafter's centre (x)
+const rPitch = (X1 - X0 - 20 - rb) / 3;          // four pairs, the outer ones at the plate ends
+const onAxis = (y) => under(y) + depthV / 2;
+const rafter = member([rx0, yEave, onAxis(yEave)], [rx0, yHead, onAxis(yHead)], [ra, rb],
+  { over: ra, ...timber("rafter", { section: "45x95" }) });
+keep(rafter, [null, yEave, null], [null, yHead, null]);
+cad.cut(rafter, { part: plate });
+cad.copy3d(rafter, { move: [rPitch, 0, 0], count: 3 });
+cad.copy3d(cad.parts({ attrs: { member: "rafter" } }), half);
+// The ridge board between the rafter heads, its top 20 below the rafters'.
+const ridgeTop = top(yHead) - 20;
+const ridge = box([X0 + 10, yHead, ridgeTop - rgD], [X1 - 10, mid + rgT / 2, ridgeTop], timber("ridge", { section: "45x145" }));
+// Roof boards, butted with a gap, eave to ridge on the rafters' top face.
+const RB = ROOF.board;
+const S = (yHead - yEave) / cs;                  // slope length of the rafters' top
+const bWid = (S - (RB.n - 1) * RB.gap) / RB.n;
+const BX0 = X0 - 10, BX1 = X1 + 10;
+const roofBoard = box([BX0, 0, 0], [BX1, bWid, RB.t], timber("roof board", { section: `22x${Math.round(bWid)}` }));
+cad.rotate3d(roofBoard, { angle: ROOF.pitch, axis: [1, 0, 0] });
+cad.move3d(roofBoard, [0, yEave, top(yEave)]);
+const up = RB.gap + bWid;
+cad.copy3d(roofBoard, { move: [0, up * cs, up * sn], count: RB.n - 1 });
+cad.copy3d(cad.parts({ attrs: { member: "roof board" } }), half);
+// Ridge caps on the top boards, cut plumb where they meet at y = mid.
+const RC = ROOF.cap;
+const yE2 = yEave - RB.t * sn, zE2 = top(yEave) + RB.t * cs;   // eave edge of the boards' top face
+const s0 = S - RC.w;                                           // the cap's lower edge, up that face
+const sCut = (t) => (mid - yE2 + t * sn) / cs - s0;            // to the plumb cut, at t above the boards
+const cap = box([BX0, 0, 0], [BX1, sCut(RC.t) + 20, RC.t], timber("ridge cap", { section: "22x100" }));
+cad.rotate3d(cap, { angle: ROOF.pitch, axis: [1, 0, 0] });
+cad.move3d(cap, [0, yE2 + s0 * cs, zE2 + s0 * sn]);
+keep(cap, [null, null, null], [null, mid, null]);
+cad.copy3d(cap, half);
+const roofTop = zE2 + (s0 + sCut(RC.t)) * sn + RC.t * cs;     // where the caps meet, on top
+
 // ── Checks ───────────────────────────────────────────────────────────
 const parts = cad.parts();
 const count = (member) => parts.filter((p) => p.attrs.member === member).length;
-run.equal("36 parts", parts.length, 36);
-run.equal("12 definitions", new Set(parts.map((p) => p.def)).size, 12);
-const want = { post: 4, rim: 4, joist: 3, deck: 11, "head rail": 1, "swing beam": 1, leg: 2, tie: 1, stringer: 2, tread: 7 };
+run.equal("63 parts", parts.length, 63);
+run.equal("17 definitions", new Set(parts.map((p) => p.def)).size, 17);
+const want = { post: 4, rim: 4, joist: 3, deck: 11, "head rail": 1, "swing beam": 1, leg: 2, tie: 1, stringer: 2, tread: 7,
+  "wall plate": 2, rafter: 8, ridge: 1, "roof board": 14, "ridge cap": 2 };
 for (const [k, n] of Object.entries(want)) run.equal(`${n} x ${k}`, count(k), n);
 
 const vol = (id) => cad.part(id).volume;
@@ -141,13 +210,52 @@ run.near("tread volume", vol(tread.id), (g + nose) * STAIR.width * BOARD_T);
 run.ok("treads lie within the stringers' depth",
   Math.abs((g + nose) / 2 * m) + BOARD_T / 2 < halfBand);
 
-// Overall box: stringer foot to beam end, leg feet, beam top.
+// The roof: plates and ridge are boxes; a rafter is its section along its
+// axis between the two plumb cuts, less the birdsmouth (a right triangle,
+// the plate's width by that width times the slope, across the rafter); a
+// roof board is a box; a ridge cap is its length times the area between
+// its lower edge and the plumb cut, integrated over its thickness.
+run.near("wall plate volume", vol(plate.id), pw * ph * (X1 - X0));
+run.near("rafter volume", vol(rafter.id), ra * rb * (yHead - yEave) / cs - 0.5 * pw * (pw * tn) * rb);
+run.near("ridge volume", vol(ridge.id), rgT * rgD * (X1 - X0 - 20));
+run.near("roof board volume", vol(roofBoard.id), RB.t * bWid * (BX1 - BX0));
+run.near("ridge cap volume", vol(cap.id),
+  (BX1 - BX0) * (RC.t * (mid - yE2) / cs - RC.t * s0 + tn * RC.t * RC.t / 2));
+
+// Overall box: stringer foot to beam end, leg feet, the caps on top.
 const legHalf = LEG / 2 / cos(atan2(LEG_SPREAD - LEG_TOP, SWING_H));
 run.box("overall size", ck.boxOf(parts), {
   min: [xFoot - halfBand / m, mid - LEG_SPREAD - legHalf, 0],
-  max: [BEAM_END, mid + LEG_SPREAD + legHalf, SWING_H + bd],
+  max: [BEAM_END, mid + LEG_SPREAD + legHalf, roofTop],
 }, 1e-6);
 run.near("deck height", ck.boxOf(cad.parts({ attrs: { member: "deck" } })).max[2], DECK);
+
+// Between the parts, on the exact solids. A rule that fails names them.
+const clash = cad.overlapping3d(null, undefined, { attrs: true });
+run.ok("no two parts overlap", clash.pairs.length === 0 && clash.skipped.length === 0,
+  clash.pairs.map((p) => `${p.aAttrs.member} ${p.a} and ${p.bAttrs.member} ${p.b}: ${p.volume}`)
+    .concat(clash.skipped.map((s) => `${s.a} and ${s.b}: ${s.reason}`)).join("; "));
+const rests = cad.pairsWithin3d(beam, { has: ["member"] }, 1e-6, { attrs: true });
+run.equal("the swing beam rests on the head rail and both legs",
+  rests.pairs.map((p) => p.bAttrs.member).sort().join(", "), "head rail, leg, leg");
+// Every rafter rests on a wall plate and against the ridge board.
+const supports = cad.parts().filter((p) => ["wall plate", "ridge"].includes(p.attrs.member)).map((p) => p.id);
+const seats = cad.pairsWithin3d({ attrs: { member: "rafter" } }, supports, 1e-6, { attrs: true });
+const byRafter = {};
+for (const p of seats.pairs) (byRafter[p.a] ??= []).push(p.bAttrs.member);
+run.ok("every rafter rests on a wall plate and the ridge",
+  Object.keys(byRafter).length === 8 && Object.values(byRafter).every((s) => s.sort().join() === "ridge,wall plate"),
+  JSON.stringify(byRafter));
+// The roof clears the swing beam under it. Nearest are the rafters over
+// it: from the beam's top edge (y = mid - 45) square to their sloping
+// underside, the vertical gap times cos(pitch).
+const roofIds = cad.parts().filter((p) => ["wall plate", "rafter", "ridge", "roof board", "ridge cap"]
+  .includes(p.attrs.member)).map((p) => p.id);
+const near = cad.pairsWithin3d(beam, roofIds, 1000);
+const headroom = Math.min(...near.pairs.map((p) => p.distance));
+run.near("the swing beam's clearance to the roof", headroom,
+  Math.min((under(mid - bw / 2) - (SWING_H + bd)) * cs, ridgeTop - rgD - (SWING_H + bd)));
+run.ok("the swing beam clears the roof by more than 300", headroom > 300);
 
 // ── Renders ──────────────────────────────────────────────────────────
 await run.render([
@@ -156,4 +264,7 @@ await run.render([
   { as: "front", view: "front", colorBy: { attr: "member" } },
 ]);
 
-return run.summary({ stairs: { rise, going: g, pitch_deg: Math.round(theta * 1800 / PI) / 10 } });
+return run.summary({
+  stairs: { rise, going: g, pitch_deg: Math.round(theta * 1800 / PI) / 10 },
+  roof: { pitch_deg: ROOF.pitch, parts: roofIds.length, headroom: Math.round(headroom * 10) / 10 },
+});

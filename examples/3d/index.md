@@ -121,9 +121,13 @@ about the axis. Front view.
 
 The frame of the flagship: four posts, a 1500 x 1500 platform at 1450 with
 rims, joists and deck boards notched round the posts, a swing beam on a
-head rail out to an A-frame, and stairs with stringers and treads. 36
-parts in 12 definitions; angled members are cut level and plumb. Seen from
-the south-west so the stairs face the viewer, exploded and from the front.
+head rail out to an A-frame, stairs with stringers and treads, and a
+gabled timber roof at 35 degrees (wall plates, rafters seated on the plates
+with a birdsmouth, a ridge board, butted roof boards and ridge caps). 63
+parts in 17 definitions; angled members are cut level and plumb. The script
+checks that no two parts overlap, that every rafter rests on a plate and the
+ridge, and that the roof clears the swing beam (by 328.8). Seen from the
+south-west so the stairs face the viewer, exploded and from the front.
 
 [JS source](11-play-tower-frame.js)
 

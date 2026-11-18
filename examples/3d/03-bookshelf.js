@@ -13,9 +13,9 @@
 //
 // x = width (left to right), y = depth (front at y = 0), z = up.
 //
-// Not yet: an interference check (cad.interference, a later rung) would
-// confirm that no two parts overlap; the joints here are built so that
-// every shelf fills its dado exactly.
+// The checks at the end ask the kernel: no two parts share volume, every
+// shelf touches both sides (it fills its dados), and the gap between two
+// shelves is the opening.
 
 const sh = await cad.use("shapes");
 const ck = await cad.use("checks");
@@ -97,6 +97,16 @@ for (const p of shelves) {
     p.bbox.min[0] === T - DADO && p.bbox.max[0] === W - T + DADO);
 }
 run.near("opening between shelves", opening, 326.4, 1e-12);
+
+// Between the parts, on the exact solids.
+const clash = cad.overlapping3d(null);
+run.ok("no two parts overlap", clash.pairs.length === 0 && clash.skipped.length === 0,
+  JSON.stringify(clash));
+const sides = { attrs: { part: "side" } };
+const held = cad.pairsWithin3d({ attrs: { part: "shelf" } }, sides, 1e-6);
+run.equal("every shelf touches both sides", held.pairs.length, 2 * N_SHELF);
+const gap = cad.distance3d(shelves[0], shelves[1]);
+run.near("gap between the two lowest shelves", gap.distance, opening);
 
 // ── Renders ──────────────────────────────────────────────────────────
 await run.render([

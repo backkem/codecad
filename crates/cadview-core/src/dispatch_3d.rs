@@ -33,8 +33,8 @@ use crate::document::Document;
 use crate::solid::eval::Solids;
 use crate::solid::kernel::{Aabb3, EvalError};
 use crate::solid::part::{
-    apply_point, compose, def_key, inverse, next_feat_id, parse_def_id, parse_part_id, part_key,
-    place_feature, rotation_about, tool_defs, Part,
+    apply_point, compose, def_key, inverse, mirror_features, mirrored_placement, next_feat_id,
+    parse_def_id, parse_part_id, part_key, place_feature, rotation_about, tool_defs, Part,
 };
 use crate::solid::types::{
     CapSide, DefId, Depth, EdgeSel, FeatId, Feature, Op, PartDef, Path3, Placement, Plane3, Point3,
@@ -57,20 +57,21 @@ pub fn dispatch(doc: &mut Document, method: &str, args: &str) -> Option<R> {
         "move3d" => move3d(doc, args),
         "rotate3d" => rotate3d(doc, args),
         "copy3d" => copy3d(doc, args),
+        "mirror3d" => mirror3d(doc, args),
         "remove3d" => remove3d(doc, args),
         "setPartAttrs" => set_part_attrs(doc, args),
         "removePartAttrs" => remove_part_attrs(doc, args),
         "parts" => parts(doc, args),
         "part" => part(doc, args),
         "partDef" => part_def(doc, args),
-        _ => return None,
+        _ => return crate::setquery3d::dispatch(doc, method, args),
     };
     Some(r)
 }
 
 // ── Argument parsing ───────────────────────────────────────────────────
 
-fn parse(args: &str) -> Result<Value, String> {
+pub(crate) fn parse(args: &str) -> Result<Value, String> {
     if args.trim().is_empty() {
         return Ok(Value::Object(Map::new()));
     }
@@ -85,7 +86,7 @@ fn finite(v: f64, what: &str) -> Result<f64, String> {
     }
 }
 
-fn num(o: &Value, key: &str) -> Result<Option<f64>, String> {
+pub(crate) fn num(o: &Value, key: &str) -> Result<Option<f64>, String> {
     match o.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(v) => v
@@ -140,11 +141,11 @@ fn opt_vec3(o: &Value, key: &str) -> Result<Option<Vec3>, String> {
     }
 }
 
-fn p3_json(p: Point3) -> Value {
+pub(crate) fn p3_json(p: Point3) -> Value {
     json!([p.x, p.y, p.z])
 }
 
-fn box_json(b: &Aabb3) -> Value {
+pub(crate) fn box_json(b: &Aabb3) -> Value {
     json!({ "min": p3_json(b.min), "max": p3_json(b.max) })
 }
 
@@ -427,7 +428,7 @@ fn local_frame(o: &Value) -> Result<bool, String> {
 
 // ── Part selection ─────────────────────────────────────────────────────
 
-fn part_id_of(v: &Value) -> Result<EntityId, String> {
+pub(crate) fn part_id_of(v: &Value) -> Result<EntityId, String> {
     match v {
         Value::String(s) => parse_part_id(s),
         Value::Object(o) => o
@@ -514,7 +515,7 @@ impl PartSel {
     }
 }
 
-fn bounds_val(v: &Value) -> Result<(Point3, Point3), String> {
+pub(crate) fn bounds_val(v: &Value) -> Result<(Point3, Point3), String> {
     let corner = |k: &str, open: f64| -> Result<Point3, String> {
         let a = v
             .get(k)
@@ -635,7 +636,7 @@ fn reason_of(e: &EvalError) -> (Option<FeatId>, String) {
 }
 
 /// "part p_3 (\"side\"), feature 2 (hole): reason".
-fn refusal(def: &PartDef, who: &str, e: &EvalError) -> String {
+pub(crate) fn refusal(def: &PartDef, who: &str, e: &EvalError) -> String {
     let (feature, reason) = reason_of(e);
     let name = if def.name.is_empty() {
         String::new()
@@ -658,7 +659,7 @@ fn refusal(def: &PartDef, who: &str, e: &EvalError) -> String {
 }
 
 /// Who a definition stands for in messages: its parts, or the definition.
-fn who(doc: &Document, def: DefId) -> String {
+pub(crate) fn who(doc: &Document, def: DefId) -> String {
     let parts: Vec<String> = doc
         .parts
         .iter()
@@ -792,14 +793,15 @@ fn part_json(doc: &Document, p: &Part, geometry: bool) -> Result<Value, String> 
         let who = format!("part {}", part_key(p.id));
         let err = |e: EvalError| refusal(def, &who, &e);
         let world = solids
-            .bbox(&doc.part_defs, def, &p.placement)
+            .tight_bbox(&doc.part_defs, def, &p.placement)
             .map_err(err)?;
-        let local = solids
-            .bbox(&doc.part_defs, def, &Placement::IDENTITY)
-            .map_err(err)?;
+        let local = solids.local_bbox(&doc.part_defs, def).map_err(err)?;
         let mass = solids.mass(&doc.part_defs, def).map_err(err)?;
-        v["bbox"] = box_json(&world);
-        v["localBbox"] = box_json(&local);
+        v["bbox"] = box_json(&world.aabb);
+        v["localBbox"] = box_json(&local.aabb);
+        // 0: both boxes are exact. Otherwise each side lies at most this far
+        // (mm) outside the solid (a box the kernel cannot make exact).
+        v["bboxTol"] = json!(world.tol.max(local.tol));
         v["volume"] = json!(mass.volume);
         v["centroid"] = match mass.centroid {
             Some(c) => p3_json(apply_point(&p.placement, c)),
@@ -1226,6 +1228,152 @@ fn copy3d(doc: &mut Document, args: &str) -> R {
     } else {
         Value::Array(out).to_string()
     })
+}
+
+/// The mirrored definition of `src` (see `solid::part`, "Mirror images"),
+/// with its tools mirrored too: an existing definition with exactly those
+/// features is reused (so mirroring back finds the original), otherwise a
+/// new one is stored and listed in `made`.
+fn mirrored_def(
+    doc: &mut Document,
+    src: DefId,
+    memo: &mut BTreeMap<DefId, DefId>,
+    made: &mut Vec<DefId>,
+) -> Result<DefId, String> {
+    if let Some(d) = memo.get(&src) {
+        return Ok(*d);
+    }
+    let def = doc
+        .part_defs
+        .get(&src)
+        .cloned()
+        .ok_or_else(|| format!("definition {} is missing", def_key(src)))?;
+    let mut tools = BTreeMap::new();
+    for t in tool_defs(&def).collect::<Vec<_>>() {
+        let m = mirrored_def(doc, t, memo, made)?;
+        tools.insert(t, m);
+    }
+    let features = mirror_features(&def.features, &|d| tools.get(&d).copied().unwrap_or(d))
+        .map_err(|e| format!("{}: {e}", who(doc, src)))?;
+    let id = match doc.part_defs.values().find(|d| d.features == features) {
+        Some(existing) => existing.id,
+        None => {
+            let id = doc.alloc_def_id();
+            doc.part_defs.insert(
+                id,
+                PartDef {
+                    id,
+                    name: def.name.clone(),
+                    features,
+                },
+            );
+            made.push(id);
+            id
+        }
+    };
+    memo.insert(src, id);
+    Ok(id)
+}
+
+/// `mirror3d({target, point?, normal, copy?, attrs?})`: the parts
+/// reflected across the plane through `point` (default the origin) with
+/// `normal`. A reflection is not a rigid motion, so a mirrored part places
+/// a mirrored definition (made once per definition and shared by all its
+/// mirrored parts). In place by default; `copy: true` keeps the originals
+/// and adds the images (with `attrs` merged into theirs).
+fn mirror3d(doc: &mut Document, args: &str) -> R {
+    let o = parse(args)?;
+    let ids = target(doc, &o).map_err(|e| format!("mirror3d: {e}"))?;
+    let point = opt_point3(&o, "point")?.unwrap_or(Point3::ORIGIN);
+    let normal = opt_vec3(&o, "normal")?
+        .ok_or("mirror3d: normal: [nx, ny, nz] (the mirror plane's normal) is required")?
+        .normalized()
+        .ok_or("mirror3d: normal must be a non-zero vector")?;
+    let copy = o.get("copy").and_then(Value::as_bool).unwrap_or(false);
+    let updates = match o.get("attrs") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(v) => attrs::parse_updates(v)?,
+    };
+    let (before_defs, before_parts, before_next) =
+        (doc.part_defs.clone(), doc.parts.clone(), doc.next_id());
+    let restore = |doc: &mut Document, e: String| {
+        doc.part_defs = before_defs.clone();
+        doc.parts = before_parts.clone();
+        doc.set_next_id(before_next);
+        Err(format!("mirror3d: {e}"))
+    };
+    let mut memo = BTreeMap::new();
+    let mut made = Vec::new();
+    for id in &ids {
+        let src = doc.part(*id).expect("selected").def;
+        if let Err(e) = mirrored_def(doc, src, &mut memo, &mut made) {
+            return restore(doc, e);
+        }
+    }
+    if let Ok(solids) = doc.solids.get() {
+        for d in &made {
+            let def = &doc.part_defs[d];
+            if let Err(e) = solids.solid(&doc.part_defs, def) {
+                let msg = refusal(def, &who(doc, *d), &e);
+                return restore(doc, msg);
+            }
+        }
+    }
+    let mut out_ids = Vec::new();
+    for id in &ids {
+        let p = doc.part(*id).expect("selected").clone();
+        let placement = mirrored_placement(&p.placement, point, normal);
+        let def = memo[&p.def];
+        if copy {
+            let mut a = p.attrs.clone();
+            if let Err(e) = attrs::apply(&mut a, &updates, false) {
+                return restore(doc, e);
+            }
+            let nid = doc.alloc_id();
+            doc.parts.push(Part {
+                id: nid,
+                def,
+                placement,
+                attrs: a,
+            });
+            out_ids.push(nid);
+        } else {
+            let q = doc.part_mut(*id).expect("selected");
+            q.def = def;
+            q.placement = placement;
+            if let Err(e) = attrs::apply(&mut q.attrs, &updates, false) {
+                return restore(doc, e);
+            }
+            out_ids.push(*id);
+        }
+    }
+    let gone = if copy { Vec::new() } else { gc_defs(doc) };
+    // As in create and copy3d: parts whose geometry cannot be reported are
+    // not kept.
+    let geometry = doc.solids.is_some();
+    let out = match out_ids
+        .iter()
+        .map(|id| part_json(doc, doc.part(*id).expect("made"), geometry))
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(out) => out,
+        Err(e) => return restore(doc, e),
+    };
+    let single = matches!(o.get("target"), Some(Value::String(_)))
+        || matches!(o.get("target"), Some(Value::Object(m)) if m.contains_key("id"));
+    if copy {
+        return Ok(if single {
+            out.into_iter().next().unwrap_or(Value::Null).to_string()
+        } else {
+            Value::Array(out).to_string()
+        });
+    }
+    Ok(json!({
+        "mirrored": keys(&out_ids),
+        "defsMade": made.iter().map(|d| def_key(*d)).collect::<Vec<_>>(),
+        "defsRemoved": gone.iter().map(|d| def_key(*d)).collect::<Vec<_>>(),
+    })
+    .to_string())
 }
 
 fn remove3d(doc: &mut Document, args: &str) -> R {

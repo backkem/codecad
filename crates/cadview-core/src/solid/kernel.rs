@@ -72,7 +72,96 @@ impl Aabb3 {
             .max_abs_diff(o.min)
             .max(self.max.max_abs_diff(o.max))
     }
+
+    /// The box grown by `d` on every side.
+    pub fn inflate(&self, d: f64) -> Aabb3 {
+        Aabb3::new(
+            Point3::new(self.min.x - d, self.min.y - d, self.min.z - d),
+            Point3::new(self.max.x + d, self.max.y + d, self.max.z + d),
+        )
+    }
+
+    /// Whether the two boxes share a point (closed boxes).
+    pub fn meets(&self, o: &Aabb3) -> bool {
+        self.min.x <= o.max.x
+            && o.min.x <= self.max.x
+            && self.min.y <= o.max.y
+            && o.min.y <= self.max.y
+            && self.min.z <= o.max.z
+            && o.min.z <= self.max.z
+    }
+
+    /// Whether the two boxes share volume (their interiors meet).
+    pub fn overlaps(&self, o: &Aabb3) -> bool {
+        self.min.x < o.max.x
+            && o.min.x < self.max.x
+            && self.min.y < o.max.y
+            && o.min.y < self.max.y
+            && self.min.z < o.max.z
+            && o.min.z < self.max.z
+    }
+
+    /// Whether `o` lies in this box (boundary included).
+    pub fn contains(&self, o: &Aabb3) -> bool {
+        self.min.x <= o.min.x
+            && self.min.y <= o.min.y
+            && self.min.z <= o.min.z
+            && o.max.x <= self.max.x
+            && o.max.y <= self.max.y
+            && o.max.z <= self.max.z
+    }
 }
+
+/// A bounding box with a statement of how tight it is.
+///
+/// `tol == 0` means the box is exact: each side touches the solid. A
+/// positive `tol` means the box still contains the solid, and each side
+/// lies within `tol` (mm) outside the solid's extreme in its direction.
+/// What [`SolidKernel::bbox_within`] returns; [`SolidKernel::bbox`] is
+/// always exact.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TightBox {
+    pub aabb: Aabb3,
+    pub tol: f64,
+}
+
+impl TightBox {
+    /// An exact box.
+    pub const fn exact(aabb: Aabb3) -> Self {
+        TightBox { aabb, tol: 0.0 }
+    }
+}
+
+/// The closest points of two placed solids (world coordinates).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Closest {
+    /// The distance between the solids as point sets: `0.0` when they
+    /// meet or one contains the other.
+    pub distance: f64,
+    /// The closest point on the first solid.
+    pub a: Point3,
+    /// The closest point on the second.
+    pub b: Point3,
+}
+
+/// How two placed solids relate.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Interference {
+    /// Farther apart than the kernel's linear tolerance.
+    Apart(Closest),
+    /// They meet and share no volume; `at` is a point of the contact.
+    Touching { at: Point3 },
+    /// They share volume: the shared volume, and whether either lies
+    /// wholly in the other.
+    Overlapping {
+        volume: f64,
+        a_in_b: bool,
+        b_in_a: bool,
+    },
+}
+
+/// A solid of a pair query: its B-rep and where it is placed.
+pub type Placed<'a, B> = (&'a B, Placement);
 
 /// What a kernel's validity check found.
 #[derive(Debug, Clone, PartialEq)]
@@ -220,11 +309,14 @@ pub struct TriMesh {
 ///
 /// Required: evaluation, mass properties, bounding box and a validity
 /// check. Optional capabilities have a default implementation that returns
-/// [`EvalError::Unsupported`]; a test harness reads that as "not
-/// applicable", never as a pass. Optional today: [`Self::tessellate`]. The
-/// rest of the designed trait (`edges`, `project`, `section`, `distance`,
-/// and the face/edge tags on [`Evaluated`]) arrives with the rungs that
-/// need it (3D3a, 3D4a, 3D1b).
+/// [`EvalError::Unsupported`] (or, where a slower answer exists, falls
+/// back to it); a test harness reads "unsupported" as "not applicable",
+/// never as a pass. Optional today: [`Self::tessellate`],
+/// [`Self::evaluate_from`] (falls back to [`Self::evaluate`]),
+/// [`Self::bbox_within`] (falls back to [`Self::bbox`]),
+/// [`Self::distances`] and [`Self::interferences`]. The rest of the
+/// designed trait (`edges`, `project`, `section`, and the face/edge tags
+/// on [`Evaluated`]) arrives with the rungs that need it (3D3a, 3D4a).
 pub trait SolidKernel {
     /// The kernel's B-rep. Derived data: never synced or stored.
     type Brep: Clone;
@@ -242,8 +334,67 @@ pub trait SolidKernel {
     /// Volume and centroid.
     fn mass(&self, brep: &Self::Brep) -> Result<MassProps, EvalError>;
 
-    /// The tight axis-aligned box of `brep` placed by `frame`.
+    /// Optional capability: evaluate `def` continuing from `base`, the
+    /// B-rep this kernel made of the first `done` features of `def` with the
+    /// same tools. The result must be the one [`Self::evaluate`] gives for
+    /// the whole definition (same volume, box and mesh), so a cache may
+    /// reuse an evaluated prefix and a modifying call costs about one
+    /// feature. The default evaluates from scratch.
+    fn evaluate_from(
+        &self,
+        def: &PartDef,
+        tools: &dyn ToolResolver,
+        base: &Self::Brep,
+        done: usize,
+    ) -> Result<Evaluated<Self::Brep>, EvalError> {
+        let _ = (base, done);
+        self.evaluate(def, tools)
+    }
+
+    /// The tight axis-aligned box of `brep` placed by `frame`, exact: each
+    /// side touches the solid. A kernel that cannot make it exact refuses
+    /// ([`EvalError::Unsupported`]); [`Self::bbox_within`] may then still
+    /// give a box tight to a tolerance.
     fn bbox(&self, brep: &Self::Brep, frame: &Placement) -> Result<Aabb3, EvalError>;
+
+    /// Optional capability: a box of `brep` placed by `frame` that contains
+    /// the solid and is tight to `tol` (mm, finite and positive) where it
+    /// cannot be exact; [`TightBox::tol`] says which. The default is
+    /// [`Self::bbox`], exact.
+    fn bbox_within(
+        &self,
+        brep: &Self::Brep,
+        frame: &Placement,
+        tol: f64,
+    ) -> Result<TightBox, EvalError> {
+        let _ = tol;
+        self.bbox(brep, frame).map(TightBox::exact)
+    }
+
+    /// Optional capability: the closest points of each pair of placed
+    /// solids (indices into `solids`). One result per pair, in order; a
+    /// pair the kernel cannot answer is an error in its slot. The default
+    /// says the kernel cannot do it.
+    fn distances(
+        &self,
+        solids: &[Placed<'_, Self::Brep>],
+        pairs: &[(usize, usize)],
+    ) -> Result<Vec<Result<Closest, EvalError>>, EvalError> {
+        let _ = (solids, pairs);
+        Err(EvalError::unsupported(None, "distance between solids"))
+    }
+
+    /// Optional capability: how each pair of placed solids interferes
+    /// (apart, touching, or overlapping with the shared volume), as
+    /// [`Self::distances`]. The default says the kernel cannot do it.
+    fn interferences(
+        &self,
+        solids: &[Placed<'_, Self::Brep>],
+        pairs: &[(usize, usize)],
+    ) -> Result<Vec<Result<Interference, EvalError>>, EvalError> {
+        let _ = (solids, pairs);
+        Err(EvalError::unsupported(None, "interference between solids"))
+    }
 
     /// The kernel's own validity check of the B-rep.
     fn check(&self, brep: &Self::Brep) -> Result<Validity, EvalError>;

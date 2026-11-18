@@ -64,15 +64,42 @@ scoreboard cases yet.
 |---|---|---|---|
 | 1 | `01-pipe-flange.js` | 1 | Bore Ø52.5, not Ø60.3 (that would leave no wall at the weld end). |
 | 2 | `02-mounting-bracket.js` | 1 | Nothing. |
-| 3 | `03-bookshelf.js` | 12 | The list names nine parts for "twelve"; a plinth, a low rail and a hanging rail make twelve. No interference check (later rung). |
+| 3 | `03-bookshelf.js` | 12 | The list names nine parts for "twelve"; a plinth, a low rail and a hanging rail make twelve. Checks between parts (3D1b): no two overlap, every shelf touches both sides, the shelf gap is the opening. |
 | 4 | `04-enclosure.js` | 9 | The board's corners are notched to clear the corner bosses. |
-| 5 | `05-piston-and-rod.js` | 3 | Square pin bosses and blind pin bores that stop short of the skirt: where two cylinders meet, the kernel adapter cannot give the part's box, so it could be neither queried nor rendered. |
+| 5 | `05-piston-and-rod.js` | 3 | Square pin bosses and blind pin bores that stop short of the skirt: where two cylinders meet, the kernel adapter could not give the part's box. Since 3D1b it can (tight to 1e-9 mm); the example is not changed back yet. |
 | 6 | `06-spur-gears.js` | 2 | One arc per flank, no root fillets. No mesh interference check. |
 | 7 | `07-pipe-spool.js` | 7 | The third flange is the mating flange of the next spool, on a stub. No gaskets, bolts or welds. |
 | 8 | `08-turned-stool.js` | 7 | Beads are half circles (a flatter bead's circle crosses the leg axis: refused as a spindle torus). Joints are not cut: tenons overlap the seat and legs; feet and shoulders stay square to the 8° leg. |
 | 9 | not started | | Waits for the presentation render. |
 | 10 | not started | | Waits for the presentation render. |
-| 11 | `11-play-tower-frame.js` | 36 | The timber frame only: posts, platform frame and deck, swing beam on a head rail, A-frame, stairs. No cabin, roof, railings, sandbox, slide, swings, fixings or clearance rules yet. |
+| 11 | `11-play-tower-frame.js` | 63 | The timber frame and a gabled timber roof: posts, platform frame and deck, swing beam on a head rail, A-frame, stairs; wall plates, rafters, ridge board, roof boards and ridge caps. The roof boards are butted with 5 mm gaps, not lapped: chosen so every contact is a face the overlap check reads as a touch (lapped boards would meet along lines; not tried). No cabin, railings, sandbox, slide, swings, fixings or clearance rules yet. Checks between parts (3D1b): no two overlap, the swing beam rests on the head rail and both legs, every rafter rests on a plate and the ridge, the roof clears the swing beam by 328.8. |
+
+### Presentation renders (2026-11-18, rung 3D5a first slice)
+
+Each script gives its parts a `material` attribute, and
+`examples/3d/lib/checks.js` path traces the isometric view (and any view
+with a `present` option) with the presets of `lib/materials.js`, to
+`target/3d-views/NN-name-render.png` (not committed yet). All nine stand on
+a light floor in the default studio light (a grey dome and a 16° soft key
+light), with soft shadows and bounce light. Times are tracing at 960 x 640
+and 1024 spp on one discrete GPU. Against the presentation list: point 2
+holds for all; point 3 holds except where noted (no denoiser yet); point 4
+(the look gate) is not run.
+
+| # | Materials | Trace | What still looks wrong |
+|---|---|---|---|
+| 1 | turned steel | 1.47 s | Fine grain left inside the bore and the bolt holes (glossy metal seen in metal). |
+| 2 | brushed steel | 1.16 s | Reads as metal. One streak direction for the whole part (its longest), not one per leg as on a bent plate; faint at this size. |
+| 3 | oak, birch ply | 2.02 s | Reads as furniture. Grain is procedural rings, softer than real oak figure. |
+| 4 | grey plastic, green board, black parts, aluminium capacitors | 1.67 s, 2.37 s lid lifted | Reads right; the components are blocks (the model's simplification). |
+| 5 | turned aluminium, steel rod, turned steel pin | 1.27 s | Reads as metal; the piston's turning marks are faint at this size. |
+| 6 | turned steel | 1.77 s | Concentric streaks show on the faces; some speckle remains where the streaks are finer than a pixel. |
+| 7 | steel pipe, red gloss paint, turned steel flanges | 1.21 s | The pipe's streaks run along the whole spool's longest direction, not around the bends. |
+| 8 | oak | 2.18 s | Reads as a wooden stool; grain runs along each leg and stretcher. |
+| 11 | stained timber | 1.81 s | Studio light, not the grass and daylight of the box picture (the script can pass `environment: "sky"` and a green ground). |
+
+No example uses glass yet; glass is checked by the tests (a slab's
+displacement, energy in the furnace).
 
 ## The examples
 

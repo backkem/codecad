@@ -196,6 +196,19 @@ optional capability a kernel declares:
 A missing capability makes the layers that need it **not applicable** for
 that kernel. It is never counted as a pass, and the scoreboard shows it.
 
+Rung 3D1b added four optional capabilities that no layer uses, so the
+scoreboards do not see them: `evaluate_from` (continue from an evaluated
+prefix; default: from scratch), `bbox_within` (a box tight to a stated
+tolerance where an exact one does not exist; default: the exact `bbox`,
+which the layers keep demanding), `distances` and `interferences` (between
+placed solids). Their evidence is `tests/capabilities.rs`, over the whole
+catalogue on arris: every evaluated prefix continued gives the
+from-scratch volume, centroid, box and mesh, or the same refusal;
+`bbox_within` equals the exact box with tolerance 0 wherever that exists,
+and elsewhere lies within its tolerance of the closed-form box; a solid
+against itself shares its whole volume, and moved past its own box it is
+apart by at least the gap, with closest points that far apart.
+
 ## 7. Testing the harness
 
 A harness that reports no failures is either looking at a correct kernel

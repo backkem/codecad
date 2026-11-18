@@ -61,7 +61,8 @@ use arris::topo::{Body, Edge, Model};
 use arris::Control;
 
 use cadview_core::solid::kernel::{
-    Aabb3, EvalError, Evaluated, MassProps, SolidKernel, ToolResolver, TriMesh, Validity,
+    Aabb3, Closest, EvalError, Evaluated, Interference, MassProps, Placed, SolidKernel, TightBox,
+    ToolResolver, TriMesh, Validity,
 };
 use cadview_core::solid::mesh::topology;
 use cadview_core::solid::select::{edge_query, EdgeQuery};
@@ -150,60 +151,27 @@ impl SolidKernel for ArrisKernel {
         def: &PartDef,
         tools: &dyn ToolResolver,
     ) -> Result<Evaluated<ArrisBrep>, EvalError> {
-        // arris checks every operation's output: with the `paranoid`
-        // feature a release build returns an error for a result its checker
-        // rejects, and a debug build panics with `CHECKER_PANIC`. Both are
-        // the kernel saying its own result is invalid, so both are a
-        // refusal here. Any other panic is passed on.
-        let run = catch_unwind(AssertUnwindSafe(|| {
-            let mut model = Model::new(Precision::DEFAULT).map_err(kernel_err(None))?;
-            let mut stack = vec![def.id];
-            let body = eval_into(&mut model, def, tools, &mut stack)?;
-            Ok((model, body))
-        }));
-        let (model, body) = match run {
-            Ok(r) => r?,
-            Err(payload) => {
-                let message = payload
-                    .downcast_ref::<String>()
-                    .map(String::as_str)
-                    .or_else(|| payload.downcast_ref::<&str>().copied());
-                match message {
-                    Some(m) if m.starts_with(CHECKER_PANIC) => {
-                        return Err(EvalError::Kernel {
-                            feature: None,
-                            message: format!(
-                                "the kernel's checker rejects an operation's result: {}",
-                                m.lines().nth(1).unwrap_or("").trim()
-                            ),
-                        })
-                    }
-                    _ => resume_unwind(payload),
-                }
-            }
-        };
-        // The per-operation check is the fast level; the result as a whole
-        // must also pass the full one (what `check` below reports).
-        let report = check(&model, body, Level::Full);
-        if !report.is_ok() {
-            return Err(EvalError::Kernel {
-                feature: None,
-                message: format!(
-                    "the kernel's checker rejects the result: {}",
-                    report
-                        .violations()
-                        .first()
-                        .map(|v| v.to_string())
-                        .unwrap_or_default()
-                ),
-            });
+        run(def, tools, None)
+    }
+
+    /// Continues on a copy of `base`'s model. A model is append-only and
+    /// its ids are minted in creation order, so the copy holds exactly
+    /// what a from-scratch evaluation holds after the first `done`
+    /// features (the checks, boxes and meshes taken since only read it),
+    /// and the remaining features then make the same entities with the
+    /// same ids: the same B-rep. Copying a model shares its storage
+    /// (arris copies only the chunk it next appends to).
+    fn evaluate_from(
+        &self,
+        def: &PartDef,
+        tools: &dyn ToolResolver,
+        base: &ArrisBrep,
+        done: usize,
+    ) -> Result<Evaluated<ArrisBrep>, EvalError> {
+        if done == 0 || done > def.features.len() {
+            return run(def, tools, None);
         }
-        Ok(Evaluated {
-            brep: ArrisBrep {
-                model: Shared::new(model),
-                body,
-            },
-        })
+        run(def, tools, Some((base, done)))
     }
 
     fn mass(&self, b: &ArrisBrep) -> Result<MassProps, EvalError> {
@@ -219,7 +187,23 @@ impl SolidKernel for ArrisKernel {
 
     fn bbox(&self, b: &ArrisBrep, frame: &Placement) -> Result<Aabb3, EvalError> {
         frame.check()?;
-        bounds(&b.model, b.body, &isometry(frame))
+        bounds(&b.model, b.body, &isometry(frame), None).map(|t| t.aabb)
+    }
+
+    fn bbox_within(
+        &self,
+        b: &ArrisBrep,
+        frame: &Placement,
+        tol: f64,
+    ) -> Result<TightBox, EvalError> {
+        frame.check()?;
+        if !tol.is_finite() || tol <= 0.0 {
+            return Err(EvalError::invalid(
+                None,
+                "box tolerance must be finite and positive",
+            ));
+        }
+        bounds(&b.model, b.body, &isometry(frame), Some(tol))
     }
 
     fn check(&self, b: &ArrisBrep) -> Result<Validity, EvalError> {
@@ -274,18 +258,111 @@ impl SolidKernel for ArrisKernel {
         }
         Ok(mesh)
     }
+
+    fn distances(
+        &self,
+        solids: &[Placed<'_, ArrisBrep>],
+        pairs: &[(usize, usize)],
+    ) -> Result<Vec<Result<Closest, EvalError>>, EvalError> {
+        let space = Space::new(solids, pairs)?;
+        Ok(pairs.iter().map(|&(i, j)| space.closest(i, j)).collect())
+    }
+
+    fn interferences(
+        &self,
+        solids: &[Placed<'_, ArrisBrep>],
+        pairs: &[(usize, usize)],
+    ) -> Result<Vec<Result<Interference, EvalError>>, EvalError> {
+        let space = Space::new(solids, pairs)?;
+        Ok(pairs
+            .iter()
+            .map(|&(i, j)| space.interference(i, j))
+            .collect())
+    }
 }
 
-/// Evaluates `def` into `model`. `stack` holds the definitions being
-/// evaluated, outermost first, to catch tool cycles.
+/// Evaluates `def`, from scratch or (`from`) on a copy of an evaluated
+/// prefix's model, and checks the result.
+fn run(
+    def: &PartDef,
+    tools: &dyn ToolResolver,
+    from: Option<(&ArrisBrep, usize)>,
+) -> Result<Evaluated<ArrisBrep>, EvalError> {
+    // arris checks every operation's output: with the `paranoid`
+    // feature a release build returns an error for a result its checker
+    // rejects, and a debug build panics with `CHECKER_PANIC`. Both are
+    // the kernel saying its own result is invalid, so both are a
+    // refusal here. Any other panic is passed on.
+    let run = catch_unwind(AssertUnwindSafe(|| {
+        let (mut model, start, current) = match from {
+            Some((base, done)) => ((*base.model).clone(), done, Some(base.body)),
+            None => (
+                Model::new(Precision::DEFAULT).map_err(kernel_err(None))?,
+                0,
+                None,
+            ),
+        };
+        let mut stack = vec![def.id];
+        let body = eval_into(&mut model, def, tools, &mut stack, start, current)?;
+        Ok((model, body))
+    }));
+    let (model, body) = match run {
+        Ok(r) => r?,
+        Err(payload) => {
+            let message = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied());
+            match message {
+                Some(m) if m.starts_with(CHECKER_PANIC) => {
+                    return Err(EvalError::Kernel {
+                        feature: None,
+                        message: format!(
+                            "the kernel's checker rejects an operation's result: {}",
+                            m.lines().nth(1).unwrap_or("").trim()
+                        ),
+                    })
+                }
+                _ => resume_unwind(payload),
+            }
+        }
+    };
+    // The per-operation check is the fast level; the result as a whole
+    // must also pass the full one (what `check` below reports).
+    let report = check(&model, body, Level::Full);
+    if !report.is_ok() {
+        return Err(EvalError::Kernel {
+            feature: None,
+            message: format!(
+                "the kernel's checker rejects the result: {}",
+                report
+                    .violations()
+                    .first()
+                    .map(|v| v.to_string())
+                    .unwrap_or_default()
+            ),
+        });
+    }
+    Ok(Evaluated {
+        brep: ArrisBrep {
+            model: Shared::new(model),
+            body,
+        },
+    })
+}
+
+/// Evaluates `def` into `model`, from feature `start` on with `current`
+/// the body so far. `stack` holds the definitions being evaluated,
+/// outermost first, to catch tool cycles.
 fn eval_into(
     model: &mut Model,
     def: &PartDef,
     tools: &dyn ToolResolver,
     stack: &mut Vec<DefId>,
+    start: usize,
+    mut current: Option<Body>,
 ) -> Result<Body, EvalError> {
-    let mut current: Option<Body> = None;
-    for (i, feature) in def.features.iter().enumerate() {
+    for (i, feature) in def.features.iter().enumerate().skip(start) {
         let id = feature.id();
         let k = kernel_err(Some(id));
         let next = match feature {
@@ -347,7 +424,7 @@ fn eval_into(
                         });
                     };
                     stack.push(*tool_id);
-                    let body = eval_into(model, tool_def, tools, stack);
+                    let body = eval_into(model, tool_def, tools, stack, 0, None);
                     stack.pop();
                     let placed = place(model, body?, placement, Some(id))?;
                     combine(model, current.take(), placed, *op, id)?
@@ -494,6 +571,225 @@ fn place(
         arris::ops::transform(model, body, &isometry(placement), &RUN)
             .map_err(kernel_err::<OpError>(id))?
             .0,
+    )
+}
+
+/// Runs a kernel operation, turning arris's debug-build checker panic into
+/// a refusal as [`SolidKernel::evaluate`] does; any other panic is passed
+/// on.
+fn guarded<T>(f: impl FnOnce() -> Result<T, EvalError>) -> Result<T, EvalError> {
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(r) => r,
+        Err(payload) => {
+            let message = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied());
+            match message {
+                Some(m) if m.starts_with(CHECKER_PANIC) => Err(EvalError::Kernel {
+                    feature: None,
+                    message: format!(
+                        "the kernel's checker rejects an operation's result: {}",
+                        m.lines().nth(1).unwrap_or("").trim()
+                    ),
+                }),
+                _ => resume_unwind(payload),
+            }
+        }
+    }
+}
+
+/// The solids of a pair query, placed in one scratch model: arris answers
+/// distance and common only between bodies of one model. The model starts
+/// as a copy of the first solid's (copies share storage), other models'
+/// bodies are imported once per model and body, and each solid is moved by
+/// its placement. The parts' own models are never written.
+struct Space {
+    model: Model,
+    bodies: Vec<Option<Body>>,
+    volumes: Vec<std::cell::Cell<Option<f64>>>,
+}
+
+impl Space {
+    fn new(solids: &[Placed<'_, ArrisBrep>], pairs: &[(usize, usize)]) -> Result<Space, EvalError> {
+        let k = kernel_err(None);
+        let mut used: Vec<usize> = pairs.iter().flat_map(|&(i, j)| [i, j]).collect();
+        used.sort_unstable();
+        used.dedup();
+        if let Some(&bad) = used.iter().find(|&&i| i >= solids.len()) {
+            return Err(EvalError::invalid(
+                None,
+                format!("no solid {bad} in the query"),
+            ));
+        }
+        let mut bodies = vec![None; solids.len()];
+        let Some(&first) = used.first() else {
+            return Ok(Space {
+                model: Model::new(Precision::DEFAULT).map_err(&k)?,
+                bodies,
+                volumes: Vec::new(),
+            });
+        };
+        let home = solids[first].0.model.clone();
+        let mut model = (*home).clone();
+        // (model pointer, body) -> the body in the scratch model.
+        let mut imported: Vec<(*const Model, Body, Body)> = Vec::new();
+        guarded(|| {
+            for &i in &used {
+                let (brep, placement) = &solids[i];
+                placement.check()?;
+                let here = if Shared::ptr_eq(&brep.model, &home) {
+                    brep.body
+                } else {
+                    let key = Shared::as_ptr(&brep.model);
+                    match imported
+                        .iter()
+                        .find(|(m, b, _)| *m == key && b.id == brep.body.id)
+                    {
+                        Some(&(_, _, b)) => b,
+                        None => {
+                            let (b, _) = model.import(&brep.model, brep.body).map_err(&k)?;
+                            imported.push((key, brep.body, b));
+                            b
+                        }
+                    }
+                };
+                bodies[i] = Some(place(&mut model, here, placement, None)?);
+            }
+            Ok(())
+        })?;
+        let volumes = (0..solids.len())
+            .map(|_| std::cell::Cell::new(None))
+            .collect();
+        Ok(Space {
+            model,
+            bodies,
+            volumes,
+        })
+    }
+
+    fn body(&self, i: usize) -> Body {
+        self.bodies[i].expect("every solid of a pair is placed")
+    }
+
+    fn volume(&self, i: usize) -> Result<f64, EvalError> {
+        if let Some(v) = self.volumes[i].get() {
+            return Ok(v);
+        }
+        let v = arris::ops::measure::mass_properties(&self.model, self.body(i), &RUN)
+            .map_err(kernel_err(None))?
+            .volume;
+        self.volumes[i].set(Some(v));
+        Ok(v)
+    }
+
+    /// arris `query::distance` between the two solids: the critical points
+    /// of the distance on the faces' and edges' carriers, not a mesh.
+    fn closest(&self, i: usize, j: usize) -> Result<Closest, EvalError> {
+        let (a, b) = (self.body(i), self.body(j));
+        let d = guarded(|| {
+            distance(
+                &self.model,
+                Operand::Shape(arris::topo::Shape::from(a)),
+                Operand::Shape(arris::topo::Shape::from(b)),
+                &RUN,
+            )
+            .map_err(kernel_err::<OpError>(None))
+        })?;
+        Ok(Closest {
+            distance: d.distance,
+            a: p3(d.a.point),
+            b: p3(d.b.point),
+        })
+    }
+
+    /// Apart (farther than the model's linear tolerance), touching (the
+    /// common has no material or no thickness) or overlapping (the common's
+    /// volume, from `mass_properties` on its exact faces), as arris
+    /// `query::interference` reads them; booleans run on a scratch copy of
+    /// the model. Where arris refuses the common (two faces in one plane can
+    /// leave it a contact it cannot read), the shared volume is the part of
+    /// `a` that `a - b` removes, `V(a) - V(a - b)`, or the same the other way
+    /// round: the cut that made the joint in the first place.
+    fn interference(&self, i: usize, j: usize) -> Result<Interference, EvalError> {
+        let (a, b) = (self.body(i), self.body(j));
+        if a.id == b.id {
+            // One body twice (two parts of one definition in one place).
+            return Ok(Interference::Overlapping {
+                volume: self.volume(i)?,
+                a_in_b: true,
+                b_in_a: true,
+            });
+        }
+        let near = self.closest(i, j)?;
+        if near.distance > self.model.precision().tolerance().linear {
+            return Ok(Interference::Apart(near));
+        }
+        let mut scratch = self.model.clone();
+        let common = guarded(|| Ok(arris::ops::common(&mut scratch, a, b, &RUN)))?;
+        let volume = match common {
+            Ok((c, _)) => {
+                arris::ops::measure::mass_properties(&scratch, c, &RUN)
+                    .map_err(kernel_err(None))?
+                    .volume
+            }
+            Err(e) if no_material(&e) => return Ok(Interference::Touching { at: near.a }),
+            Err(e) => match self.removed(i, j).or_else(|_| self.removed(j, i)) {
+                Ok(v) => v,
+                Err(_) => return Err(kernel_err::<OpError>(None)(e)),
+            },
+        };
+        let (va, vb) = (self.volume(i)?, self.volume(j)?);
+        let within = |v: f64| (volume - v).abs() <= 1e-9 * v.abs();
+        if volume <= 1e-12 * va.min(vb) {
+            return Ok(Interference::Touching { at: near.a });
+        }
+        Ok(Interference::Overlapping {
+            volume,
+            a_in_b: within(va),
+            b_in_a: within(vb),
+        })
+    }
+
+    /// `V(i) - V(i - j)`: how much of solid `i` solid `j` takes away.
+    fn removed(&self, i: usize, j: usize) -> Result<f64, EvalError> {
+        let mut scratch = self.model.clone();
+        let cut = guarded(|| {
+            Ok(arris::ops::cut(
+                &mut scratch,
+                self.body(i),
+                self.body(j),
+                &RUN,
+            ))
+        })?;
+        let left = match cut {
+            Ok((c, _)) => {
+                arris::ops::measure::mass_properties(&scratch, c, &RUN)
+                    .map_err(kernel_err(None))?
+                    .volume
+            }
+            // Nothing is left: i lies wholly in j.
+            Err(OpError::Degenerate {
+                reason: arris::ops::Reason::Boolean(arris::ops::BooleanReason::Empty),
+                ..
+            }) => 0.0,
+            Err(e) => return Err(kernel_err::<OpError>(None)(e)),
+        };
+        Ok(self.volume(i)? - left)
+    }
+}
+
+/// A boolean that found no material, or none with thickness: the operands
+/// only touch.
+fn no_material(e: &OpError) -> bool {
+    use arris::ops::{BooleanReason, InputReason, Reason};
+    matches!(
+        e,
+        OpError::Degenerate {
+            reason: Reason::Boolean(BooleanReason::Empty)
+                | Reason::Input(InputReason::ZeroThickness),
+            ..
+        }
     )
 }
 
@@ -742,7 +1038,11 @@ fn hole(
         Depth::Blind(x) if x.is_finite() && x > CONFUSION => x,
         Depth::Blind(_) => return Err(invalid("hole depth must be finite and positive")),
         Depth::Through => {
-            let b = bounds(model, current, &Isometry::identity()).map_err(|e| e.at(id))?;
+            // An outer box is all the reach needs: tight to a micrometre
+            // where an edge has no exact box (a part already cross-bored).
+            let b = bounds(model, current, &Isometry::identity(), Some(1e-6))
+                .map_err(|e| e.at(id))?
+                .aabb;
             let mut reach = f64::NEG_INFINITY;
             for x in [b.min.x, b.max.x] {
                 for y in [b.min.y, b.max.y] {
@@ -831,23 +1131,42 @@ fn pick_edges(
             }
         }
         EdgeQuery::Near(points) => {
+            // The rule (docs/api-surface.md, "Solid parts"): seams are never
+            // picked; of the other edges the nearest wins; among edges equally
+            // near (to PICK_TOL), one the point is nearest to inside its
+            // length beats one it is nearest to at an end vertex; then the
+            // first in the kernel's order.
+            let seams = seam_edges(model, body, &edges).map_err(&k)?;
             for p in points {
-                let mut best: Option<(f64, usize)> = None;
+                let mut best: Option<(f64, bool, usize)> = None;
                 for (ei, edge) in edges.iter().enumerate() {
+                    if seams[ei] {
+                        continue;
+                    }
                     let d = distance(
                         model,
                         Operand::Point(pt(*p)),
                         Operand::Shape(edge.shape()),
                         &RUN,
                     )
-                    .map_err(kernel_err::<OpError>(Some(id)))?
-                    .distance;
-                    if best.is_none_or(|(b, _)| d < b) {
-                        best = Some((d, ei));
+                    .map_err(kernel_err::<OpError>(Some(id)))?;
+                    let at_end = matches!(
+                        d.b.shape.map(|s| s.id),
+                        Some(arris::topo::EntityId::Vertex(_))
+                    );
+                    let better = match best {
+                        None => true,
+                        Some((bd, b_end, _)) => {
+                            d.distance < bd - PICK_TOL
+                                || (d.distance <= bd + PICK_TOL && b_end && !at_end)
+                        }
+                    };
+                    if better {
+                        best = Some((d.distance, at_end, ei));
                     }
                 }
-                let Some((_, ei)) = best else {
-                    return Err(selector("the part has no edges".into()));
+                let Some((_, _, ei)) = best else {
+                    return Err(selector("the part has no edges but seams".into()));
                 };
                 picked[ei] = true;
             }
@@ -862,6 +1181,30 @@ fn pick_edges(
         return Err(selector("no edge selected".into()));
     }
     Ok(out)
+}
+
+/// Which of `edges` are seams of `body`: an edge both of whose uses in the
+/// body lie in one face, where a closed surface (a cylinder, cone, sphere,
+/// torus, a revolve's surface) meets itself. It is a cut in the surface's
+/// parameters, not an edge of the shape: the surface runs on smoothly
+/// across it, and no round or bevel can be put on it.
+fn seam_edges(
+    model: &Model,
+    body: Body,
+    edges: &[Edge],
+) -> Result<Vec<bool>, arris::topo::NotFound> {
+    let faces: std::collections::BTreeSet<_> = model.faces(body)?.iter().map(|f| f.id).collect();
+    edges
+        .iter()
+        .map(|e| {
+            let mut own = model
+                .edge_uses(e.id)?
+                .iter()
+                .filter(|u| faces.contains(&u.face));
+            let first = own.next().map(|u| u.face);
+            Ok(first.is_some() && own.clone().count() >= 1 && own.all(|u| Some(u.face) == first))
+        })
+        .collect()
 }
 
 /// A running axis-aligned box.
@@ -896,13 +1239,25 @@ impl Bounds {
 /// exact box of every edge curve cover the first. For the second, a plane,
 /// cylinder, elliptic cylinder or cone is stationary only along whole
 /// rulings that end on the face's edges, so only spheres and tori add
-/// points, each kept when it lies on the face. NURBS edges and faces have
-/// no exact extremes here and are refused.
-fn bounds(model: &Model, body: Body, motion: &Isometry) -> Result<Aabb3, EvalError> {
+/// points, each kept when it lies on the face.
+///
+/// A NURBS edge (where two cylinders meet, for one) has no exact extremes
+/// here. With `nurbs_tol` None it is refused, so the box is exact or there
+/// is none ([`SolidKernel::bbox`]). With a tolerance its extremes are
+/// bracketed ([`nurbs_bounds`]) and the box is tight to that tolerance on
+/// the sides such an edge decides; the result says so. NURBS faces are
+/// refused either way.
+fn bounds(
+    model: &Model,
+    body: Body,
+    motion: &Isometry,
+    nurbs_tol: Option<f64>,
+) -> Result<TightBox, EvalError> {
     let k = kernel_err(None);
     let unsupported =
         |what: &str| EvalError::unsupported(None, format!("a tight bounding box of {what}"));
     let mut b = Bounds::new();
+    let mut nurbs = Vec::new();
     for v in model.vertices(body).map_err(&k)? {
         let p = motion.apply(model.vertex(v.id).map_err(&k)?.point());
         b.add([p.x, p.y, p.z]);
@@ -912,8 +1267,12 @@ fn bounds(model: &Model, body: Body, motion: &Isometry) -> Result<Aabb3, EvalErr
             continue;
         };
         let curve = model.curve(curve).map_err(&k)?;
-        if matches!(curve, Curve::Nurbs(_)) {
-            return Err(unsupported("a NURBS edge"));
+        if let Curve::Nurbs(n) = curve {
+            if nurbs_tol.is_none() {
+                return Err(unsupported("a NURBS edge"));
+            }
+            nurbs.push((n.transformed(motion), range));
+            continue;
         }
         let Some(cb) = curve.transformed(motion).bounds(range) else {
             return Err(unsupported("an unbounded edge"));
@@ -1003,16 +1362,135 @@ fn bounds(model: &Model, body: Body, motion: &Isometry) -> Result<Aabb3, EvalErr
             }
         }
     }
+    let mut tol = 0.0;
+    if let (Some(want), false) = (nurbs_tol, nurbs.is_empty()) {
+        let exact = Bounds {
+            min: b.min,
+            max: b.max,
+        };
+        let (outer, gap) = nurbs_bounds(&nurbs, &mut b, want)?;
+        // A side an edge's bracket does not pass stays exact.
+        let mut decided = false;
+        for i in 0..3 {
+            decided |= outer.min[i] < exact.min[i] || outer.max[i] > exact.max[i];
+            b.min[i] = exact.min[i].min(outer.min[i]);
+            b.max[i] = exact.max[i].max(outer.max[i]);
+        }
+        if decided {
+            tol = want.max(gap);
+        }
+    }
     if !(b.min.iter().chain(&b.max).all(|v| v.is_finite())) {
         return Err(EvalError::Kernel {
             feature: None,
             message: "the shape has an empty bounding box".into(),
         });
     }
-    Ok(Aabb3::new(
-        Point3::new(b.min[0], b.min[1], b.min[2]),
-        Point3::new(b.max[0], b.max[1], b.max[2]),
-    ))
+    Ok(TightBox {
+        aabb: Aabb3::new(
+            Point3::new(b.min[0], b.min[1], b.min[2]),
+            Point3::new(b.max[0], b.max[1], b.max[2]),
+        ),
+        tol,
+    })
+}
+
+/// How many halvings a NURBS piece may take before the bracket stops.
+const MAX_HALVINGS: usize = 60;
+
+/// Brackets the extremes of NURBS edge curves (already moved), each over
+/// its range. Returns an outer box of all of them, and the largest gap on
+/// any side between that box and `inner`, which on entry holds points of
+/// the solid (the exact geometry) and gains every curve point evaluated.
+///
+/// Why the outer box contains the curves: a NURBS curve's weights are
+/// positive, so each of its points is a convex combination of the control
+/// points of the span it lies in, and the curve over any parameter range
+/// lies in the box of the control points of its segment over that range
+/// (arris `NurbsCurve::segment`, knot insertion). Each box is padded for
+/// the rounding of the knot insertion ([`round_pad`]). Why it is tight:
+/// a piece whose control box reaches more than `tol` past `inner` on some
+/// side is halved, and the curve point at the cut joins `inner`; the
+/// control points of a halved piece converge to the curve quadratically, so
+/// every piece ends inside `inner` grown by `tol`. Since `inner` holds
+/// points of the solid only, each side of the outer box lies within the
+/// returned gap (at most `tol`, unless a piece stopped at
+/// [`MAX_HALVINGS`]) outside the solid's extreme.
+fn nurbs_bounds(
+    curves: &[(arris::geom::NurbsCurve, arris::math::Interval)],
+    inner: &mut Bounds,
+    tol: f64,
+) -> Result<(Bounds, f64), EvalError> {
+    use arris::geom::NurbsCurve;
+    use arris::math::Interval;
+    let point = |c: &NurbsCurve, t: f64| {
+        let p = c.eval(t).point;
+        [p.x, p.y, p.z]
+    };
+    // One piece: its curve (the segment over its range) and control box.
+    let piece = |c: &NurbsCurve, lo: f64, hi: f64| -> Result<(NurbsCurve, Bounds), EvalError> {
+        let range = Interval::new(lo, hi).map_err(kernel_err(None))?;
+        let seg = c.segment(range).map_err(kernel_err(None))?;
+        let mut hull = Bounds::new();
+        for p in seg.control_points() {
+            hull.add([p.x, p.y, p.z]);
+        }
+        for i in 0..3 {
+            let pad = round_pad(hull.min[i].abs().max(hull.max[i].abs()));
+            hull.min[i] -= pad;
+            hull.max[i] += pad;
+        }
+        Ok((seg, hull))
+    };
+    let mut open: Vec<(NurbsCurve, Bounds, usize)> = Vec::new();
+    for (c, range) in curves {
+        // Whole polynomial spans first: a span's control points are
+        // already close to it.
+        let mut cuts = vec![range.lo()];
+        cuts.extend(c.breaks_within(*range));
+        cuts.push(range.hi());
+        for t in &cuts {
+            inner.add(point(c, *t));
+        }
+        for w in cuts.windows(2) {
+            if w[1] > w[0] {
+                let (seg, hull) = piece(c, w[0], w[1])?;
+                open.push((seg, hull, 0));
+            }
+        }
+    }
+    let mut outer = Bounds::new();
+    let reaches = |hull: &Bounds, inner: &Bounds| {
+        (0..3).any(|i| hull.max[i] > inner.max[i] + tol || hull.min[i] < inner.min[i] - tol)
+    };
+    while let Some((seg, hull, depth)) = open.pop() {
+        let d = seg.domain();
+        let mid = d.midpoint();
+        if !reaches(&hull, inner) || depth >= MAX_HALVINGS || !(mid > d.lo() && mid < d.hi()) {
+            outer.add(hull.min);
+            outer.add(hull.max);
+            continue;
+        }
+        inner.add(point(&seg, mid));
+        for (lo, hi) in [(d.lo(), mid), (mid, d.hi())] {
+            let (s, h) = piece(&seg, lo, hi)?;
+            open.push((s, h, depth + 1));
+        }
+    }
+    // A piece kept early met `inner` as it was then; `inner` only grew.
+    let mut gap: f64 = 0.0;
+    for i in 0..3 {
+        gap = gap
+            .max(outer.max[i] - inner.max[i])
+            .max(inner.min[i] - outer.min[i]);
+    }
+    Ok((outer, gap))
+}
+
+/// The rounding allowance for a control point near `magnitude` (mm) after
+/// knot insertion: 64 units in the last place.
+fn round_pad(magnitude: f64) -> f64 {
+    64.0 * f64::EPSILON * magnitude.max(1.0)
 }
 
 #[cfg(test)]

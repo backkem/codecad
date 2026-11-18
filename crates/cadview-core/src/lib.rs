@@ -27,6 +27,7 @@ pub mod render;
 pub mod scene3d;
 pub mod select;
 pub mod setquery;
+pub mod setquery3d;
 pub mod solid;
 pub mod spline;
 pub mod sync;

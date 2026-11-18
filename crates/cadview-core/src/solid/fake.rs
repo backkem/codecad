@@ -9,7 +9,8 @@
 use std::f64::consts::PI;
 
 use super::kernel::{
-    Aabb3, EvalError, Evaluated, MassProps, SolidKernel, ToolResolver, TriMesh, Validity,
+    Aabb3, Closest, EvalError, Evaluated, Interference, MassProps, Placed, SolidKernel,
+    ToolResolver, TriMesh, Validity,
 };
 use super::part::{apply_point, apply_vec};
 use super::types::{Depth, FeatId, Feature, Op, PartDef, Placement, Plane3, Point3, Seg2, ToolRef};
@@ -143,11 +144,22 @@ fn body(
 }
 
 fn eval(def: &PartDef, tools: &dyn ToolResolver, depth: usize) -> Result<FakeBrep, EvalError> {
+    eval_from(def, tools, depth, FakeBrep::default(), 0)
+}
+
+/// `def` from feature `start` on, on top of `b` (its first `start`
+/// features).
+fn eval_from(
+    def: &PartDef,
+    tools: &dyn ToolResolver,
+    depth: usize,
+    mut b: FakeBrep,
+    start: usize,
+) -> Result<FakeBrep, EvalError> {
     if depth > 16 {
         return Err(EvalError::invalid(None, "tools nest too deep"));
     }
-    let mut b = FakeBrep::default();
-    for f in &def.features {
+    for f in def.features.iter().skip(start) {
         let id = f.id();
         let combine = |b: &mut FakeBrep, mut pieces: Vec<Piece>, op: Op| -> Result<(), EvalError> {
             match op {
@@ -353,5 +365,96 @@ impl SolidKernel for FakeKernel {
     fn tessellate(&self, b: &FakeBrep, _chord: f64) -> Result<TriMesh, EvalError> {
         let h = b.hull();
         Ok(crate::scene3d::shapes::cuboid(h.min, h.max))
+    }
+
+    fn evaluate_from(
+        &self,
+        def: &PartDef,
+        tools: &dyn ToolResolver,
+        base: &FakeBrep,
+        done: usize,
+    ) -> Result<Evaluated<FakeBrep>, EvalError> {
+        Ok(Evaluated {
+            brep: eval_from(def, tools, 0, base.clone(), done)?,
+        })
+    }
+
+    /// Between the placed hulls (exact for parts that are one box).
+    fn distances(
+        &self,
+        solids: &[Placed<'_, FakeBrep>],
+        pairs: &[(usize, usize)],
+    ) -> Result<Vec<Result<Closest, EvalError>>, EvalError> {
+        Ok(pairs
+            .iter()
+            .map(|&(i, j)| {
+                let (a, b) = (placed_hull(&solids[i]), placed_hull(&solids[j]));
+                Ok(box_closest(&a, &b))
+            })
+            .collect())
+    }
+
+    /// Between the placed hulls (exact for parts that are one box).
+    fn interferences(
+        &self,
+        solids: &[Placed<'_, FakeBrep>],
+        pairs: &[(usize, usize)],
+    ) -> Result<Vec<Result<Interference, EvalError>>, EvalError> {
+        Ok(pairs
+            .iter()
+            .map(|&(i, j)| {
+                let (a, b) = (placed_hull(&solids[i]), placed_hull(&solids[j]));
+                let c = box_closest(&a, &b);
+                if c.distance > 0.0 {
+                    return Ok(Interference::Apart(c));
+                }
+                let e = [
+                    a.max.x.min(b.max.x) - a.min.x.max(b.min.x),
+                    a.max.y.min(b.max.y) - a.min.y.max(b.min.y),
+                    a.max.z.min(b.max.z) - a.min.z.max(b.min.z),
+                ];
+                let volume = e[0] * e[1] * e[2];
+                if volume <= 0.0 {
+                    return Ok(Interference::Touching { at: c.a });
+                }
+                let vol =
+                    |x: &Aabb3| (x.max.x - x.min.x) * (x.max.y - x.min.y) * (x.max.z - x.min.z);
+                Ok(Interference::Overlapping {
+                    volume,
+                    a_in_b: volume == vol(&a),
+                    b_in_a: volume == vol(&b),
+                })
+            })
+            .collect())
+    }
+}
+
+fn placed_hull((b, p): &Placed<'_, FakeBrep>) -> Aabb3 {
+    aabb_of(corners(&b.hull()).into_iter().map(|c| apply_point(p, c)))
+}
+
+/// The closest points of two boxes: per axis, the gap between the ranges
+/// (or the middle of their overlap).
+fn box_closest(a: &Aabb3, b: &Aabb3) -> Closest {
+    let axis = |a0: f64, a1: f64, b0: f64, b1: f64| -> (f64, f64) {
+        if a1 < b0 {
+            (a1, b0)
+        } else if b1 < a0 {
+            (a0, b1)
+        } else {
+            let m = (a0.max(b0) + a1.min(b1)) / 2.0;
+            (m, m)
+        }
+    };
+    let (x, y, z) = (
+        axis(a.min.x, a.max.x, b.min.x, b.max.x),
+        axis(a.min.y, a.max.y, b.min.y, b.max.y),
+        axis(a.min.z, a.max.z, b.min.z, b.max.z),
+    );
+    let (pa, pb) = (Point3::new(x.0, y.0, z.0), Point3::new(x.1, y.1, z.1));
+    Closest {
+        distance: pa.distance(pb),
+        a: pa,
+        b: pb,
     }
 }

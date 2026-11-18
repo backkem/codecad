@@ -16,3 +16,7 @@ kurbo = "0.13"
 # rejects (a debug build does that anyway, as a panic the adapter turns
 # into the same error).
 arris = { version = "=0.11.1", default-features = false, features = ["paranoid"] }
+
+[dev-dependencies]
+# Already in the workspace (cadview-core): the API tests read cad_call's JSON.
+serde_json = "1"

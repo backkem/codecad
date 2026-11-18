@@ -1490,8 +1490,16 @@ fn methods() -> R {
         {"name": "part", "args": "{id, geometry?}", "desc": "One part"},
         {"name": "partDef", "args": "{def}", "desc": "A definition's whole feature tree"},
     ]);
+    // Between parts (setquery3d.rs) and mirror images.
+    let checks = json!([
+        {"name": "mirror3d", "args": "{target, point?, normal, copy?, attrs?}", "desc": "Mirror parts across a plane (a mirrored definition, shared)"},
+        {"name": "overlapping3d", "args": "{a, b?, tolerance?, touching?, differ?, attrs?, limit?}", "desc": "All pairs of parts that share volume, with the shared volume"},
+        {"name": "pairsWithin3d", "args": "{a, b?, distance, differ?, attrs?, limit?}", "desc": "All pairs of parts closer than distance, with closest points"},
+        {"name": "inside3d", "args": "{a, region, strict?, attrs?}", "desc": "Parts inside a box, or inside the solid of each part of a selection"},
+        {"name": "distance3d", "args": "{a, b}", "desc": "Distance and closest points of two parts"},
+    ]);
     let mut m = m;
-    for extra in [more, solids] {
+    for extra in [more, solids, checks] {
         if let (Some(all), Value::Array(extra)) = (m.as_array_mut(), extra) {
             all.extend(extra);
         }

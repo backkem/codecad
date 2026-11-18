@@ -758,6 +758,17 @@ never synced, serialized or undone.
   so a stale result is never used; undo usually finds the old key still
   cached. Meshes are cached per entry and chord. The server shares one cache
   between its documents. The least recently used entries go past 4096.
+- **A change continues from what was evaluated before** (rung 3D1b). A
+  definition that misses the cache is continued from its longest cached
+  prefix of features (that prefix's key is the key of those features and
+  the tools they reach), through the kernel's `evaluate_from`. A modifying
+  call adds one feature, so it costs that feature's operation, not the
+  whole list again. The arris adapter continues on a copy of the prefix's
+  model, which holds exactly what a from-scratch run holds at that point,
+  so the result is the same B-rep: tests compare volume, centroid, box and
+  mesh bit for bit on every prefix of the harness catalogue and on the
+  examples. Each call still checks the whole result (the kernel's full
+  validity check) and integrates its volume, which grow with the part.
 
 ### How parts survive
 
@@ -803,6 +814,8 @@ cad.move3d(target, [dx, dy, dz])
 cad.rotate3d(target, { angle: 90, axis: [0, 0, 1], about: [0, 0, 0] })
 cad.copy3d(part, { move: [0, 0, 300], count: 4 })        // a row of four, sharing the definition
 cad.copy3d(part, { rotate: { angle: 90, about: [0, 0, 0] }, count: 3, unique: true })
+cad.mirror3d(target, { point: [400, 0, 0], normal: [1, 0, 0] })   // in place -> {mirrored, defsMade, defsRemoved}
+cad.mirror3d(part, { normal: [0, 1, 0], copy: true, attrs: { hand: "left" } })  // the image, as a new part
 cad.remove3d(target)                                     // -> {removed, defsRemoved}
 
 // Attributes
@@ -813,7 +826,7 @@ cad.removePartAttrs("p_12", ["checked"])
 cad.parts({ attrs: { part: "shelf" } })
 // [{ id: "p_12", def: "d_3", name, placement: { translation, rotation: [w, x, y, z] },
 //    features: [{ id: 1, kind: "extrude" }, ...], instances: 2, attrs,
-//    bbox: { min, max }, localBbox: { min, max }, volume, centroid }]
+//    bbox: { min, max }, localBbox: { min, max }, bboxTol, volume, centroid }]
 cad.parts({ geometry: false })     // without box, volume, centroid: works in every build
 cad.part("p_12")
 cad.partDef("d_3")                 // the whole feature tree, the parts using it, its tools
@@ -828,15 +841,139 @@ or `{near: [[x, y, z], ...]}` (the edge nearest each point, in world
 coordinates). `feature` defaults to the definition's first feature; feature
 ids are listed in `parts()`.
 
+The `near` rule: a seam is never picked. A seam is where a closed surface
+(a cylinder, cone, sphere, torus, a revolve's surface) meets itself: both
+sides of it are one face, it is not an edge of the shape, and nothing can
+round or bevel it. Of the other edges the nearest wins. Among edges equally
+near (to 1e-6 mm), one the point is nearest to inside its length beats one
+it is nearest to at an end vertex; then the first in the kernel's order.
+So a point on a revolve's sketch at +x, where the seam meets a circular
+edge, picks the circle, and a point at a corner prefers an edge it lies
+along. Put the point on the edge you mean, away from its ends.
+
 `bbox` is the tight box of the exact solid in the world; `localBbox` the
-same in the part's own frame (what a cut list wants). `volume` is
-integrated on the exact faces (no mesh); `centroid` is in the world, or
-null where a kernel computes no first moments.
+same in the part's own frame (what a cut list wants). `bboxTol` says how
+tight: 0 when both are exact (each side touches the solid). Where two
+cylinders meet (a cross bore, a tee, a round boss in a curved wall) the
+edge is a NURBS curve the kernel fitted to the intersection, and no exact
+box of it exists here; its extremes are then bracketed and `bboxTol` is
+1e-9: the box still contains the solid and each side lies at most that far
+outside it. Why that is guaranteed: a NURBS curve's weights are positive,
+so the curve over any parameter range lies in the box of the control
+points of its segment over that range (knot insertion); a piece whose
+control box reaches more than the tolerance past the curve points found so
+far is halved and its midpoint added, until none does; boxes are padded
+for the rounding of knot insertion. The box is tight to the edge curves the
+kernel holds; those follow the true intersection to the kernel's linear
+tolerance (1e-7 mm). NURBS faces (a smooth loft) still have no box.
+`volume` is integrated on the exact faces (no mesh); `centroid` is in the
+world, or null where a kernel computes no first moments.
 
 What the kernel (arris 0.11.1) does not do yet, and refuses: tapered
 extrudes, asymmetric chamfers, spline profile segments, elliptic segments
 in a revolve, and fillets whose corners it has no closed form for. Each is
 a refusal with the message above.
+
+`mirror3d` makes mirror images. A reflection is not a rigid motion (it
+turns a left hand into a right one), so it cannot be a placement: a
+mirrored part places a **mirrored definition**. Every definition is
+mirrored the same way, across its own frame's YZ plane, so the mirrored
+definition depends only on the original: a part placed by `P` and mirrored
+across a world plane `M` places the mirrored definition by `M P S` (`S` the
+YZ reflection), which is rigid. Parts that share a definition mirror to
+parts that share one mirrored definition, made once (its tools are
+mirrored too). The image is a copy, not a live link: later edits of the
+original do not reach it. A definition whose features equal the mirrored
+ones is reused, so mirroring back finds the original. Feature ids and edge
+selectors carry over; a part with a live part link (`ToolRef::Part`) is
+refused.
+
+### Checks between parts
+
+Built in rung 3D1b. The questions a rule asks about an assembly (does
+anything overlap, is this gap wide enough, is this inside that, how far
+apart are these two) are set queries over parts, the 3D twins of the 2D
+set queries above. One call answers for whole selections, picked with the
+part selector, and returns every pair at once:
+
+```js
+// Pairs that share volume (interference), each once; b null: within a
+cad.overlapping3d(null)
+// { pairs: [{ a, b, volume, depth, aInB, bInA }], skipped: [] }
+cad.overlapping3d({ attrs: { part: "shelf" } }, { attrs: { part: "side" } },
+                  { tolerance: 1e-6, touching: false, attrs: true, differ: ["group"] })
+
+// Pairs strictly closer than a distance (clearance), with closest points
+cad.pairsWithin3d({ has: ["member"] }, null, 50)
+// { pairs: [{ a, b, distance, pa: [x, y, z], pb: [x, y, z] }], skipped: [] }
+
+// Parts inside a box (touching its sides counts unless strict), or inside
+// the solid of each part of a selection
+cad.inside3d({ has: ["component"] }, { min: [0, 0, 0], max: [100, 60, 23] })
+// { pairs: [{ a, b: null, touches }], skipped: [] }
+cad.inside3d(["p_31"], { attrs: { part: "case" } })   // { pairs: [{ a, b }] }
+
+// The distance between two given parts (measure)
+cad.distance3d("p_4", "p_9")    // { a, b, distance, pa, pb }
+```
+
+Names. They are the 2D names (`overlapping`, `pairsWithin`, `inside`) with
+the `3d` every part call carries where a 2D call of the same name exists
+(`move3d`, `rotate3d`, `copy3d`, `mirror3d`). A script that knows the 2D
+rules knows these, and the options mean the same: `differ`, `attrs`,
+`limit`, `strict`. The ladder's working names `interference` and
+`measure3d` were dropped: one names a use (a domain word), the other a
+second name for what 2D calls `distance`. `distance3d` is the 2D
+`distance` for two parts.
+
+Semantics. As in 2D: with `b` null the pairs are taken within `a`, each
+once; a part in both sets is never paired with itself; pairs come in
+order of `a`'s, then `b`'s position. `overlapping3d` lists pairs that share
+volume. Touching (a shelf in its dado, a board on a joist) is not overlap;
+`touching: true` lists those too, with `volume: 0`. Each overlap has a
+`depth`: its volume over the largest face of the box both parts' boxes
+share, which is the penetration depth for box-shaped overlaps (2 for a
+shelf 2 mm too long) and never more than that box's smallest side. An
+overlap whose depth is at most `tolerance` (default 1e-6 mm) counts as a
+touch: rounding in a rotated placement leaves slivers that thin. `pairsWithin3d` counts
+touching and overlapping parts as distance 0. A pair the kernel cannot
+answer goes to `skipped` with the reason, so a rule never passes silently
+on a pair it did not see.
+
+Exactness. The answers come from the exact solids, never from meshes.
+Distances and closest points are arris's `query::distance`: the critical
+points of the distance on each pair of face and edge carriers, solved in
+closed form for planes, cylinders, cones, spheres and tori, and recursing
+onto the boundaries; exact to rounding. Pairs it has no formula for (a
+cone against a cone off their common axis, anything against a NURBS
+face's interior) are refused, so skipped. The shared volume is the
+kernel's `common` of the two solids, measured by the flux integral on its
+exact faces. Where arris refuses that common (two faces in one plane can
+leave a contact it cannot read, as a lengthened shelf against its side
+does), the volume is `V(a) - V(a - b)` (or the same the other way round):
+the cut that made the joint, measured the same way; only if both fail is
+the pair skipped. Where an edge is a fitted intersection curve (two cylinders
+meeting) the answer is to the kernel's linear tolerance (1e-7 mm).
+`inside3d` with a box compares tight boxes, which is exact: a solid lies in
+a box exactly when its tight box does (to `bboxTol`).
+
+Speed. A broad phase on the parts' world boxes (sweep and prune along x)
+picks candidate pairs; only those reach the kernel, and each solid is
+copied into the kernel's scratch space once per call. For overlap, only
+boxes whose interiors meet are candidates, so touching parts cost a box
+test. On a 10 x 10 grid of blocks with three overlaps (release build, one
+machine): `overlapping3d` 26 ms, `pairsWithin3d` over 182 pairs 700 ms,
+`inside3d` with a box 0.5 ms (`a_hundred_parts_stay_fast` in
+`crates/cadview-solid/tests/checks.rs`).
+
+A rule on top, script code over these calls (examples/3d/11):
+
+```js
+const clash = cad.overlapping3d(null, undefined, { attrs: true });
+run.ok("no two parts overlap", clash.pairs.length === 0 && clash.skipped.length === 0);
+const rests = cad.pairsWithin3d(beam, { has: ["member"] }, 1e-6, { attrs: true });
+// the beam must rest on the head rail and both legs
+```
 
 ### Render
 
@@ -868,6 +1005,30 @@ option, not part data. Colours follow the document's part order, so a part
 keeps its colour in a view that `select`s only some parts. The server draws it with `cadview-render3d` on the
 GPU device the 2D renderer uses; there is no CPU path for 3D yet.
 
+`quality: "presentation"` path traces the same scene with the same
+options: light from an environment, soft shadows on the ground, bounce
+light, physical materials. It draws no edge lines or occlusion.
+
+```js
+const mat = await cad.use("materials");      // examples/3d/lib: oak, steel, glass, ...
+cad.render({
+  view: "iso", ground: true, out: "renders/shelf.png",
+  quality: "presentation", spp: 1024, seed: 0,  // same scene, spp and seed: same bytes
+  materials: mat.option(),     // { attr: "material", map: { oak: { color, roughness, pattern }, ... }, default? }
+  environment: "studio",       // "studio" | "sky" | { preset, zenith, horizon, ground, intensity, sun: { direction, frame, angle, irradiance, color } | false }
+  exposure: 0,                 // stops
+})
+// -> { ..., quality: "presentation", samples, trace: { passes, triangles, bvhMs, uploadMs, traceMs, pngMs, ... } }
+```
+
+`materials` works like `colorBy`: the values of one attribute map to
+numbers (`color`, `metallic`, `roughness`, `transmission`, `ior`,
+`emission`, `clearcoat`, `clearcoatRoughness`, and a `pattern`: `bands`
+for wood grain, `brushed` for streaks along an axis or, `circular`, about
+it; `axis` is "long", "short", "symmetry" or a vector in the part's
+frame). The core knows no material names. The working render uses only
+`color`, `metallic` and `roughness` from it.
+
 ### A domain library on top
 
 A woodworking library is script code over these calls. It never reaches
@@ -890,10 +1051,11 @@ return { board, dado, cutList };
 
 ### Not yet
 
-Interference and distance between parts, projected 2D views, sections, a
-browser viewport and a kernel in the browser, materials, assets and
-`scene3d` settings, live tool links (`ToolRef::Part`) and clearances on
-tool parts are later rungs (3D1b to 3D6b).
+Projected 2D views, sections, a browser viewport and a kernel in the
+browser, materials, assets and `scene3d` settings, live tool links
+(`ToolRef::Part`) and clearances on tool parts are later rungs (3D2b to
+3D6b). Between parts: no `nearest3d` yet, and no distance from a bare point
+to a part.
 
 ---
 

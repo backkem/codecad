@@ -1471,6 +1471,8 @@ mod tests {
     /// its summary. Its renders go to a temporary folder, never over the
     /// committed pictures: the test sets `EXAMPLE_RENDER_DIR` (and
     /// `EXAMPLE_RENDER = false` without a GPU) before the script's text.
+    /// Presentation renders run at 16 samples (`EXAMPLE_PRESENT_SPP`): the
+    /// path is exercised, the noise does not matter here.
     #[tokio::test(flavor = "multi_thread")]
     async fn the_3d_examples_run_and_check_themselves() {
         let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/3d");
@@ -1493,7 +1495,7 @@ mod tests {
             let (dir, registry) = registry();
             let out = dir.path().join("renders");
             let prelude = format!(
-                "globalThis.EXAMPLE_RENDER_DIR = {}; globalThis.EXAMPLE_RENDER = {draw};\n",
+                "globalThis.EXAMPLE_RENDER_DIR = {}; globalThis.EXAMPLE_RENDER = {draw}; globalThis.EXAMPLE_PRESENT_SPP = 16;\n",
                 serde_json::to_string(&out.to_string_lossy()).unwrap()
             );
             let program = prelude + &std::fs::read_to_string(&path).unwrap();
@@ -1541,5 +1543,62 @@ mod tests {
                 assert!(files.is_empty(), "{v}");
             }
         }
+    }
+
+    // ── Checks between parts (rung 3D1b) ─────────────────────────────
+
+    /// The ladder's gate, through the script entry `/api/run` uses: the
+    /// bookshelf example as built has no interference (its own check), and
+    /// with one shelf 2 mm too long exactly one record, that shelf and the
+    /// right side, with the closed-form overlap; two parallel shelves come
+    /// back their opening apart to 1e-9 mm.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_shelf_two_mm_too_long_gives_one_interference_record() {
+        let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/3d");
+        let (_dir, registry) = registry();
+        let program_text = "globalThis.EXAMPLE_RENDER = false;\n".to_string()
+            + &std::fs::read_to_string(folder.join("03-bookshelf.js")).unwrap();
+        run_script(&SANDBOX, &registry, "doc", &program_text, &folder, None)
+            .await
+            .unwrap_or_else(|e| panic!("03-bookshelf: {e}"));
+        let out = program(
+            &folder,
+            &registry,
+            "const shelves = cad.parts({ attrs: { part: \"shelf\" } });\n\
+             const none = cad.overlapping3d(null);\n\
+             const gap = cad.distance3d(shelves[0], shelves[1]);\n\
+             // In the middle shelf's place, after the dados were cut, a\n\
+             // board made 2 mm too long at its right end.\n\
+             const [lo, hi] = [shelves[2].bbox.min, shelves[2].bbox.max];\n\
+             cad.remove3d(shelves[2]);\n\
+             const long = cad.extrude({ min: [lo[0], lo[1]], max: [hi[0] + 2, hi[1]] },\n\
+               { at: [0, 0, lo[2]], distance: hi[2] - lo[2], attrs: { part: \"shelf\" } });\n\
+             const one = cad.overlapping3d(null, undefined, { attrs: true });\n\
+             const right = cad.parts({ attrs: { part: \"side\" } }).find((p) => p.bbox.max[0] === 800).id;\n\
+             return { none, gap: gap.distance, one, long: long.id, right };",
+        )
+        .await;
+        assert_eq!(out["none"]["pairs"], serde_json::json!([]), "{out}");
+        assert!(
+            (out["gap"].as_f64().unwrap() - 326.4).abs() <= 1e-9,
+            "{out}"
+        );
+        let pairs = out["one"]["pairs"].as_array().unwrap();
+        assert_eq!(pairs.len(), 1, "{out}");
+        let mut got = [pairs[0]["a"].clone(), pairs[0]["b"].clone()];
+        let mut want = [out["long"].clone(), out["right"].clone()];
+        got.sort_by_key(|v| v.to_string());
+        want.sort_by_key(|v| v.to_string());
+        assert_eq!(got, want, "{out}");
+        let volume = pairs[0]["volume"].as_f64().unwrap();
+        let closed = 2.0 * 294.0 * 18.0;
+        eprintln!(
+            "bookshelf, one shelf 2 mm long: overlap {volume} mm^3 (closed form {closed}), \
+             rel err {:.1e}; shelf gap {} (closed form 326.4)",
+            rel_err(volume, closed),
+            out["gap"]
+        );
+        assert!(rel_err(volume, closed) <= 1e-6, "{volume} vs {closed}");
+        assert_eq!(out["one"]["skipped"], serde_json::json!([]), "{out}");
     }
 }

@@ -92,7 +92,10 @@ crates/
       src/dispatch_3d.rs      # cad_call methods for solid parts: extrude, revolve,
                               #   sweep, loft, cut, union, intersect, hole,
                               #   fillet3d, chamfer3d, move3d, rotate3d, copy3d,
-                              #   remove3d, parts (rung 3D1a)
+                              #   mirror3d, remove3d, parts (rungs 3D1a, 3D1b)
+      src/setquery3d.rs       # set queries between parts: overlapping3d,
+                              #   pairsWithin3d, inside3d, distance3d (box broad
+                              #   phase, the kernel on the exact solids)
       src/geo.rs              # geometry helpers (distance, lerp, polygon tests)
       src/attrs.rs            # free-form attributes on entities and block
                               #   definitions: stored and matched, never interpreted
@@ -109,21 +112,26 @@ crates/
                               #   materials, lighting, edges), Camera3d (orbit,
                               #   named views, fit, matrices), RenderMesh (normals
                               #   and sharp edges at a crease angle), build_frame
-                              #   (silhouettes per view), reference shade + tone curve
+                              #   (silhouettes per view), reference shade + tone curve;
+                              #   presentation: physical Material + Pattern (wood
+                              #   bands, brushed), Environment (dome + Sun), exposure
       src/solid/              # 3D parts (docs/3d-design.md)
         part.rs               #   Part (a placed definition + attrs), p_/d_ ids,
                               #   placement maths
         eval.rs               #   Evaluator a shell supplies (SolidEnv on the
                               #   Document) + content-keyed cache of solids and
-                              #   meshes; NO_KERNEL error without one
+                              #   meshes; a miss continues from the longest cached
+                              #   feature prefix; NO_KERNEL error without one
         scene.rs              #   parts -> Scene3d for cad.render (view, colours,
-                              #   chord, cutaway, explode)
+                              #   chord, cutaway, explode, materials by attribute,
+                              #   environment, exposure)
         types.rs              #   feature tree: PartDef, Feature, Profile2d (exact
                               #   2D segments), EdgeSel, Plane3, Placement
-        kernel.rs             #   SolidKernel trait (optional capabilities default
-                              #   to Unsupported: tessellate), TriMesh, EvalError,
-                              #   MassProps (centroid optional), Aabb3. Core links
-                              #   no kernel
+        kernel.rs             #   SolidKernel trait (optional capabilities with
+                              #   defaults: tessellate, evaluate_from, bbox_within,
+                              #   distances, interferences), TriMesh, EvalError,
+                              #   MassProps (centroid optional), Aabb3, TightBox.
+                              #   Core links no kernel
         select.rs             #   EdgeSel -> exact 3D target curves (kernel-neutral)
         mesh.rs               #   TriMesh topology (closed, Euler counts), shared by
                               #   the arris adapter and the harness
@@ -145,11 +153,15 @@ crates/
       src/lib.rs              # Renderer3d trait (progressive-capable), Gpu, Target
       src/raster.rs           # working-quality raster: MSAA 4x, depth, shading
                               #   that mirrors scene3d::shade, edge lines (+ .wgsl)
+      src/trace.rs            # presentation quality: progressive path tracer
+                              #   (trace.wgsl compute, resolve.wgsl tone curve)
+      src/bvh.rs              #   binned-SAH BVH per mesh + one over instances
       src/options.rs          # RenderOptions3d: size, pixelRatio, background,
-                              #   quality (working | presentation, not yet)
-      src/headless.rs         # render_rgba / render_png on cadview-render's
-                              #   process-wide GPU device (native)
+                              #   quality (working | presentation), spp, seed
+      src/headless.rs         # render_rgba / render_png / render_radiance on
+                              #   cadview-render's process-wide GPU device (native)
       examples/shapes.rs      # procedural meshes -> PNGs, timings, --fallback
+      examples/noise.rs       # RMS noise of renders against a reference PNG
     cadview-web/              # wasm-bindgen target (browser renderer)
       src/main.rs             # entry points, module wiring
       src/session.rs          # SessionRegistry, DocumentSession, SESSIONS
@@ -692,10 +704,14 @@ channel).
 
 `cadview-render3d` renders a `cadview_core::scene3d::Scene3d` (triangle
 meshes, placements, materials, a camera) headless, on the same
-process-wide GPU device as the 2D renderer. Only the working quality
-exists (shaded raster with edges and outlines, ambient occlusion, an
-optional ground, clip planes for cutaways); `Quality::Presentation`
-returns `Render3dError::NotAvailable`. No server or script API yet.
+process-wide GPU device as the 2D renderer, in two qualities that draw the
+same scene and camera: working (shaded raster with edges and outlines,
+ambient occlusion, an optional ground, clip planes for cutaways) and
+presentation (a progressive path tracer on plain compute shaders:
+`quality: "presentation"`, `spp`, `seed`, `materials`, `environment`,
+`exposure` in `cad.render`; design §9, ladder 3D5a). The same scene,
+samples and seed give the same bytes. Named materials live in scripts
+(`examples/3d/lib/materials.js`), never in Rust.
 
 ```bash
 # Procedural meshes to PNGs: every working-render feature once, 500-part
@@ -705,6 +721,11 @@ cargo run -p cadview-render3d --release --example shapes -- out/ --fallback
 # Kernel-evaluated corpus parts, whole and cut, plus corpus-sheet.png (the
 # harness is the only crate with a kernel)
 cargo run -p solid-harness --release --example render_corpus -- out/
+# Presentation evidence: furnace, closed-form irradiance, shadow, glass
+# displacement, determinism, convergence, silhouettes, patterns, clamp
+cargo test -p cadview-render3d --release --test present -- --nocapture
+# The 3D examples write NN-name-render.png (path traced) to target/3d-views/
+cargo run -p cadview-server --release -- --exec examples/3d/03-bookshelf.js
 ```
 
 ## Tests
@@ -751,6 +772,12 @@ cargo test -p solid-harness --release --test mutants -- --nocapture
 # sections, tessellation), each against a closed form
 cargo test -p cadview-solid --release forward_look -- --nocapture
 cargo test -p solid-harness --release --lib forward_look -- --nocapture
+# The trait's optional capabilities over the whole catalogue on arris:
+# evaluate_from against from scratch, bbox_within against bbox, pair queries
+cargo test -p solid-harness --release --test capabilities -- --nocapture
+# Rung 3D1b through cad_call on arris: continued evaluation, NURBS boxes,
+# the near rule, mirror3d, the set queries' gates and 100-part timings
+cargo test -p cadview-solid --release --test checks -- --nocapture
 # The corpus in wasm (development-time, needs no Node): build the module,
 # then time it natively and under wasmtime (docs/research/3d-corpus-timings.md)
 cargo build -p solid-harness --release --target wasm32-unknown-unknown --example wasm_corpus --example wasm_corpus_base

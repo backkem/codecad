@@ -322,6 +322,9 @@ cad.parts({ attrs: { part: "side" } })   // [{id, def, attrs, placement, bbox, l
 cad.render({ view: "iso", out: "check3d.png", ground: true })
 cad.render({ view: "iso", out: "cut.png", clip: { point: [300, 150, 0], normal: [0, -1, 0] } })
 cad.render({ view: "iso", out: "exploded.png", explode: 0.6, colorBy: { attr: "part" } })
+// Path traced, materials by attribute (names live in examples/3d/lib/materials.js)
+cad.render({ view: "iso", out: "shot.png", ground: true, quality: "presentation",
+             materials: (await cad.use("materials")).option(), environment: "studio" })
 ```
 
 - Profiles stay exact: vertex lists with bulges, `{center, radius}`,
@@ -341,9 +344,21 @@ cad.render({ view: "iso", out: "exploded.png", explode: 0.6, colorBy: { attr: "p
   geometry. Details: `docs/api-surface.md`, "Solid parts".
 - Cut joints with the parts that fill them: `cad.cut(side, { part: shelf })`
   makes the dado exactly where the shelf sits.
-- Pick a round edge of a revolve or a circle extrude with a `near` point
-  away from +x of its sketch: the seam lies there, and a point on it is as
-  near to the seam edge.
+- A `near` point picks the nearest real edge: seams (where a cylinder or a
+  revolve's surface meets itself) are never picked, and a point at a corner
+  prefers the edge it lies along. Put the point on the edge you mean, away
+  from its ends.
+- Check between parts, for whole sets in one call (exact solids):
+  `cad.overlapping3d(null)` (pairs sharing volume, with the volume),
+  `cad.pairsWithin3d(a, b, d)` (pairs closer than `d`, with closest
+  points; touching parts are at 0), `cad.inside3d(a, { min, max })`,
+  `cad.distance3d(p, q)`. A domain rule (no overlaps, a clearance, a fixing
+  that must touch) is a filter on their pairs. Expect `skipped: []`.
+- `cad.mirror3d(p, { point, normal, copy: true })` makes the mirror image
+  (a left side from a right side). It places a mirrored definition of its
+  own, shared by all images of one definition.
+- A part's `bboxTol` is 0 when its box is exact, else how loose it may be
+  (1e-9 mm where two cylinders meet).
 - Check volumes against closed forms the script computes (Pappus for a
   revolve, area times length for an extrude or sweep): a wrong bulge sign
   or a misplaced cut shows up as a number, not only in the picture. The

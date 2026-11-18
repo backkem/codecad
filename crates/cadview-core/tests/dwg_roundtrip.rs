@@ -49,6 +49,7 @@ fn roundtrip_synthetic() {
 
     let id = EntityId(100);
     doc.entities.push(DrawEntity {
+        attrs: Default::default(),
         id,
         layer: "TEST".into(),
         color: None,
@@ -79,6 +80,7 @@ fn roundtrip_synthetic() {
     });
     let id = EntityId(101);
     doc.entities.push(DrawEntity {
+        attrs: Default::default(),
         id,
         layer: "TEST".into(),
         color: None,
@@ -95,6 +97,7 @@ fn roundtrip_synthetic() {
     });
     let id = EntityId(102);
     doc.entities.push(DrawEntity {
+        attrs: Default::default(),
         id,
         layer: "TEST".into(),
         color: None,
@@ -116,6 +119,7 @@ fn roundtrip_synthetic() {
     });
     let id = EntityId(103);
     doc.entities.push(DrawEntity {
+        attrs: Default::default(),
         id,
         layer: "TEST".into(),
         color: None,

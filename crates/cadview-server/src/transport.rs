@@ -301,10 +301,13 @@ async fn handle_rpc_call(
                         "Saved DWG to {path} ({} entities)",
                         slot.document.entities.len()
                     );
-                    format!(
-                        r#"{{"ok":true,"path":"{path}","entities":{}}}"#,
-                        slot.document.entities.len()
-                    )
+                    serde_json::json!({
+                        "ok": true,
+                        "path": path,
+                        "entities": slot.document.entities.len(),
+                        "attrs": cadview_core::dwg_attr_losses(&slot.document),
+                    })
+                    .to_string()
                 }
                 Err(e) => format!(r#"{{"error":"dwg write failed: {e}"}}"#),
             }
@@ -363,6 +366,55 @@ async fn handle_rpc_call(
                     format!(r#"{{"ok":true,"entities":{count}}}"#)
                 }
                 Err(e) => format!(r#"{{"error":"load failed: {e}"}}"#),
+            }
+        }
+        // The lossless document file (attributes, blocks, ids, styles).
+        "saveJson" => {
+            let path = req["args"]["path"].as_str().unwrap_or("document.json");
+            let reg = registry.lock().await;
+            let Some(slot) = reg.get(doc_key) else {
+                return format!(r#"{{"error":"document '{}' not loaded"}}"#, doc_key);
+            };
+            let text = match cadview_core::document_to_json(&slot.document) {
+                Ok(t) => t,
+                Err(e) => return serde_json::json!({ "error": e }).to_string(),
+            };
+            match std::fs::write(path, &text) {
+                Ok(()) => serde_json::json!({
+                    "ok": true,
+                    "path": path,
+                    "entities": slot.document.entities.len(),
+                    "bytes": text.len(),
+                })
+                .to_string(),
+                Err(e) => serde_json::json!({ "error": format!("write failed: {e}") }).to_string(),
+            }
+        }
+        "loadJson" => {
+            let path = req["args"]["path"].as_str().unwrap_or("");
+            if path.is_empty() {
+                return r#"{"error":"path required"}"#.to_string();
+            }
+            let loaded = std::fs::read_to_string(path)
+                .map_err(|e| format!("loadJson: read '{path}': {e}"))
+                .and_then(|t| cadview_core::document_from_json(&t));
+            match loaded {
+                Ok(new_doc) => {
+                    let count = new_doc.entities.len();
+                    let mut reg = registry.lock().await;
+                    let Some(slot) = reg.get_mut(doc_key) else {
+                        return format!(r#"{{"error":"document '{}' not loaded"}}"#, doc_key);
+                    };
+                    let sv_before = slot.sync_doc.state_vector();
+                    slot.sync_doc.populate_from_document(&new_doc);
+                    let update = slot.sync_doc.encode_diff(&sv_before).unwrap_or_default();
+                    slot.document = new_doc;
+                    if !update.is_empty() {
+                        let _ = slot.update_tx.send(update);
+                    }
+                    format!(r#"{{"ok":true,"entities":{count}}}"#)
+                }
+                Err(e) => serde_json::json!({ "error": e }).to_string(),
             }
         }
         "beginBatch" => {

@@ -42,6 +42,8 @@ fn generate_minimal_dwgs() {
         doc.ensure_layer("E_TEST");
         // Define a simple block
         let block = BlockDef {
+            attrs: Default::default(),
+            shape_attrs: Vec::new(),
             name: "TEST_SYMBOL".into(),
             shapes: vec![
                 (
@@ -65,6 +67,7 @@ fn generate_minimal_dwgs() {
 
         // Place the block
         doc.entities.push(DrawEntity {
+            attrs: Default::default(),
             id: EntityId(1),
             layer: "E_TEST".into(),
             color: None,

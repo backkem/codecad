@@ -168,6 +168,7 @@ impl<'a> Emitter<'a> {
     fn push(&mut self, shape: Shape) -> EntityId {
         let id = self.doc.alloc_id();
         self.doc.entities.push(DrawEntity {
+            attrs: Default::default(),
             id,
             layer: self.style.layer.clone(),
             color: self.style.color,

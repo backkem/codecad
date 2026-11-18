@@ -325,6 +325,11 @@ export const cad = {
     downloadBlob(bytes, path, "application/octet-stream");
     return { ok: true, path };
   },
+  // The server writes its copy of the document, so pending edits go first.
+  saveJson: async (path = "document.json") => {
+    await flushAndWaitSync();
+    return rpcCall("saveJson", { path }, cad.currentSession() ?? undefined);
+  },
   savePdf: async (path = "output.pdf", opts: SavePdfOptions = {}) => {
     if (_serverAvailable) {
       await flushAndWaitSync();

@@ -377,8 +377,36 @@ fn rpc_call(state: &mut RunState, method: &str, args: &str) -> Result<String, St
                 "ok": true,
                 "path": resolved.to_string_lossy(),
                 "entities": doc.entities.len(),
+                // Which attributes the DWG keeps and which it cannot hold.
+                "attrs": cadview_core::dwg_attr_losses(doc),
             })
             .to_string())
+        }
+        // The lossless document file (attributes, blocks, ids, styles).
+        "saveJson" => {
+            let a: Value = serde_json::from_str(args).map_err(|e| e.to_string())?;
+            let path = a["path"].as_str().unwrap_or("document.json");
+            let resolved = resolve_write(&state.write_base, path);
+            let text = cadview_core::document_to_json(doc)?;
+            std::fs::write(&resolved, &text).map_err(|e| format!("write {path}: {e}"))?;
+            Ok(serde_json::json!({
+                "ok": true,
+                "path": resolved.to_string_lossy(),
+                "entities": doc.entities.len(),
+                "bytes": text.len(),
+            })
+            .to_string())
+        }
+        "loadJson" => {
+            let a: Value = serde_json::from_str(args).map_err(|e| e.to_string())?;
+            let path_str = a["path"].as_str().ok_or("loadJson: path required")?;
+            let resolved = resolve_read(&state.read_base, path_str)?;
+            let text = std::fs::read_to_string(&resolved)
+                .map_err(|e| format!("loadJson: read '{path_str}': {e}"))?;
+            let new_doc = cadview_core::document_from_json(&text)?;
+            let count = new_doc.entities.len();
+            *doc = new_doc;
+            Ok(format!(r#"{{"ok":true,"entities":{count}}}"#))
         }
         "savePdf" => {
             let a: Value = serde_json::from_str(args).map_err(|e| e.to_string())?;
@@ -1012,6 +1040,126 @@ mod tests {
             let message = output.value.unwrap();
             assert!(message.contains(expected), "{spec}: {message}");
         }
+    }
+
+    // ── Attributes and set queries (rung A8) ─────────────────────────
+
+    /// Run one of the scripts in `tests/a8/` the way `/api/run` runs
+    /// `{"exec": ...}`, and parse its return value.
+    async fn exec_a8(registry: &Arc<Mutex<DocumentRegistry>>, name: &str) -> Value {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/a8")
+            .join(name);
+        let output = exec_file(&SANDBOX, registry, "doc", path.to_str().unwrap(), None)
+            .await
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        value(&output)
+    }
+
+    /// Run an inline program the way `/api/run` runs `{"program": ...}`.
+    async fn program(dir: &Path, registry: &Arc<Mutex<DocumentRegistry>>, js: &str) -> Value {
+        let output = run_script(&SANDBOX, registry, "doc", js, dir, None)
+            .await
+            .unwrap_or_else(|e| panic!("{e}\n{js}"));
+        value(&output)
+    }
+
+    /// Save the document as JSON, clear it, load it back; then the same with
+    /// DWG. Returns what each step reported.
+    async fn json_and_dwg_round_trip(
+        dir: &Path,
+        registry: &Arc<Mutex<DocumentRegistry>>,
+    ) -> (Value, Value) {
+        let json_path = serde_json::to_string(&dir.join("doc.json").to_string_lossy()).unwrap();
+        let dwg_path = serde_json::to_string(&dir.join("doc.dwg").to_string_lossy()).unwrap();
+        let json = program(
+            dir,
+            registry,
+            &format!(
+                 "const saved = cad.saveJson({json_path});\n\
+                 cad.clear({{ all: true }});\n\
+                 const cleared = cad.describe().entities;\n\
+                 const loaded = cad.loadJson({json_path});\n\
+                 return {{ saved: saved.entities, cleared, loaded: loaded.entities, attrs: cad.describe().attrs }};"
+            ),
+        )
+        .await;
+        let dwg = program(
+            dir,
+            registry,
+            &format!(
+                "const saved = cad.saveDwg({dwg_path});\n\
+                 cad.clear({{ all: true }});\n\
+                 const loaded = cad.loadDwg({dwg_path});\n\
+                 return {{ saved: saved.attrs, loaded: loaded.entities, attrs: cad.describe().attrs }};"
+            ),
+        )
+        .await;
+        (json, dwg)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_clearance_rule_runs_on_attributes_that_survive_json_and_dwg() {
+        let (dir, registry) = registry();
+        assert_eq!(exec_a8(&registry, "pcb-board.js").await, 7);
+        // Attributes from a script: set on a selection, read back typed.
+        let v = program(
+            dir.path(),
+            &registry,
+             "const r = cad.setAttrs({ layer: 'CU', has: ['net'] }, { checked: true });\n\
+             return {\n\
+               updated: r.updated.length,\n\
+               gnd: cad.entities({ attrs: { net: 'GND' } }).map((e) => e.attrs.name),\n\
+               pad1: cad.entities({ expand: true, attrs: { pin: '1' } }).map((e) => [e.attrs.ref, e.attrs['net.1'], e.child]),\n\
+             };",
+        )
+        .await;
+        assert_eq!(
+            v,
+            serde_json::json!({"updated": 5, "gnd": ["g1", "g2"], "pad1": [["R1", "GND", 0]]})
+        );
+
+        let expected = serde_json::json!({
+            "violations": [
+                {"between": ["R1.1", "v2"], "gap": 0.15},
+                {"between": ["g1", "v1"], "gap": 0.15},
+                {"between": ["g2", "s1"], "gap": 0},
+            ],
+            "shorts": [{"nets": ["GND", "SIG"], "at": [[10, 3]]}],
+        });
+        assert_eq!(exec_a8(&registry, "pcb-clearance.js").await, expected);
+
+        let (json, dwg) = json_and_dwg_round_trip(dir.path(), &registry).await;
+        let attrs = serde_json::json!({"checked": 5, "name": 5, "net": 5, "net.1": 1, "net.2": 1, "ref": 1});
+        assert_eq!(
+            json,
+            serde_json::json!({"saved": 7, "cleared": 0, "loaded": 7, "attrs": attrs})
+        );
+        // DWG keeps entity and pad attributes; the footprint's own name is
+        // the one thing it cannot hold, and the save says so.
+        assert_eq!(dwg["saved"]["kept"], 6, "{dwg}");
+        assert_eq!(dwg["saved"]["droppedBlocks"], serde_json::json!(["R0603"]));
+        assert_eq!(dwg["attrs"], attrs, "{dwg}");
+        assert_eq!(exec_a8(&registry, "pcb-clearance.js").await, expected);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_free_space_rule_runs_on_attributes_that_survive_json_and_dwg() {
+        let (dir, registry) = registry();
+        assert_eq!(exec_a8(&registry, "play-area.js").await, 6);
+        let expected = serde_json::json!([
+            "slide is not inside the site",
+            "swing and bench overlap",
+            "tower and sandbox are 100 apart, need 1500",
+            "sandbox and swing are 1200 apart, need 2000",
+        ]);
+        assert_eq!(exec_a8(&registry, "play-free-space.js").await, expected);
+        let (json, dwg) = json_and_dwg_round_trip(dir.path(), &registry).await;
+        let attrs = serde_json::json!({"free": 5, "item": 5, "role": 1});
+        assert_eq!(json["attrs"], attrs, "{json}");
+        assert_eq!(dwg["attrs"], attrs, "{dwg}");
+        assert_eq!(dwg["saved"]["droppedEntities"], serde_json::json!([]));
+        assert_eq!(exec_a8(&registry, "play-free-space.js").await, expected);
     }
 
     /// Every example loads `lib/drafting.js` through `cad.use` and runs.

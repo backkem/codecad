@@ -1,3 +1,4 @@
+use crate::attrs::Attrs;
 use crate::geo;
 use crate::tessellate::mirror_affine;
 use crate::types::*;
@@ -19,6 +20,11 @@ pub struct DrawEntity {
     /// 0 = opaque (default). 1-255 = increasingly transparent. Entity-only.
     pub transparency: u8,
     pub shape: Shape,
+    /// Free-form attributes the script sets; the core stores them and never
+    /// interprets them (see `attrs.rs`). Last field, so blobs written before
+    /// it existed still decode (see [`entity_from_bytes`]).
+    #[serde(default)]
+    pub attrs: Attrs,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +47,39 @@ pub struct BlockDef {
     pub shapes: Vec<(Shape, String, Option<Color>)>, // (shape, layer, color override)
     pub insert_point: Point,
     pub default_layer: String,
+    /// Attributes of the definition itself (see `attrs.rs`).
+    #[serde(default)]
+    pub attrs: Attrs,
+    /// Attributes of each shape: `shape_attrs[i]` belongs to `shapes[i]`.
+    /// May be shorter than `shapes` (the rest have none). A parallel list,
+    /// so the `shapes` tuples used across the renderers stay as they are.
+    #[serde(default)]
+    pub shape_attrs: Vec<Attrs>,
+}
+
+impl BlockDef {
+    /// A definition without attributes.
+    pub fn new(
+        name: String,
+        shapes: Vec<(Shape, String, Option<Color>)>,
+        insert_point: Point,
+        default_layer: String,
+    ) -> Self {
+        Self {
+            name,
+            shapes,
+            insert_point,
+            default_layer,
+            attrs: Attrs::new(),
+            shape_attrs: Vec::new(),
+        }
+    }
+
+    /// The attributes of shape `i` (empty when it has none).
+    pub fn shape_attrs(&self, i: usize) -> &Attrs {
+        static EMPTY: Attrs = Attrs::new();
+        self.shape_attrs.get(i).unwrap_or(&EMPTY)
+    }
 }
 
 /// Serialize a BlockDef to bincode bytes.
@@ -48,9 +87,25 @@ pub fn block_to_bytes(block: &BlockDef) -> Vec<u8> {
     bincode::serialize(block).expect("bincode serialize failed")
 }
 
-/// Deserialize a BlockDef from bincode bytes.
+/// Deserialize a BlockDef from bincode bytes. Blobs written before block
+/// attributes existed decode too, with no attributes.
 pub fn block_from_bytes(data: &[u8]) -> Option<BlockDef> {
-    bincode::deserialize(data).ok()
+    bincode::deserialize(data).ok().or_else(|| {
+        #[derive(Deserialize)]
+        struct Legacy {
+            name: String,
+            shapes: Vec<(Shape, String, Option<Color>)>,
+            insert_point: Point,
+            default_layer: String,
+        }
+        let l: Legacy = bincode::deserialize(data).ok()?;
+        Some(BlockDef::new(
+            l.name,
+            l.shapes,
+            l.insert_point,
+            l.default_layer,
+        ))
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -227,6 +282,7 @@ impl Document {
     ) -> EntityId {
         let id = self.alloc_id();
         self.entities.push(DrawEntity {
+            attrs: Default::default(),
             id,
             layer: layer.to_string(),
             color,
@@ -247,6 +303,7 @@ impl Document {
     ) -> EntityId {
         let id = self.alloc_id();
         self.entities.push(DrawEntity {
+            attrs: Default::default(),
             id,
             layer: layer.to_string(),
             color,
@@ -269,6 +326,7 @@ impl Document {
     ) -> EntityId {
         let id = self.alloc_id();
         self.entities.push(DrawEntity {
+            attrs: Default::default(),
             id,
             layer: layer.to_string(),
             color,
@@ -294,6 +352,7 @@ impl Document {
     ) -> EntityId {
         let id = self.alloc_id();
         self.entities.push(DrawEntity {
+            attrs: Default::default(),
             id,
             layer: layer.to_string(),
             color,
@@ -328,6 +387,7 @@ impl Document {
         let xform = Affine::translate((dx, dy));
         let new_id = self.alloc_id();
         self.entities.push(DrawEntity {
+            attrs: ent.attrs,
             id: new_id,
             layer: ent.layer,
             color: ent.color,
@@ -380,6 +440,7 @@ impl Document {
         let linetype = ent.linetype.clone();
         let lineweight = ent.lineweight;
         let transparency = ent.transparency;
+        let attrs = ent.attrs.clone();
         let keep_start = matches!(keep, "start" | "from");
 
         match &ent.shape {
@@ -397,6 +458,7 @@ impl Document {
                     ent.linetype = linetype;
                     ent.lineweight = lineweight;
                     ent.transparency = transparency;
+                    ent.attrs = attrs.clone();
                 }
                 Some(new_id)
             }
@@ -447,6 +509,7 @@ impl Document {
                     ent.linetype = linetype;
                     ent.lineweight = lineweight;
                     ent.transparency = transparency;
+                    ent.attrs = attrs;
                 }
                 Some(new_id)
             }
@@ -563,6 +626,7 @@ impl Document {
         self.ensure_layer(&place_layer);
         let insert_id = self.alloc_id();
         self.entities.push(DrawEntity {
+            attrs: Default::default(),
             id: insert_id,
             layer: place_layer,
             color: None, // ByLayer
@@ -637,6 +701,13 @@ pub struct EntityJson {
     pub lineweight: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transparency: Option<u8>,
+    /// The entity's attributes; left out when it has none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attrs: Option<serde_json::Value>,
+    /// For a child of a block insert (`entities({expand: true})`,
+    /// `children()`): its index in the block definition.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub child: Option<usize>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -679,6 +750,12 @@ impl DrawEntity {
             } else {
                 None
             },
+            attrs: if self.attrs.is_empty() {
+                None
+            } else {
+                Some(crate::attrs::to_json(&self.attrs))
+            },
+            child: None,
         };
         match &self.shape {
             Shape::Line(l) => {
@@ -911,6 +988,7 @@ fn text_to_curve_entities(
     }
     *next_id += 1;
     vec![DrawEntity {
+        attrs: Default::default(),
         id: EntityId(*next_id),
         layer: layer.to_string(),
         color,
@@ -998,6 +1076,7 @@ pub fn expand_for_render(doc: &Document) -> Vec<DrawEntity> {
                 for placed in placed_block_shapes(doc, ent) {
                     next_id += 1;
                     expanded.push(DrawEntity {
+                        attrs: Default::default(),
                         id: EntityId(next_id),
                         layer: placed.layer,
                         // Expanded entities are detached from layers, so
@@ -1092,6 +1171,68 @@ pub fn expand_for_render(doc: &Document) -> Vec<DrawEntity> {
     expanded
 }
 
+// ── Lossless JSON (saveJson / loadJson) ────────────────────────────────
+
+/// The format tag of a document saved by [`document_to_json`].
+pub const DOCUMENT_FORMAT: &str = "codecad-document";
+
+/// The document file: everything a [`Document`] holds except undo history.
+#[derive(Serialize, Deserialize)]
+struct DocumentFile {
+    format: String,
+    version: u32,
+    #[serde(rename = "nextId")]
+    next_id: u64,
+    layers: Vec<Layer>,
+    linetypes: std::collections::BTreeMap<String, LinetypeDef>,
+    blocks: std::collections::BTreeMap<String, BlockDef>,
+    entities: Vec<DrawEntity>,
+}
+
+/// The whole document as JSON: layers, linetypes, blocks and entities with
+/// their attributes, ids and ByLayer styles, exactly as stored. Numbers
+/// round-trip bit for bit. The lossless format; DWG drops what it cannot
+/// hold (see `dwg_attr_losses`).
+pub fn document_to_json(doc: &Document) -> Result<String, String> {
+    let file = DocumentFile {
+        format: DOCUMENT_FORMAT.to_string(),
+        version: 1,
+        next_id: doc.next_id,
+        layers: doc.layers.clone(),
+        linetypes: doc.linetypes.clone().into_iter().collect(),
+        blocks: doc.blocks.clone().into_iter().collect(),
+        entities: doc.entities.clone(),
+    };
+    serde_json::to_string(&file).map_err(|e| format!("saveJson: {e}"))
+}
+
+/// A document from [`document_to_json`] text. Files written before entities
+/// had attributes load with none.
+pub fn document_from_json(text: &str) -> Result<Document, String> {
+    let file: DocumentFile =
+        serde_json::from_str(text).map_err(|e| format!("loadJson: not a document file: {e}"))?;
+    if file.format != DOCUMENT_FORMAT {
+        return Err(format!(
+            "loadJson: format is '{}', expected '{DOCUMENT_FORMAT}'",
+            file.format
+        ));
+    }
+    if file.version != 1 {
+        return Err(format!(
+            "loadJson: version {} is newer than this program reads (1)",
+            file.version
+        ));
+    }
+    let max_id = file.entities.iter().map(|e| e.id.0).max().unwrap_or(0);
+    let mut doc = Document::new();
+    doc.layers = file.layers;
+    doc.linetypes = file.linetypes.into_iter().collect();
+    doc.blocks = file.blocks.into_iter().collect();
+    doc.entities = file.entities;
+    doc.next_id = file.next_id.max(max_id + 1);
+    Ok(doc)
+}
+
 // ── Bincode serialization (for Yrs sync) ──────────────────────────────
 
 /// Serialize a DrawEntity to bincode bytes. Lossless, compact.
@@ -1099,9 +1240,32 @@ pub fn entity_to_bytes(ent: &DrawEntity) -> Vec<u8> {
     bincode::serialize(ent).expect("bincode serialize failed")
 }
 
-/// Deserialize a DrawEntity from bincode bytes.
+/// Deserialize a DrawEntity from bincode bytes. Blobs written before
+/// attributes existed decode too, with no attributes.
 pub fn entity_from_bytes(data: &[u8]) -> Option<DrawEntity> {
-    bincode::deserialize(data).ok()
+    bincode::deserialize(data).ok().or_else(|| {
+        #[derive(Deserialize)]
+        struct Legacy {
+            id: EntityId,
+            layer: String,
+            color: Option<Color>,
+            linetype: Option<String>,
+            lineweight: Option<f64>,
+            transparency: u8,
+            shape: Shape,
+        }
+        let l: Legacy = bincode::deserialize(data).ok()?;
+        Some(DrawEntity {
+            id: l.id,
+            layer: l.layer,
+            color: l.color,
+            linetype: l.linetype,
+            lineweight: l.lineweight,
+            transparency: l.transparency,
+            shape: l.shape,
+            attrs: Attrs::new(),
+        })
+    })
 }
 
 /// Serialize a Layer to bincode bytes.

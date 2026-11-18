@@ -515,6 +515,7 @@ mod tests {
     fn push(doc: &mut Document, shape: Shape) {
         let id = doc.alloc_id();
         doc.entities.push(DrawEntity {
+            attrs: Default::default(),
             id,
             layer: "0".to_string(),
             color: Some(Color::rgb(255, 0, 0)),

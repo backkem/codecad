@@ -89,6 +89,12 @@ crates/
       src/sync.rs             # Yrs CRDT sync (SyncDoc): diffing, state vectors,
                               #   update encoding. Used by both web and server.
       src/geo.rs              # geometry helpers (distance, lerp, polygon tests)
+      src/attrs.rs            # free-form attributes on entities and block
+                              #   definitions: stored and matched, never interpreted
+      src/select.rs           # the one selector ({ids, layer, type, attrs, has,
+                              #   bounds, expand}) for queries and mutation targets
+      src/setquery.rs         # set-level exact queries (pairsWithin, overlapping,
+                              #   inside, nearest) over a bounding-volume index
       src/text.rs             # skrifa glyph outlines -> polylines
       src/render.rs           # Camera, CameraCmd, View, SceneCache (block/text
                               #   expansion + BezPath cache), build_display_list:
@@ -502,8 +508,9 @@ Scripts get `cad` on globalThis with the same API as the browser
 | `cad.*` | All mutation/query methods (addLine, entities, etc.) |
 | `cad.readFile(path)` | Read file from disk (relative to script dir) |
 | `cad.use(name)` | Load a script library (an ES module, `lib/<name>.js` under the script dir) once per run; resolves to its exports. Also in the browser console. See `docs/api-surface.md`, "Script libraries" |
-| `cad.save(path)` | Save document as JSON |
-| `cad.saveDwg(path)` | Save document as DWG |
+| `cad.save(path)` | Export the `entities()` view as JSON (one way) |
+| `cad.saveJson(path)` / `cad.loadJson(path)` | Save or load the whole document as lossless JSON (attributes, blocks, ids, styles) |
+| `cad.saveDwg(path)` | Save document as DWG. Entity attributes go into extended data; the result's `attrs` lists what DWG cannot hold |
 | `cad.savePdf(path, { colors, lineweights, skipLayers })` | Save a one-page PDF. `colors`: `"paper"` (default, readable on white), `"mono"`, `"screen"` (as stored). `lineweights: true` strokes entities at their own lineweight where one is set (default: uniform hairlines). `skipLayers`: layer names to leave out, on top of the layers the document hides (default: none) |
 | `cad.exec(path)` | Execute another .js file |
 | `cad.render(opts)` | Render the document to a PNG (GPU, else CPU) |
@@ -753,6 +760,12 @@ cargo run -p solid-harness --release --example fuzz -- run --seed 101 --cases 30
   world-coordinate sub-entities. Essential for querying geometry inside
   blocks (C_WINDOWS, furniture, etc.). Without expand, blocks appear
   as single points with no child lines.
+- **Attributes and selections**: entities and block definitions carry
+  free-form attributes (`attrs`, JSON scalars) that the core stores and
+  matches but never interprets. One selector (`{layer, type, attrs, has,
+  ids, bounds, expand}`) works for `entities()`, every mutation target and
+  the set queries (`pairsWithin`, `overlapping`, `inside`, `nearest`). See
+  `docs/api-surface.md`, "Attributes and set queries".
 - **cad_call is the universal ABI**: same method+JSON interface works
   via wasm-bindgen (browser), server-side Rust, and future WASM sandbox.
 - **Active-pointer ABI**: `cad_call` targets `js_target` session.

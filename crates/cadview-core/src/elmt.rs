@@ -204,6 +204,8 @@ pub fn parse_elmt(xml: &str) -> Result<ElmtSymbol, String> {
 
     Ok(ElmtSymbol {
         block: BlockDef {
+            attrs: Default::default(),
+            shape_attrs: Vec::new(),
             name: block_name,
             shapes,
             insert_point,

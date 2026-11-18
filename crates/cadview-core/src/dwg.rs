@@ -1,3 +1,4 @@
+use crate::attrs::{AttrValue, Attrs};
 use crate::document::*;
 use crate::hatch::generate_dwg_hatch_fill;
 use crate::pdf;
@@ -113,6 +114,9 @@ fn build_cad_document(doc: &Document) -> Result<acadrust::document::CadDocument>
         let _ = cad.layers.add(al);
     }
 
+    // Attributes go into extended data under one registered application.
+    let attr_app = register_attr_app(&mut cad, doc);
+
     // ── 2. Write block definitions as BlockRecords ──────────────────
     // Pattern from acadrust examples: allocate handles for block record,
     // BLOCK entity, and ENDBLK entity; then add sub-entities with
@@ -129,7 +133,7 @@ fn build_cad_document(doc: &Document) -> Result<acadrust::document::CadDocument>
         // the block's origin (DWG BLOCK base_point defaults to [0,0]).
         let ip = def.insert_point;
         let offset = Affine::translate((-ip.x, -ip.y));
-        for (shape, shape_layer, shape_color) in &def.shapes {
+        for (i, (shape, shape_layer, shape_color)) in def.shapes.iter().enumerate() {
             let translated = if ip.x != 0.0 || ip.y != 0.0 {
                 shape.transformed(offset)
             } else {
@@ -144,6 +148,7 @@ fn build_cad_document(doc: &Document) -> Result<acadrust::document::CadDocument>
                 shape_to_entity_type(&translated, layer, to_acadrust_color_opt(shape_color))
             {
                 et.common_mut().owner_handle = br_handle;
+                attach_attrs(&mut et, def.shape_attrs(i), attr_app);
                 let _ = cad.add_entity(et);
             }
         }
@@ -170,6 +175,7 @@ fn build_cad_document(doc: &Document) -> Result<acadrust::document::CadDocument>
                 ins.set_color(to_acadrust_color_opt(&ent.color));
                 let mut et = ae::EntityType::Insert(ins);
                 apply_style_to_entity(&mut et, ent);
+                attach_attrs(&mut et, &ent.attrs, attr_app);
                 cad.add_entity(et)?;
             }
             shape => {
@@ -177,6 +183,7 @@ fn build_cad_document(doc: &Document) -> Result<acadrust::document::CadDocument>
                     shape_to_entity_type(shape, &ent.layer, to_acadrust_color_opt(&ent.color))
                 {
                     apply_style_to_entity(&mut et, ent);
+                    attach_attrs(&mut et, &ent.attrs, attr_app);
                     cad.add_entity(et)?;
                 }
             }
@@ -341,6 +348,8 @@ pub fn save_dwg_overlay(
         let _ = cad.layers.add(al);
     }
 
+    let attr_app = register_attr_app(&mut cad, doc);
+
     // Add overlay block definitions
     for (name, def) in &doc.blocks {
         // Only include blocks used by overlay entities
@@ -364,7 +373,7 @@ pub fn save_dwg_overlay(
         br.block_end_handle = cad.allocate_handle();
         let _ = cad.block_records.add(br);
 
-        for (shape, shape_layer, shape_color) in &def.shapes {
+        for (i, (shape, shape_layer, shape_color)) in def.shapes.iter().enumerate() {
             let layer = if shape_layer.is_empty() {
                 &def.default_layer
             } else {
@@ -374,6 +383,7 @@ pub fn save_dwg_overlay(
                 shape_to_entity_type(shape, layer, to_acadrust_color_opt(shape_color))
             {
                 et.common_mut().owner_handle = br_handle;
+                attach_attrs(&mut et, def.shape_attrs(i), attr_app);
                 let _ = cad.add_entity(et);
             }
         }
@@ -403,6 +413,7 @@ pub fn save_dwg_overlay(
                 ins.set_color(to_acadrust_color_opt(&ent.color));
                 let mut et = ae::EntityType::Insert(ins);
                 apply_style_to_entity(&mut et, ent);
+                attach_attrs(&mut et, &ent.attrs, attr_app);
                 cad.add_entity(et)?;
             }
             shape => {
@@ -410,6 +421,7 @@ pub fn save_dwg_overlay(
                     shape_to_entity_type(shape, &ent.layer, to_acadrust_color_opt(&ent.color))
                 {
                     apply_style_to_entity(&mut et, ent);
+                    attach_attrs(&mut et, &ent.attrs, attr_app);
                     cad.add_entity(et)?;
                 }
             }
@@ -1228,8 +1240,17 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
 
     let mut raw_entities: Vec<RawEntity> = Vec::new();
     let mut inserts: Vec<InsertRef> = Vec::new();
+    // Attributes from extended data, parallel to raw_entities and inserts:
+    // every record made from one DWG entity gets that entity's attributes.
+    let attr_app = attr_app_handle(&cad);
+    let mut raw_attrs: Vec<Attrs> = Vec::new();
+    let mut insert_attrs: Vec<Attrs> = Vec::new();
+    let mut pending = Attrs::new();
 
     for ent in cad.entities() {
+        raw_attrs.resize(raw_entities.len(), pending.clone());
+        insert_attrs.resize(inserts.len(), pending.clone());
+        pending = entity_attrs(ent.common(), attr_app);
         match ent {
             EntityType::Line(line) => {
                 raw_entities.push(RawEntity {
@@ -1653,6 +1674,8 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
             _ => continue,
         }
     }
+    raw_attrs.resize(raw_entities.len(), pending.clone());
+    insert_attrs.resize(inserts.len(), pending);
 
     let mut block_entities: HashMap<String, Vec<usize>> = HashMap::new();
     for (i, raw) in raw_entities.iter().enumerate() {
@@ -1690,12 +1713,13 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
     }
 
     // Model-space geometry
-    for raw in &raw_entities {
+    for (raw, raw_attr) in raw_entities.iter().zip(&raw_attrs) {
         if ms.is_some_and(|ms| raw.owner == ms) {
             let color = resolve_entity_color_opt(&raw.color, &raw.layer, &layer_colors);
             let linetype = resolve_linetype_name(&raw.linetype);
             let id = doc.alloc_id();
             doc.entities.push(DrawEntity {
+                attrs: raw_attr.clone(),
                 id,
                 layer: raw.layer.clone(),
                 color,
@@ -1717,9 +1741,12 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
                 (raw.shape.clone(), raw.layer.clone(), color)
             })
             .collect();
+        let shape_attrs: Vec<Attrs> = indices.iter().map(|&idx| raw_attrs[idx].clone()).collect();
         doc.blocks.insert(
             block_name.clone(),
             BlockDef {
+                attrs: Default::default(),
+                shape_attrs,
                 name: block_name.clone(),
                 shapes,
                 insert_point: Point::ZERO,
@@ -1729,7 +1756,7 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
     }
 
     // Store block inserts as references (not flattened)
-    for ins in &inserts {
+    for (ins, ins_attrs) in inserts.iter().zip(&insert_attrs) {
         if ms.is_none_or(|ms| ins.owner != ms) {
             continue;
         }
@@ -1739,6 +1766,7 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
         let color = resolve_entity_color_opt(&ins.color, &ins.layer, &layer_colors);
         let id = doc.alloc_id();
         doc.entities.push(DrawEntity {
+            attrs: ins_attrs.clone(),
             id,
             layer: ins.layer.clone(),
             color,
@@ -1792,4 +1820,235 @@ pub(crate) fn resolve_acadrust_color(color: &acadrust::Color) -> Color {
         acadrust::Color::Index(i) => aci_to_rgb(*i),
         acadrust::Color::Rgb { r, g, b } => Color::rgb(*r, *g, *b),
     }
+}
+
+// ── Attributes as DWG extended data ─────────────────────────────────────
+//
+// Entity attributes are written as extended data (XDATA) under one
+// registered application. Each attribute is a 1000 string (the key)
+// followed by its value: a 1000 string for ASCII text of up to 255 bytes,
+// a 1002 "{" ... "}" group of 1004 binary chunks (UTF-8) for any other
+// text, a 1040 real for a number, a 1070 integer (0 or 1) for a boolean.
+// The data starts with a 1071 format version (1). The bytes follow the
+// R2000 (AC1015) layout, the version `save_dwg` writes.
+
+/// The registered application under which attributes are stored.
+pub const ATTR_APP: &str = "CODECAD";
+
+/// Code page written with 1000 strings (ANSI_1252; keys are ASCII).
+const EED_CODEPAGE: u16 = 30;
+/// Longest 1004 binary chunk written.
+const EED_CHUNK: usize = 127;
+
+fn eed_string(out: &mut Vec<u8>, s: &str) {
+    out.push(0); // 1000
+    out.push(s.len() as u8);
+    out.extend_from_slice(&EED_CODEPAGE.to_le_bytes());
+    out.extend_from_slice(s.as_bytes());
+}
+
+/// Extended data bytes for a set of attributes.
+pub fn encode_attrs_eed(attrs: &Attrs) -> Vec<u8> {
+    let mut out = vec![71]; // 1071: format version
+    out.extend_from_slice(&1i32.to_le_bytes());
+    for (k, v) in attrs {
+        eed_string(&mut out, k);
+        match v {
+            AttrValue::Str(s) if s.is_ascii() && s.len() <= 255 => eed_string(&mut out, s),
+            AttrValue::Str(s) => {
+                out.extend_from_slice(&[2, 0]); // 1002 "{"
+                for chunk in s.as_bytes().chunks(EED_CHUNK) {
+                    out.push(4); // 1004
+                    out.push(chunk.len() as u8);
+                    out.extend_from_slice(chunk);
+                }
+                out.extend_from_slice(&[2, 1]); // 1002 "}"
+            }
+            AttrValue::Num(n) => {
+                out.push(40); // 1040
+                out.extend_from_slice(&n.to_le_bytes());
+            }
+            AttrValue::Bool(b) => {
+                out.push(70); // 1070
+                out.extend_from_slice(&i16::from(*b).to_le_bytes());
+            }
+        }
+    }
+    out
+}
+
+/// One extended data item, as far as attributes need it.
+enum EedItem {
+    Str(String),
+    Open,
+    Close,
+    Bin(Vec<u8>),
+    Real(f64),
+    Short(i16),
+    Long(i32),
+    Other,
+}
+
+/// Split off the first `n` bytes.
+fn eed_take<'a>(b: &mut &'a [u8], n: usize) -> Option<&'a [u8]> {
+    if b.len() < n {
+        return None;
+    }
+    let (head, tail) = b.split_at(n);
+    *b = tail;
+    Some(head)
+}
+
+fn eed_items(mut b: &[u8]) -> Option<Vec<EedItem>> {
+    let mut out = Vec::new();
+    while let Some((&code, rest)) = b.split_first() {
+        b = rest;
+        let item = match code {
+            0 => {
+                let len = eed_take(&mut b, 1)?[0] as usize;
+                eed_take(&mut b, 2)?;
+                EedItem::Str(String::from_utf8_lossy(eed_take(&mut b, len)?).into_owned())
+            }
+            2 => match eed_take(&mut b, 1)?[0] {
+                0 => EedItem::Open,
+                _ => EedItem::Close,
+            },
+            3 | 5 => {
+                eed_take(&mut b, 8)?;
+                EedItem::Other
+            }
+            4 => {
+                let len = eed_take(&mut b, 1)?[0] as usize;
+                EedItem::Bin(eed_take(&mut b, len)?.to_vec())
+            }
+            10..=13 => {
+                eed_take(&mut b, 24)?;
+                EedItem::Other
+            }
+            40..=42 => EedItem::Real(f64::from_le_bytes(eed_take(&mut b, 8)?.try_into().ok()?)),
+            70 => EedItem::Short(i16::from_le_bytes(eed_take(&mut b, 2)?.try_into().ok()?)),
+            71 => EedItem::Long(i32::from_le_bytes(eed_take(&mut b, 4)?.try_into().ok()?)),
+            _ => return None,
+        };
+        out.push(item);
+    }
+    Some(out)
+}
+
+/// Attributes from extended data bytes written by [`encode_attrs_eed`].
+/// None when the bytes are not in that form.
+pub fn decode_attrs_eed(bytes: &[u8]) -> Option<Attrs> {
+    let items = eed_items(bytes)?;
+    let mut it = items.into_iter().peekable();
+    if let Some(EedItem::Long(v)) = it.peek() {
+        if *v != 1 {
+            return None;
+        }
+        it.next();
+    }
+    let mut out = Attrs::new();
+    while let Some(key) = it.next() {
+        let EedItem::Str(key) = key else {
+            return None;
+        };
+        let value = match it.next()? {
+            EedItem::Str(s) => AttrValue::Str(s),
+            EedItem::Real(n) => AttrValue::Num(n),
+            EedItem::Short(i) => AttrValue::Bool(i != 0),
+            EedItem::Open => {
+                let mut bytes = Vec::new();
+                loop {
+                    match it.next()? {
+                        EedItem::Bin(b) => bytes.extend(b),
+                        EedItem::Close => break,
+                        _ => return None,
+                    }
+                }
+                AttrValue::Str(String::from_utf8(bytes).ok()?)
+            }
+            _ => return None,
+        };
+        out.insert(key, value);
+    }
+    crate::attrs::check(&out).ok()?;
+    Some(out)
+}
+
+/// The handle of the attribute application, registered when anything in
+/// the document carries attributes.
+fn register_attr_app(cad: &mut acadrust::document::CadDocument, doc: &Document) -> Option<u64> {
+    use acadrust::tables::TableEntry;
+    let any = doc.entities.iter().any(|e| !e.attrs.is_empty())
+        || doc
+            .blocks
+            .values()
+            .any(|b| b.shape_attrs.iter().any(|a| !a.is_empty()));
+    if !any {
+        return None;
+    }
+    if let Some(app) = cad
+        .app_ids
+        .iter()
+        .find(|a| a.name.eq_ignore_ascii_case(ATTR_APP))
+    {
+        return Some(app.handle.value());
+    }
+    let mut app = acadrust::tables::AppId::new(ATTR_APP);
+    let handle = cad.allocate_handle();
+    app.set_handle(handle);
+    cad.app_ids.add(app).ok()?;
+    Some(handle.value())
+}
+
+fn attach_attrs(et: &mut acadrust::entities::EntityType, attrs: &Attrs, app: Option<u64>) {
+    if let (Some(app), false) = (app, attrs.is_empty()) {
+        et.common_mut().extended_data.raw_dwg_eed = vec![(app, encode_attrs_eed(attrs))];
+    }
+}
+
+fn attr_app_handle(cad: &acadrust::CadDocument) -> Option<u64> {
+    cad.app_ids
+        .iter()
+        .find(|a| a.name.eq_ignore_ascii_case(ATTR_APP))
+        .map(|a| a.handle.value())
+}
+
+fn entity_attrs(common: &acadrust::entities::EntityCommon, app: Option<u64>) -> Attrs {
+    let Some(app) = app else {
+        return Attrs::new();
+    };
+    common
+        .extended_data
+        .raw_dwg_eed
+        .iter()
+        .find(|(h, _)| *h == app)
+        .and_then(|(_, b)| decode_attrs_eed(b))
+        .unwrap_or_default()
+}
+
+/// What a DWG save cannot keep of the attributes: the attributes of block
+/// definitions themselves (they have no place in this DWG export), and
+/// those of entities that have no DWG form. JSON (`saveJson`) keeps
+/// everything.
+pub fn dwg_attr_losses(doc: &Document) -> serde_json::Value {
+    let mut blocks: Vec<&str> = doc
+        .blocks
+        .values()
+        .filter(|b| !b.attrs.is_empty())
+        .map(|b| b.name.as_str())
+        .collect();
+    blocks.sort_unstable();
+    let entities: Vec<String> = doc
+        .entities
+        .iter()
+        .filter(|e| {
+            !e.attrs.is_empty()
+                && !matches!(e.shape, Shape::BlockInsert { .. })
+                && shape_to_entity_type(&e.shape, &e.layer, acadrust::types::Color::ByLayer)
+                    .is_none()
+        })
+        .map(|e| format!("e_{}", e.id.0))
+        .collect();
+    let kept = doc.entities.iter().filter(|e| !e.attrs.is_empty()).count() - entities.len();
+    serde_json::json!({ "kept": kept, "droppedBlocks": blocks, "droppedEntities": entities })
 }

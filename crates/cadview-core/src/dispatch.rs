@@ -62,22 +62,15 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 ([x0, y0], [x1, y1])
             });
             let mut counts: HashMap<&str, usize> = HashMap::new();
+            // Attribute keys in use, with how many entities carry each.
+            let mut attr_keys: std::collections::BTreeMap<&str, usize> = Default::default();
             for e in &doc.entities {
-                let t = match &e.shape {
-                    Shape::Line(_) => "line",
-                    Shape::Circle(_) => "circle",
-                    Shape::Arc { .. } => "arc",
-                    Shape::Polyline { .. } => "polyline",
-                    Shape::LwPolyline { .. } => "lwpolyline",
-                    Shape::SolidFill { .. } => "solid_fill",
-                    Shape::CurvePath { .. } => "curve_path",
-                    Shape::Ellipse { .. } => "ellipse",
-                    Shape::Spline { .. } => "spline",
-                    Shape::BlockInsert { .. } => "block_insert",
-                    Shape::Text { .. } => "text",
-                    Shape::MText { .. } => "mtext",
-                };
-                *counts.entry(t).or_default() += 1;
+                *counts
+                    .entry(crate::select::shape_type(&e.shape))
+                    .or_default() += 1;
+                for k in e.attrs.keys() {
+                    *attr_keys.entry(k.as_str()).or_default() += 1;
+                }
             }
             let result = serde_json::json!({
                 "bounds": { "min": min, "max": max },
@@ -85,94 +78,50 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 "layers": doc.layers.iter().map(|l| &l.name).collect::<Vec<_>>(),
                 "linetypes": doc.linetypes.len(),
                 "counts": counts,
+                "attrs": attr_keys,
             });
             Ok(result.to_string())
         }
 
         "entities" => {
-            #[derive(Deserialize)]
-            struct EntArgs {
-                #[serde(default)]
-                expand: bool,
-                #[serde(default)]
-                layer: Option<String>,
-            }
-            let ea: EntArgs = serde_json::from_str(args).unwrap_or(EntArgs {
-                expand: false,
-                layer: None,
-            });
-            if ea.expand {
-                // Flatten block inserts into sub-entities (world coords)
-                // Iterate all entities so block inserts on other layers still expand
-                let mut result: Vec<EntityJson> = Vec::new();
-                for ent in &doc.entities {
-                    if let Shape::BlockInsert {
-                        block_name,
-                        position,
-                        rotation,
-                        x_scale,
-                        y_scale,
-                    } = &ent.shape
-                    {
-                        if let Some(def) = doc.blocks.get(block_name) {
-                            let xform = kurbo::Affine::translate((position.x, position.y))
-                                * kurbo::Affine::rotate(*rotation)
-                                * kurbo::Affine::scale_non_uniform(*x_scale, *y_scale)
-                                * kurbo::Affine::translate((
-                                    -def.insert_point.x,
-                                    -def.insert_point.y,
-                                ));
-                            for (shape, shape_layer, shape_color) in &def.shapes {
-                                let layer = if shape_layer.is_empty() {
-                                    &ent.layer
-                                } else {
-                                    shape_layer
-                                };
-                                let color = if shape_color.is_none()
-                                    || *shape_color == Some(Color::WHITE)
-                                {
-                                    // Inherit from insert entity; if that's also None
-                                    // (ByLayer), resolve to the insert's layer color.
-                                    ent.color.or_else(|| Some(doc.layer_color(&ent.layer)))
-                                } else {
-                                    *shape_color
-                                };
-                                if let Some(ref filter_layer) = ea.layer {
-                                    if layer != filter_layer {
-                                        continue;
-                                    }
-                                }
-                                let expanded = DrawEntity {
-                                    id: ent.id,
-                                    layer: layer.to_string(),
-                                    color,
-                                    linetype: None,
-                                    lineweight: None,
-                                    transparency: 0,
-                                    shape: shape.transformed(xform),
-                                };
-                                result.push(expanded.to_json(doc));
-                            }
+            // The whole argument object is a selection (see `select.rs`):
+            // {expand?, layer?, type?, attrs?, has?, ids?, bounds?}.
+            let v: serde_json::Value = if args.trim().is_empty() {
+                serde_json::Value::Null
+            } else {
+                parse_args(args)?
+            };
+            let sel = crate::select::Selector::parse(&v)?;
+            let mut result: Vec<EntityJson> = Vec::new();
+            for ent in &doc.entities {
+                if sel.expand {
+                    // Children of block inserts, each matched on its own
+                    // layer and attributes, whatever the insert's layer.
+                    for (i, child) in crate::select::insert_children(doc, ent) {
+                        if sel.matches(
+                            child.id,
+                            &child.layer,
+                            crate::select::shape_type(&child.shape),
+                            &child.attrs,
+                            || child.shape.bbox(),
+                        ) {
+                            let mut j = child.to_json(doc);
+                            j.child = Some(i);
+                            result.push(j);
                         }
                     }
-                    // Include the entity itself if it passes the layer filter
-                    if ea.layer.as_ref().is_none_or(|l| ent.layer == *l) {
-                        result.push(ent.to_json(doc));
-                    }
                 }
-                serde_json::to_string(&result).map_err(|e| e.to_string())
-            } else {
-                let ents: Vec<EntityJson> = if let Some(ref layer) = ea.layer {
-                    doc.entities
-                        .iter()
-                        .filter(|e| e.layer == *layer)
-                        .map(|e| e.to_json(doc))
-                        .collect()
-                } else {
-                    doc.entities.iter().map(|e| e.to_json(doc)).collect()
-                };
-                serde_json::to_string(&ents).map_err(|e| e.to_string())
+                if sel.matches(
+                    ent.id,
+                    &ent.layer,
+                    crate::select::shape_type(&ent.shape),
+                    &ent.attrs,
+                    || crate::select::entity_bbox(doc, ent),
+                ) {
+                    result.push(ent.to_json(doc));
+                }
             }
+            serde_json::to_string(&result).map_err(|e| e.to_string())
         }
 
         "children" => {
@@ -185,47 +134,18 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
             let ent = doc
                 .entity(id)
                 .ok_or(format!("entity {} not found", args.id))?;
-            if let Shape::BlockInsert {
-                block_name,
-                position,
-                rotation,
-                x_scale,
-                y_scale,
-            } = &ent.shape
-            {
-                let layer = ent.layer.clone();
-                let ent_color = ent.color;
-                let def = doc
-                    .blocks
-                    .get(block_name)
-                    .ok_or(format!("block '{}' not defined", block_name))?;
-                let xform = kurbo::Affine::translate((position.x, position.y))
-                    * kurbo::Affine::rotate(*rotation)
-                    * kurbo::Affine::scale_non_uniform(*x_scale, *y_scale)
-                    * kurbo::Affine::translate((-def.insert_point.x, -def.insert_point.y));
-                let mut result: Vec<EntityJson> = Vec::new();
-                for (shape, shape_layer, shape_color) in &def.shapes {
-                    let child_layer = if shape_layer.is_empty() {
-                        &layer
-                    } else {
-                        shape_layer
-                    };
-                    let color = if shape_color.is_none() || *shape_color == Some(Color::WHITE) {
-                        ent_color.or_else(|| Some(doc.layer_color(&layer)))
-                    } else {
-                        *shape_color
-                    };
-                    let expanded = DrawEntity {
-                        id,
-                        layer: child_layer.to_string(),
-                        color,
-                        linetype: None,
-                        lineweight: None,
-                        transparency: 0,
-                        shape: shape.transformed(xform),
-                    };
-                    result.push(expanded.to_json(doc));
+            if let Shape::BlockInsert { block_name, .. } = &ent.shape {
+                if !doc.blocks.contains_key(block_name) {
+                    return Err(format!("block '{}' not defined", block_name));
                 }
+                let result: Vec<EntityJson> = crate::select::insert_children(doc, ent)
+                    .into_iter()
+                    .map(|(i, child)| {
+                        let mut j = child.to_json(doc);
+                        j.child = Some(i);
+                        j
+                    })
+                    .collect();
                 serde_json::to_string(&result).map_err(|e| e.to_string())
             } else {
                 Ok("[]".to_string())
@@ -260,6 +180,8 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 lineweight: Option<f64>,
                 #[serde(default)]
                 transparency: Option<u8>,
+                #[serde(default, deserialize_with = "crate::attrs::deserialize")]
+                attrs: crate::attrs::Attrs,
             }
             let a: Args = parse_args(args)?;
             doc.ensure_layer(&a.layer);
@@ -274,6 +196,7 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 ent.linetype = a.linetype;
                 ent.lineweight = a.lineweight;
                 ent.transparency = a.transparency.unwrap_or(0);
+                ent.attrs = a.attrs;
             }
             let ent = doc.entity(id).expect("entity was just added");
             serde_json::to_string(&ent.to_json(doc)).map_err(|e| e.to_string())
@@ -294,6 +217,8 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 lineweight: Option<f64>,
                 #[serde(default)]
                 transparency: Option<u8>,
+                #[serde(default, deserialize_with = "crate::attrs::deserialize")]
+                attrs: crate::attrs::Attrs,
             }
             let a: Args = parse_args(args)?;
             doc.ensure_layer(&a.layer);
@@ -308,6 +233,7 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 ent.linetype = a.linetype;
                 ent.lineweight = a.lineweight;
                 ent.transparency = a.transparency.unwrap_or(0);
+                ent.attrs = a.attrs;
             }
             let ent = doc.entity(id).expect("entity was just added");
             serde_json::to_string(&ent.to_json(doc)).map_err(|e| e.to_string())
@@ -339,6 +265,8 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 lineweight: Option<f64>,
                 #[serde(default)]
                 transparency: Option<u8>,
+                #[serde(default, deserialize_with = "crate::attrs::deserialize")]
+                attrs: crate::attrs::Attrs,
             }
             let a: Args = parse_args(args)?;
             doc.ensure_layer(&a.layer);
@@ -381,6 +309,7 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 ent.linetype = a.linetype;
                 ent.lineweight = a.lineweight;
                 ent.transparency = a.transparency.unwrap_or(0);
+                ent.attrs = a.attrs;
             }
             let ent = doc.entity(id).expect("entity was just added");
             serde_json::to_string(&ent.to_json(doc)).map_err(|e| e.to_string())
@@ -392,7 +321,7 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 target: serde_json::Value,
             }
             let a: Args = parse_args(args)?;
-            let ids = parse_target(&a.target)?;
+            let ids = parse_target(doc, &a.target)?;
             let mut removed = Vec::new();
             for id in ids {
                 if doc.remove_entity(id).is_some() {
@@ -410,7 +339,7 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 dy: f64,
             }
             let a: Args = parse_args(args)?;
-            let ids = parse_target(&a.target)?;
+            let ids = parse_target(doc, &a.target)?;
             let mut moved = Vec::new();
             for id in ids {
                 if doc.move_entity(id, a.dx, a.dy) {
@@ -428,7 +357,7 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 dy: f64,
             }
             let a: Args = parse_args(args)?;
-            let ids = parse_target(&a.target)?;
+            let ids = parse_target(doc, &a.target)?;
             let mut copied = Vec::new();
             for id in ids {
                 if let Some(new_id) = doc.copy_entity(id, a.dx, a.dy) {
@@ -450,7 +379,7 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 angle: f64, // degrees, CCW
             }
             let a: Args = parse_args(args)?;
-            let ids = parse_target(&a.target)?;
+            let ids = parse_target(doc, &a.target)?;
             let center = Point::new(a.center[0], a.center[1]);
             let mut rotated = Vec::new();
             for id in ids {
@@ -469,7 +398,7 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 p2: [f64; 2],
             }
             let a: Args = parse_args(args)?;
-            let ids = parse_target(&a.target)?;
+            let ids = parse_target(doc, &a.target)?;
             let p1 = Point::new(a.p1[0], a.p1[1]);
             let p2 = Point::new(a.p2[0], a.p2[1]);
             let mut mirrored = Vec::new();
@@ -567,6 +496,7 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 .entity(eid)
                 .ok_or(format!("entity {} not found", a.id))?;
             let layer = ent.layer.clone();
+            let src_attrs = ent.attrs.clone();
             let color = ent.color;
             let d = a.distance;
 
@@ -603,6 +533,9 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
             };
             match new_id {
                 Some(id) => {
+                    if let Some(e) = doc.entity_mut(id) {
+                        e.attrs = src_attrs;
+                    }
                     let ent = doc.entity(id).expect("entity was just added");
                     serde_json::to_string(&ent.to_json(doc)).map_err(|e| e.to_string())
                 }
@@ -632,6 +565,8 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
             let count = shapes.len();
             let ip = a.insert_point.unwrap_or([0.0, 0.0]);
             doc.define_block(BlockDef {
+                attrs: Default::default(),
+                shape_attrs: Vec::new(),
                 name: a.name.clone(),
                 shapes,
                 insert_point: Point::new(ip[0], ip[1]),
@@ -760,6 +695,8 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 .ok_or_else(|| format!("block '{}' not defined", a.source))?
                 .clone();
             let mut new_def = BlockDef {
+                attrs: source_def.attrs.clone(),
+                shape_attrs: source_def.shape_attrs.clone(),
                 name: a.name.clone(),
                 shapes: source_def.shapes.clone(),
                 insert_point: source_def.insert_point,
@@ -1017,8 +954,16 @@ pub(crate) fn parse_entity_id(s: &str) -> Result<EntityId, String> {
 }
 
 /// Parse a target that can be a single ID string, array of ID strings,
-/// or array of entity objects (with .id field).
-pub(crate) fn parse_target(val: &serde_json::Value) -> Result<Vec<EntityId>, String> {
+/// array of entity objects (with .id field), or a selector object
+/// (`{layer, attrs, has, type, bounds, ids}`, see `select.rs`).
+pub(crate) fn parse_target(
+    doc: &Document,
+    val: &serde_json::Value,
+) -> Result<Vec<EntityId>, String> {
+    if crate::select::is_selector_object(val) {
+        let sel = crate::select::Selector::parse(val)?;
+        return crate::select::select_ids(doc, &sel);
+    }
     match val {
         serde_json::Value::String(s) => Ok(vec![parse_entity_id(s)?]),
         serde_json::Value::Array(arr) => arr
@@ -1033,9 +978,10 @@ pub(crate) fn parse_target(val: &serde_json::Value) -> Result<Vec<EntityId>, Str
                 _ => Err("target array elements must be strings or objects".to_string()),
             })
             .collect(),
-        _ => {
-            Err("target must be a string, array of strings, or array of entity objects".to_string())
-        }
+        _ => Err(
+            "target must be a string, array of strings, array of entity objects, or a selector"
+                .to_string(),
+        ),
     }
 }
 

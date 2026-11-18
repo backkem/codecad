@@ -278,9 +278,10 @@ This is a deliberate split, and it shapes the API:
   needs to mark geometry with its own facts (which net, which part
   number, which room) and get them back from queries. The core's job is
   to store such key and value pairs, keep them through save, sync and
-  undo, and filter on them. It never acts on their meaning. This is
-  planned, not built: today an entity has a layer, colour, linetype,
-  lineweight and transparency, and scripts encode meaning in layer names.
+  undo, and filter on them. It never acts on their meaning. Built in rung
+  A8 (`attrs.rs`; `docs/api-surface.md`, "Attributes and set queries"),
+  together with the set queries named in the point above
+  (`pairsWithin`, `overlapping`, `inside`, `nearest` in `setquery.rs`).
 - **Checks derive, then compare.** With meaning in one place and geometry
   in another, a domain library can verify its own output independently:
   recompute the fact from the finished geometry and compare it with what

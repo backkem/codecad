@@ -1,8 +1,8 @@
 # Circuit boards in CodeCAD: direction
 
-Status: a direction, written 2026-11-18. Nothing here is planned on a
-ladder or built. It records how circuit board design would fit the
-architecture, so that work on the 2D API, the 3D ladder and the code ABI
+Status: a direction, written 2026-11-18. Of what the core would need,
+items 1 and 2 are built (rung A8); the rest is not planned on a ladder.
+It records how circuit board design would fit the architecture, so that work on the 2D API, the 3D ladder and the code ABI
 does not close the door on it.
 
 ## The shape of the problem
@@ -69,7 +69,11 @@ All of it generic, none of it about electronics:
 4. **Per-layer export.** Fabrication formats are 2D per layer. An
    exporter is a consumer of the document like the PDF and PNG paths.
 
-Items 1 and 2 are recorded as open questions in `api-surface.md`.
+Items 1 and 2 are built (rung A8, `api-surface.md`, "Attributes and set
+queries"): attributes on entities, block definitions and their shapes, and
+`pairsWithin`, `overlapping`, `inside` and `nearest`. The clearance rule in
+`crates/cadview-server/tests/a8/pcb-clearance.js` is a first sketch of a
+design rule check over them. Items 3 and 4 are open.
 
 ## What a board library would provide
 

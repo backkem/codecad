@@ -303,6 +303,7 @@ cad.entities()
 //   layer: "S_WALL",
 //   color: [255, 255, 255],
 //   bounds: { min: [0, 0], max: [5.0, 0] },
+//   attrs: { net: "GND" },  // only when the entity has attributes (A8)
 //
 //   // type-specific fields:
 //   // line:     start, end
@@ -382,12 +383,15 @@ cad.entity("e_42")      // by ID, returns entity or null
 
 ### Accelerated spatial queries
 
-R-tree backed, O(log n). Use these for large drawings instead of
-filtering the full entity array:
+Built in A8 on the same code as the set queries (see "Attributes and set
+queries" below). Before A8 these two were declared in `cad-api.ts` but not
+dispatched.
 
 ```js
-cad.near([8.0, 5.0], 2.0)                     // within 2m of point
-// [{ entity, distance }, ...]                  // sorted by distance
+cad.near([8.0, 5.0], 2.0)                     // within 2 of a point
+// [{ ...entity, distance }, ...]               // nearest first
+// distance is exact for lines, arcs, circles, polylines and fills; for
+// text, splines and other shapes a bounding box stands in, marked approx: true
 
 // Entities whose bounding box intersects the rectangle (partial overlap)
 cad.inBounds({ min: [5, 3], max: [11, 7] })
@@ -400,6 +404,8 @@ cad.inBounds({ min: [5, 3], max: [11, 7] }, "contain")
 // Both modes:
 //   "intersect" (default) - any overlap, even partial
 //   "contain"             - entity bounds fully inside query rect
+// Both take { select } to look at part of the drawing only:
+cad.near([8, 5], 2, { select: { layer: "S_WALL" } })
 ```
 
 ### Topology queries
@@ -522,6 +528,217 @@ cad.screenshot({
   layers: ["S_WALL", "E_POWR"],                 // only show these
   highlight: cad.near([8, 5], 1.0).map(r => r.entity.id)
 })
+```
+
+---
+
+## Attributes and set queries
+
+Built in rung A8 (`docs/LADDER-API.md`). Two of the mechanisms named in
+`docs/architecture.md`, "Semantics live in code": entities carry the
+script's own facts, and the core answers questions about whole sets in one
+call. Neither knows any domain. The two worked rules below (clearance
+between nets, free space around play equipment) are script code over these
+calls.
+
+Coordinates are drawing units, like every `cad_call` (mm for DWG files).
+
+### The attribute model
+
+An attribute is a key and a value that a script attaches to an entity or a
+block definition. The core stores it, keeps it through every path below,
+matches it in selections and returns it. It never acts on its meaning.
+
+| Choice | Decision | Why |
+|---|---|---|
+| Value types | A JSON scalar: string, finite number, boolean. | Strings only would make every rule parse numbers (a stock length, a free space, a clearance), and `"1.0"` would not equal `"1"`. Arrays and objects would make equality matching ill-defined, grow sync blobs, and have no form in DWG extended data. Structured data belongs in the script's own tables, keyed by an attribute (an id). |
+| Null | Not a value. In an update it removes the key; in a selector it means "absent". | One meaning per position, no "present but null" state. |
+| Keys | 1 to 64 ASCII letters, digits and `_ - . : /`. | Safe as DWG strings and JSON keys, readable in other CAD programs. Dots suggest namespaces (`pcb.net`) but the core gives them no meaning. |
+| Limits | At most 64 keys per entity, a string value at most 1024 bytes, all keys and values of one entity at most 8192 bytes. | Keeps sync blobs small and DWG extended data far below its 16 KB limit per entity. A failing update changes nothing. |
+| Where | `DrawEntity.attrs` (sorted map). `BlockDef.attrs` for the definition, `BlockDef.shape_attrs[i]` for its shape `i`. | A footprint has a part name, a pad has a pin number. The per-shape list is parallel to `shapes`, so the shape tuples used by the renderers did not change. |
+| Layers | No attributes. | A layer is already a name the script picks; facts about a layer live in the script's table keyed by that name. Open if a domain needs more. |
+| Block children | A child of an insert carries the definition's attributes, then the shape's, then the insert's; a later one wins on equal keys. | The usual CAD rule: the instance overrides the definition. A pad of `R1` then carries `ref: "R1"` and its `pin`. |
+
+Every new call passes the question in `AGENTS.md`: would another domain need
+the same thing? A key and value store, equality and presence matching, and
+"which pairs are closer than d" serve a floor plan, a circuit board, a
+cutting list and a site plan alike. Nothing is named after a trade.
+
+### How attributes survive
+
+| Path | Behaviour |
+|---|---|
+| Yrs sync | Attributes are part of the entity blob, so a change of attributes alone is a change and syncs. Block definitions are now diffed by content hash (before, only by name, so a redefinition did not sync either). |
+| Undo, redo | Part of the snapshot. |
+| move, rotate, mirror, trimTo, extendTo, fillet and chamfer on the inputs | Edit in place: attributes stay. |
+| copy, array, offset, trim | The new entity gets the source's attributes. |
+| fillet arc, chamfer line | A new entity joining two: it gets the attributes both have with equal values. |
+| Block insert, `entities({expand: true})`, `children()` | Children carry definition, shape and insert attributes (see above) and a `child` index. |
+| JSON | `cad.saveJson(path)` and `cad.loadJson(path)` keep everything (attributes, blocks, layers, linetypes, ids, ByLayer styles), numbers bit for bit. `cad.save(path)` stays a one-way export of the `entities()` view, now with `attrs`. |
+| DWG | Entity attributes, including those of shapes inside block definitions, are written as extended data under the registered application `CODECAD` and read back. The attributes of a block definition itself have no place in this export: `saveDwg` reports them in `attrs.droppedBlocks`, and entities with no DWG form in `attrs.droppedEntities`. JSON is the lossless format. |
+| PDF, PNG | Ignored. |
+| Old data | Documents without the field load with no attributes: sync blobs written before A8 decode through a fallback, JSON files through serde defaults, and DWG files simply have no `CODECAD` extended data. |
+
+DWG layout of the extended data: a 1071 format version (1), then per
+attribute a 1000 string (the key) and its value: a 1000 string for ASCII
+text up to 255 bytes, a 1002 `{` ... `}` group of 1004 binary chunks
+(UTF-8) for any other text, a 1040 real for a number, a 1070 integer (0
+or 1) for a boolean. Written in the R2000 layout that `saveDwg` uses.
+
+### Setting and reading attributes
+
+```js
+// At creation: every creation call takes attrs (lines, arcs, circles,
+// polylines, splines, text, fills, hatches, place)
+cad.addPolyline([[0, 0], [10, 0]], { layer: "CU", attrs: { net: "GND", width: 0.25 } })
+
+// Later, on any target (ids, entity objects or a selector). Merge; null
+// removes a key; replace: true starts from nothing. All or nothing.
+cad.setAttrs({ layer: "CU", has: ["net"] }, { checked: true })   // -> { updated: [...] }
+cad.removeAttrs("e_12", ["checked"])
+cad.attrs("e_12")                                                // -> { net: "GND", width: 0.25 }
+
+// Block definitions: the definition and each shape
+cad.defineBlock("R0603", [
+  { type: "circle", center: [-0.8, 0], radius: 0.35, layer: "CU", attrs: { pin: "1" } },
+  { type: "circle", center: [0.8, 0], radius: 0.35, layer: "CU", attrs: { pin: "2" } },
+], { attrs: { footprint: "R0603" } })
+cad.place("R0603", { at: [20, 0], attrs: { ref: "R1", "net.1": "GND", "net.2": "VCC" } })
+cad.setBlockAttrs("R0603", { rev: "B" })                  // the definition
+cad.setBlockAttrs("R0603", { plated: true }, { shape: 0 }) // shape 0
+cad.blockAttrs("R0603")      // -> { attrs: {...}, shapes: [{ pin: "1", plated: true }, { pin: "2" }] }
+
+// Entities report them (absent when empty); describe() counts the keys
+cad.entity("e_12").attrs     // { net: "GND", width: 0.25 }
+cad.describe().attrs         // { checked: 5, net: 5, ... }
+```
+
+### Selections
+
+Every call that takes a target or a set takes the same selection: an id, a
+list of ids or entity objects, or a selector object whose conditions must
+all hold.
+
+```js
+{
+  ids: ["e_1", "e_2"],          // only these
+  layer: "CU",                  // or ["CU", "SILK"]
+  type: "line",                 // or a list; the types entities() reports
+  attrs: { net: "GND", via: null },  // equal values (typed); null = key absent
+  has: ["net"],                 // keys present, any value
+  bounds: { min: [0, 0], max: [50, 30] },  // bounding box overlaps
+  expand: true,                 // block inserts as their children, each matched
+                                // on its own layer and attributes
+}
+```
+
+`entities(selector)`, every mutation target (`move`, `copy`, `remove`,
+`rotate`, `mirror`, `array`, `setAttrs`, ...) and every set query use it.
+`expand` is for queries only; a mutation needs whole entities. An unknown
+key is an error, so a typo does not select everything.
+
+### Set queries
+
+Whole sets in one call, with exact geometry: lines, arcs, circles,
+polylines with bulges and fill boundaries are used as lines and arcs, never
+sampled. Shapes with no exact distance here (splines, ellipses, text, curve
+paths) are left out and listed in `skipped` with their id and type, so a
+rule never passes silently on geometry it did not see. A static
+bounding-volume hierarchy over the line and arc pieces keeps the calls near
+n log n.
+
+Every call returns `{ pairs, skipped }` (and `truncated: true` past
+`limit`, default 100 000 pairs). A pair names an entity of `a` and one of
+`b`, and for a block insert the child (`aChild`, `bChild`): the expanded
+child, or for an unexpanded insert the child where the contact is. With `b`
+null or left out, pairs are taken within `a`, each once. An entity in both
+sets is never paired with itself.
+
+Options shared by the pair queries:
+
+- `differ: ["net"]`: leave out pairs whose values for all these keys are
+  equal (a missing key counts as a value). The core compares; it does not
+  know what a net is.
+- `attrs: true`: add `aAttrs` and `bAttrs` (effective attributes) to each
+  pair, so a rule needs no second lookup.
+- `limit`: the most pairs returned.
+
+```js
+// Every pair closer than a distance (strictly), with the closest points
+cad.pairsWithin({ layer: "CU", has: ["net"] }, null, 0.2, { differ: ["net"] })
+// { pairs: [{ a, b, distance, pa: [x, y], pb: [x, y] }, ...], skipped: [] }
+
+// Every pair whose outlines meet: crossing or touching points, shared
+// stretches (collinear lines, arcs of one circle). areas: closed shapes are
+// filled, so one inside another is a pair too, with contains: "a" | "b"
+cad.overlapping({ layer: "PLAY" }, null, { areas: true })
+// { pairs: [{ a, b, points: [[x, y]], shared: false, contains? }], skipped }
+
+// Which entities lie inside a region: a rectangle, a ring of points, or
+// each closed entity of a selection (circle, closed polyline, fill; holes
+// count). The region is the union of an entity's closed shapes; open curves
+// add nothing and are listed in skipped. Touching the boundary from inside
+// counts, unless strict: true.
+cad.inside({ layer: "PLAY" }, { layer: "SITE" })
+// { pairs: [{ a, b, touches }], skipped }   b is null for a rectangle or ring
+
+// The k nearest entities of b for each entity of a, optionally within a distance
+cad.nearest({ attrs: { kind: "socket" } }, { layer: "WALL" }, { k: 1, within: 500 })
+// { pairs: [{ a, b, distance, pa, pb }], skipped }
+```
+
+Exactness. The distance between two pieces is exact up to floating point:
+the minimum is an intersection, an endpoint of one piece against the other,
+or an interior point of both where the connecting line is normal to both
+(for a line and an arc, on the radius normal to the line; for two arcs, on
+the line through both centres). Tests compare it with dense sampling and
+the indexed pairs with the naive loop. Because the test is strict, two
+tracks drawn exactly 0.2 apart may come out at 0.19999999999999998: pass
+`0.2 - 1e-9` when the boundary itself is allowed.
+
+Speed (release build, one machine): 10 000 random lines and arcs, all pairs
+closer than 0.2: `pairsWithin` 19 ms through `cad_call` (1 912 pairs),
+the naive loop over all 50 million pairs with the same exact distance
+12.5 s. The test is `timing_pairs_within_10000_segments` in
+`crates/cadview-core/tests/attrs_setquery.rs`.
+
+What the list is, and why. `near` and `inBounds` are the one-point and
+one-rectangle versions and run on the same code. The distance between two
+given entities is `pairsWithin(id1, id2, 1e12)` (a finite bound; JSON has no Infinity). Intersection points
+come with `overlapping`, so there is no separate set intersection call.
+Union and offset of a selection (copper pours, keep-out zones) are the open
+part: `region.rs` and rung A2.
+
+### Worked rules
+
+Both are script code in `crates/cadview-server/tests/a8/`, run by the
+server tests through the same entry `/api/run` uses, before and after a JSON
+and a DWG round trip.
+
+A clearance rule between nets (`pcb-clearance.js`). Tracks carry `net`; a
+pad takes its net from its footprint's insert (`net.1`, `net.2`), which is
+the rule's own convention:
+
+```js
+const CLEARANCE = 0.2;
+const netOf = (a) => a.net ?? a[`net.${a.pin}`] ?? null;
+const copper = { layer: "CU", expand: true };
+const foreign = (p) => netOf(p.aAttrs) !== netOf(p.bAttrs);
+const tooClose = cad.pairsWithin(copper, null, CLEARANCE, { attrs: true }).pairs.filter(foreign);
+const shorts = cad.overlapping(copper, null, { attrs: true }).pairs.filter(foreign);
+```
+
+A free-space rule around equipment footprints (`play-free-space.js`):
+every item inside the site, no two overlapping, each keeping the free space
+its `free` attribute asks for:
+
+```js
+const items = { layer: "PLAY", has: ["item"] };
+const inSite = new Set(cad.inside(items, { layer: "SITE" }).pairs.map((p) => p.a));
+const overlaps = cad.overlapping(items, null, { areas: true }).pairs;
+const most = Math.max(...cad.entities(items).map((e) => e.attrs.free));
+const tight = cad.pairsWithin(items, null, most, { attrs: true }).pairs
+  .filter((p) => p.distance < Math.max(p.aAttrs.free, p.bAttrs.free));
 ```
 
 ---
@@ -1646,12 +1863,16 @@ design above.
   principle 8 the generic answer is preferred: free-form attributes on
   entities and block definitions, which the core stores, syncs and
   filters on without interpreting them. Pins, nets and part numbers then
-  need no API of their own.
-- **Set-level queries**: `cad.near()` and `cad.inBounds()` answer
-  questions about one point or one rectangle. Rules over whole drawings
-  (clearance between two groups, overlaps between two layers) need
-  queries that take two sets and return every matching pair in one call,
-  plus union and offset of a selection. Not designed yet.
+  need no API of their own. **Built in A8** (see "Attributes and set
+  queries"): shape attributes in a block definition carry pin metadata.
+  Still open: attributes on layers, and DWG storage for the attributes of
+  a block definition itself.
+- **Set-level queries**: rules over whole drawings (clearance between two
+  groups, overlaps between two layers) need queries that take two sets and
+  return every matching pair in one call. **Built in A8**: `pairsWithin`,
+  `overlapping`, `inside`, `nearest`. Still open: union and offset of a
+  selection, and exact distances for splines and ellipses (left out and
+  reported in `skipped` today).
 - **Multi-page**: DWGs can have multiple model spaces / layouts. API
   assumes one. Need `cad.pages()` / `cad.setPage()`?
 - **Coordinate system**: meters work for buildings. For schematics at

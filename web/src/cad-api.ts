@@ -29,7 +29,107 @@ export interface EntityJson {
   linetype?: string;
   lineweight?: number;
   transparency?: number;
+  /** The entity's attributes; absent when it has none. */
+  attrs?: Attrs;
+  /** For a child of a block insert (expand, children): its index in the block. */
+  child?: number;
   _session?: string;
+}
+
+/** An attribute value: a string, a finite number or a boolean. */
+export type AttrValue = string | number | boolean;
+/**
+ * Free-form attributes: the script's own facts about an entity (a net, a
+ * part number, a room). The core stores, syncs and filters on them and never
+ * interprets them. Keys: 1-64 ASCII letters, digits and `_ - . : /`.
+ */
+export type Attrs = Record<string, AttrValue>;
+
+/**
+ * Which entities a call works on. Every condition that is set must hold.
+ * Works for `entities()`, every mutation target and the set queries.
+ */
+export interface Selector {
+  ids?: string[];
+  /** Layer name, or any of several. */
+  layer?: string | string[];
+  /** Entity type as `entities()` reports it ("line", "arc", "block_insert", ...). */
+  type?: string | string[];
+  /** Equal values per key (typed: "1" is not 1); null means the key is absent. */
+  attrs?: Record<string, AttrValue | null>;
+  /** Keys that must be present, whatever their value. */
+  has?: string[];
+  /** The entity's bounding box overlaps this rectangle. */
+  bounds?: { min: Point2; max: Point2 };
+  /**
+   * Block inserts as their child shapes, each matched on its own layer and
+   * attributes (block definition, then shape, then insert; a later one wins).
+   */
+  expand?: boolean;
+}
+
+/** One shape a set query could not use exactly (spline, ellipse, text, ...). */
+export interface SkippedShape {
+  id: string;
+  child?: number;
+  type: string;
+}
+
+/** A pair from a set query: an entity of a and one of b. */
+export interface PairBase {
+  a: string;
+  b: string;
+  /** Child index in a block insert (expanded, or the child nearest the contact). */
+  aChild?: number;
+  bChild?: number;
+  /** With `attrs: true`: each entity's (effective) attributes. */
+  aAttrs?: Attrs;
+  bAttrs?: Attrs;
+}
+
+export interface ClosePair extends PairBase {
+  distance: number;
+  /** The closest point on a, and on b. */
+  pa: Point2;
+  pb: Point2;
+}
+
+export interface ContactPair extends PairBase {
+  /** Where the outlines meet (and the ends of any shared stretch). */
+  points: Point2[];
+  /** The outlines coincide along a stretch (collinear lines, one circle). */
+  shared: boolean;
+  /** With `areas`: the outlines do not meet but (part of) b lies inside a ("a") or a inside b ("b"). */
+  contains?: "a" | "b";
+}
+
+export interface InsidePair {
+  a: string;
+  /** The containing entity; null for a rectangle or ring region. */
+  b: string | null;
+  aChild?: number;
+  bChild?: number;
+  aAttrs?: Attrs;
+  bAttrs?: Attrs;
+  /** a touches the region's boundary. */
+  touches: boolean;
+}
+
+export interface SetResult<P> {
+  pairs: P[];
+  /** Shapes left out: no rule passes silently on geometry it did not see. */
+  skipped: SkippedShape[];
+  /** More pairs than `limit` (default 100 000). */
+  truncated?: boolean;
+}
+
+export interface PairOpts {
+  /** Leave out pairs whose values for all these keys are equal (missing counts as a value). */
+  differ?: string[];
+  /** Include both entities' attributes in each pair. */
+  attrs?: boolean;
+  /** Most pairs returned (default 100 000). */
+  limit?: number;
 }
 
 export interface LayerInfo {
@@ -41,7 +141,10 @@ type Point2 = [number, number];
 /** Polyline vertex: [x, y] or [x, y, bulge] (bulge = tan(sweep/4), + = CCW arc). */
 type Vertex = [number, number] | [number, number, number];
 type Color3 = [number, number, number] | number; // [r,g,b] or ACI index
-type Target = string | string[] | EntityJson | EntityJson[];
+/** Ids, entity objects, or a selector object (see `Selector`). */
+type Target = string | string[] | EntityJson | EntityJson[] | Selector;
+/** A target, or null for every entity. */
+type Selection = Target | null;
 type EntityRef = string | EntityJson;
 /** A line: two points, or a line entity (id or object). */
 type LineRef = [Point2, Point2] | EntityRef;
@@ -54,6 +157,8 @@ export interface StyleOpts {
   linetype?: string;
   lineweight?: number;
   transparency?: number;
+  /** Attributes for the new entity (or entities). */
+  attrs?: Attrs;
 }
 
 export interface DimOpts {
@@ -121,11 +226,24 @@ function normalizeShapeRef<T>(v: T): T | string {
   return v;
 }
 
-function normalizeTarget(t: Target): string | string[] {
+function normalizeTarget(t: Target): string | string[] | Selector {
   if (typeof t === "string") return t;
   if (Array.isArray(t)) return t.map((x) => (typeof x === "string" ? x : x.id));
-  if (t && typeof t === "object" && "id" in t) return t.id;
-  return t as string;
+  if (t && typeof t === "object" && "id" in t) return (t as EntityJson).id;
+  return t as Selector;
+}
+
+function normalizeSelection(t: Selection | undefined) {
+  return t == null ? null : normalizeTarget(t);
+}
+
+/** A region for `inside`: a rectangle, a ring of points, or a selection. */
+type InsideRegion = { min: Point2; max: Point2 } | Point2[] | Target;
+
+function normalizeRegion(r: InsideRegion) {
+  if (Array.isArray(r) && Array.isArray(r[0])) return r;
+  if (r && typeof r === "object" && "min" in r && "max" in r) return r;
+  return normalizeTarget(r as Target);
 }
 
 /** Options for `cad.render`. */
@@ -374,9 +492,16 @@ export function buildCadApi({
 
   return {
     // ── Observe ───────────────────────────────────────────────────────
-    describe: () => call("describe") as { entities: number; layers: number },
-    entities: (opts?: { expand?: boolean; layer?: string }) =>
-      call("entities", opts || {}) as EntityJson[],
+    describe: () =>
+      call("describe") as {
+        entities: number;
+        layers: string[];
+        /** Attribute keys in use, with how many entities carry each. */
+        attrs: Record<string, number>;
+      },
+    /** Entities matching a selector (all without one); expand: block children too. */
+    entities: (opts?: Selector) =>
+      call("entities", { ...opts }) as EntityJson[],
     entity: (id: string) => call("entity", { id }) as EntityJson,
     children: (id: string | EntityJson) =>
       call("children", {
@@ -384,10 +509,115 @@ export function buildCadApi({
       }) as EntityJson[],
 
     // Spatial queries
-    near: (pt: Point2, r: number) =>
-      call("near", { point: pt, radius: r }) as EntityJson[],
-    inBounds: (rect: { min: Point2; max: Point2 }, mode?: string) =>
-      call("inBounds", { rect, mode }) as EntityJson[],
+    /**
+     * Entities within `r` of a point, nearest first, each with `distance`
+     * (exact for lines, arcs, circles, polylines and fills; `approx: true`
+     * where a bounding box stood in, e.g. text).
+     */
+    near: (pt: Point2, r: number, opts: { select?: Selection } = {}) =>
+      call("near", {
+        point: pt,
+        radius: r,
+        ...(opts.select !== undefined
+          ? { select: normalizeSelection(opts.select) }
+          : {}),
+      }) as (EntityJson & { distance: number; approx?: boolean })[],
+    /** Entities whose bounding box overlaps ("intersect") or lies within ("contain") the rectangle. */
+    inBounds: (
+      rect: { min: Point2; max: Point2 },
+      mode?: "intersect" | "contain",
+      opts: { select?: Selection } = {},
+    ) =>
+      call("inBounds", {
+        rect,
+        mode,
+        ...(opts.select !== undefined
+          ? { select: normalizeSelection(opts.select) }
+          : {}),
+      }) as EntityJson[],
+
+    // Set queries: whole selections in one call, exact geometry
+    /**
+     * Every pair of an entity of a and one of b (b null: pairs within a)
+     * strictly closer than `distance`, with the distance and closest points.
+     */
+    pairsWithin: (
+      a: Selection,
+      b: Selection | undefined,
+      distance: number,
+      opts: PairOpts = {},
+    ) =>
+      call("pairsWithin", {
+        a: normalizeSelection(a),
+        b: normalizeSelection(b),
+        distance,
+        ...opts,
+      }) as SetResult<ClosePair>,
+    /**
+     * Every pair whose outlines meet, with the meeting points. areas: closed
+     * shapes count as filled, so a shape inside another is a pair too.
+     */
+    overlapping: (
+      a: Selection,
+      b?: Selection,
+      opts: PairOpts & { areas?: boolean } = {},
+    ) =>
+      call("overlapping", {
+        a: normalizeSelection(a),
+        b: normalizeSelection(b),
+        ...opts,
+      }) as SetResult<ContactPair>,
+    /**
+     * Entities of a that lie inside a region: a rectangle, a ring of points,
+     * or each closed entity of a selection (circles, closed polylines,
+     * fills). Touching the boundary counts unless strict.
+     */
+    inside: (
+      a: Selection,
+      region: InsideRegion,
+      opts: PairOpts & { strict?: boolean } = {},
+    ) =>
+      call("inside", {
+        a: normalizeSelection(a),
+        region: normalizeRegion(region),
+        ...opts,
+      }) as SetResult<InsidePair>,
+    /** For each entity of a, its k nearest in b (b null: within a), optionally only within a distance. */
+    nearest: (
+      a: Selection,
+      b?: Selection,
+      opts: PairOpts & { k?: number; within?: number } = {},
+    ) =>
+      call("nearest", {
+        a: normalizeSelection(a),
+        b: normalizeSelection(b),
+        ...opts,
+      }) as SetResult<ClosePair>,
+
+    // Attributes
+    /** Merge attributes into the targets (null removes a key; replace: start empty). All or nothing. */
+    setAttrs: (
+      t: Target,
+      attrs: Record<string, AttrValue | null>,
+      opts: { replace?: boolean } = {},
+    ) =>
+      call("setAttrs", { target: normalizeTarget(t), attrs, ...opts }) as {
+        updated: string[];
+      },
+    removeAttrs: (t: Target, keys: string[]) =>
+      call("removeAttrs", { target: normalizeTarget(t), keys }) as {
+        updated: string[];
+      },
+    /** One entity's attributes ({} when none). */
+    attrs: (id: EntityRef) => call("attrs", { id: ref(id) }) as Attrs,
+    /** Attributes of a block definition, or (shape: i) of one of its shapes. Returns the new set. */
+    setBlockAttrs: (
+      name: string,
+      attrs: Record<string, AttrValue | null>,
+      opts: { replace?: boolean; shape?: number } = {},
+    ) => call("setBlockAttrs", { name, attrs, ...opts }) as Attrs,
+    blockAttrs: (name: string) =>
+      call("blockAttrs", { name }) as { attrs: Attrs; shapes: Attrs[] },
 
     // Topology
     connectedTo: (id: string | EntityJson, tolerance?: number) =>
@@ -584,12 +814,19 @@ export function buildCadApi({
     /**
      * Shapes: {type:"line",start,end} | {type:"circle",center,radius} |
      * {type:"arc",center,radius,from,to} | {type:"polyline",points,closed} |
-     * {type:"text",text,at,height?,rotation?,align?,valign?}; each may set layer/color.
+     * {type:"text",text,at,height?,rotation?,align?,valign?}; each may set
+     * layer/color and attrs (the shape's own attributes). opts.attrs: the
+     * definition's attributes. A placed child carries definition, then
+     * shape, then insert attributes (a later one wins).
      */
     defineBlock: (
       name: string,
       shapes: Record<string, unknown>[],
-      opts: { insert_point?: Point2; default_layer?: string } = {},
+      opts: {
+        insert_point?: Point2;
+        default_layer?: string;
+        attrs?: Attrs;
+      } = {},
     ) => call("defineBlock", { name, shapes, ...opts }),
     place: (
       block: string,
@@ -601,6 +838,8 @@ export function buildCadApi({
         xScale?: number;
         yScale?: number;
         layer?: string;
+        /** Attributes of the insert. */
+        attrs?: Attrs;
       },
     ) => call("place", { block, ...opts }) as EntityJson,
     clone: (
@@ -767,8 +1006,18 @@ export function buildCadApi({
     redo: () => call("redo"),
 
     // ── RPC (server operations) ───────────────────────────────────────
+    /** Export the entities() view as JSON (one way; see saveJson for a file that loads back). */
     save: (path = "cadview-output.json") => rpc("save", { path }),
+    /**
+     * Save as DWG. Entity attributes are kept as extended data; the result's
+     * `attrs` says what was kept and what DWG cannot hold (block definition
+     * attributes).
+     */
     saveDwg: (path = "output.dwg") => rpc("saveDwg", { path }),
+    /** The whole document as lossless JSON (attributes, blocks, ids, styles). */
+    saveJson: (path = "document.json") => rpc("saveJson", { path }),
+    /** Replace the document with one saved by saveJson. */
+    loadJson: (path: string) => rpc("loadJson", { path }),
     savePdf: (path = "output.pdf", opts: SavePdfOptions = {}) =>
       rpc("savePdf", { ...opts, path }),
     /** Render the drawing to a PNG on the server (GPU, else CPU). */

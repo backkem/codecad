@@ -32,6 +32,8 @@ pub(crate) struct Style {
     lineweight: Option<f64>,
     #[serde(default)]
     transparency: Option<u8>,
+    #[serde(default, deserialize_with = "crate::attrs::deserialize")]
+    attrs: crate::attrs::Attrs,
 }
 
 impl Style {
@@ -55,8 +57,21 @@ fn add_styled(doc: &mut Document, shape: Shape, style: &Style) -> EntityId {
         lineweight: style.lineweight,
         transparency: style.transparency.unwrap_or(0),
         shape,
+        attrs: style.attrs.clone(),
     });
     id
+}
+
+/// A new entity that joins two others (a fillet arc, a chamfer line) gets
+/// the attributes both of them have with equal values.
+fn joined_attrs(doc: &mut Document, id: EntityId, a: EntityId, b: EntityId) {
+    let (Some(ea), Some(eb)) = (doc.entity(a), doc.entity(b)) else {
+        return;
+    };
+    let shared = crate::attrs::common(&ea.attrs, &eb.attrs);
+    if let Some(e) = doc.entity_mut(id) {
+        e.attrs = shared;
+    }
 }
 
 fn ent_json(doc: &Document, id: EntityId) -> Value {
@@ -328,10 +343,135 @@ pub fn cad_call_ext(doc: &mut Document, method: &str, args: &str) -> Option<R> {
         "regionClip" => region_clip(doc, args),
         "defineBlock" => define_block(doc, args),
         "place" => place(doc, args),
+        "setAttrs" => set_attrs(doc, args),
+        "removeAttrs" => remove_attrs(doc, args),
+        "attrs" => get_attrs(doc, args),
+        "setBlockAttrs" => set_block_attrs(doc, args),
+        "blockAttrs" => block_attrs(doc, args),
         "methods" => methods(),
-        _ => return None,
+        _ => return crate::setquery::dispatch(doc, method, args),
     };
     Some(r)
+}
+
+// ── Attributes ─────────────────────────────────────────────────────────
+
+/// Apply one update to every target, all or nothing.
+fn update_attrs(
+    doc: &mut Document,
+    target: &Value,
+    updates: &crate::attrs::Updates,
+    replace: bool,
+) -> R {
+    let ids = parse_target(doc, target)?;
+    let mut next = Vec::with_capacity(ids.len());
+    for id in &ids {
+        let e = doc
+            .entity(*id)
+            .ok_or_else(|| format!("entity e_{} not found", id.0))?;
+        let mut a = e.attrs.clone();
+        crate::attrs::apply(&mut a, updates, replace).map_err(|m| format!("e_{}: {m}", id.0))?;
+        next.push(a);
+    }
+    let mut updated = Vec::with_capacity(ids.len());
+    for (id, a) in ids.iter().zip(next) {
+        if let Some(e) = doc.entity_mut(*id) {
+            e.attrs = a;
+            updated.push(format!("e_{}", id.0));
+        }
+    }
+    ok(json!({ "updated": updated }))
+}
+
+fn set_attrs(doc: &mut Document, args: &str) -> R {
+    #[derive(Deserialize)]
+    struct A {
+        target: Value,
+        attrs: Value,
+        #[serde(default)]
+        replace: bool,
+    }
+    let a: A = parse_args(args)?;
+    let updates = crate::attrs::parse_updates(&a.attrs)?;
+    update_attrs(doc, &a.target, &updates, a.replace)
+}
+
+fn remove_attrs(doc: &mut Document, args: &str) -> R {
+    #[derive(Deserialize)]
+    struct A {
+        target: Value,
+        keys: Vec<String>,
+    }
+    let a: A = parse_args(args)?;
+    let updates: crate::attrs::Updates = a.keys.into_iter().map(|k| (k, None)).collect();
+    update_attrs(doc, &a.target, &updates, false)
+}
+
+fn get_attrs(doc: &mut Document, args: &str) -> R {
+    #[derive(Deserialize)]
+    struct A {
+        id: Value,
+    }
+    let a: A = parse_args(args)?;
+    let id = entity_id_val(&a.id)?;
+    let e = doc
+        .entity(id)
+        .ok_or_else(|| format!("entity e_{} not found", id.0))?;
+    ok(crate::attrs::to_json(&e.attrs))
+}
+
+fn set_block_attrs(doc: &mut Document, args: &str) -> R {
+    #[derive(Deserialize)]
+    struct A {
+        name: String,
+        attrs: Value,
+        #[serde(default)]
+        replace: bool,
+        /// Index of one shape of the definition; absent: the definition.
+        #[serde(default)]
+        shape: Option<usize>,
+    }
+    let a: A = parse_args(args)?;
+    let updates = crate::attrs::parse_updates(&a.attrs)?;
+    let def = doc
+        .blocks
+        .get_mut(&a.name)
+        .ok_or_else(|| format!("block '{}' not defined", a.name))?;
+    let target = match a.shape {
+        None => &mut def.attrs,
+        Some(i) => {
+            if i >= def.shapes.len() {
+                return Err(format!(
+                    "block '{}' has {} shapes (no shape {i})",
+                    a.name,
+                    def.shapes.len()
+                ));
+            }
+            if def.shape_attrs.len() <= i {
+                def.shape_attrs.resize(i + 1, crate::attrs::Attrs::new());
+            }
+            &mut def.shape_attrs[i]
+        }
+    };
+    crate::attrs::apply(target, &updates, a.replace)?;
+    let out = crate::attrs::to_json(target);
+    ok(out)
+}
+
+fn block_attrs(doc: &mut Document, args: &str) -> R {
+    #[derive(Deserialize)]
+    struct A {
+        name: String,
+    }
+    let a: A = parse_args(args)?;
+    let def = doc
+        .blocks
+        .get(&a.name)
+        .ok_or_else(|| format!("block '{}' not defined", a.name))?;
+    let shapes: Vec<Value> = (0..def.shapes.len())
+        .map(|i| crate::attrs::to_json(def.shape_attrs(i)))
+        .collect();
+    ok(json!({ "attrs": crate::attrs::to_json(&def.attrs), "shapes": shapes }))
 }
 
 // ── Construction ───────────────────────────────────────────────────────
@@ -411,6 +551,7 @@ fn fillet(doc: &mut Document, args: &str) -> R {
         Some(shape) => {
             let style = doc.entity(ia).expect("checked above").clone();
             let id = construct::add_like(doc, &style, shape, a.layer.as_deref());
+            joined_attrs(doc, id, ia, ib);
             ent_json(doc, id)
         }
         None => Value::Null,
@@ -451,6 +592,7 @@ fn chamfer(doc: &mut Document, args: &str) -> R {
         Some(shape) => {
             let style = doc.entity(ia).expect("checked above").clone();
             let id = construct::add_like(doc, &style, shape, a.layer.as_deref());
+            joined_attrs(doc, id, ia, ib);
             ent_json(doc, id)
         }
         None => Value::Null,
@@ -459,7 +601,7 @@ fn chamfer(doc: &mut Document, args: &str) -> R {
 }
 
 fn boundary_of(doc: &Document, v: &Value, exclude: EntityId) -> Result<Vec<Curve>, String> {
-    let mut ids = parse_target(v)?;
+    let mut ids = parse_target(doc, v)?;
     ids.retain(|i| *i != exclude);
     construct::boundary_curves(doc, &ids)
 }
@@ -568,7 +710,7 @@ fn array(doc: &mut Document, args: &str) -> R {
         rect: Option<Rect>,
     }
     let a: A = parse_args(args)?;
-    let ids = parse_target(&a.target)?;
+    let ids = parse_target(doc, &a.target)?;
     let mut sources = Vec::new();
     for id in &ids {
         sources.push(
@@ -1116,6 +1258,8 @@ fn define_block(doc: &mut Document, args: &str) -> R {
         valign: Option<String>,
         #[serde(default)]
         layer: Option<String>,
+        #[serde(default, deserialize_with = "crate::attrs::deserialize")]
+        attrs: crate::attrs::Attrs,
         #[serde(default)]
         color: Option<ColorArg>,
     }
@@ -1127,9 +1271,12 @@ fn define_block(doc: &mut Document, args: &str) -> R {
         insert_point: Option<[f64; 2]>,
         #[serde(default = "default_layer", alias = "defaultLayer")]
         default_layer: String,
+        #[serde(default, deserialize_with = "crate::attrs::deserialize")]
+        attrs: crate::attrs::Attrs,
     }
     let a: A = parse_args(args)?;
     let mut shapes = Vec::new();
+    let mut shape_attrs = Vec::new();
     for (i, sd) in a.shapes.iter().enumerate() {
         let color = sd.color.clone().map(ColorArg::resolve);
         let layer = sd.layer.clone().unwrap_or_default();
@@ -1181,9 +1328,12 @@ fn define_block(doc: &mut Document, args: &str) -> R {
             other => return Err(format!("unknown block shape type (shape {i}): {other}")),
         };
         shapes.push((shape, layer, color));
+        shape_attrs.push(sd.attrs.clone());
     }
     let ip = a.insert_point.unwrap_or([0.0, 0.0]);
     doc.define_block(BlockDef {
+        attrs: a.attrs,
+        shape_attrs,
         name: a.name.clone(),
         shapes,
         insert_point: pt(ip),
@@ -1208,6 +1358,8 @@ fn place(doc: &mut Document, args: &str) -> R {
         x_scale: Option<f64>,
         #[serde(default, rename = "yScale")]
         y_scale: Option<f64>,
+        #[serde(default, deserialize_with = "crate::attrs::deserialize")]
+        attrs: crate::attrs::Attrs,
     }
     let a: A = parse_args(args)?;
     let (mut sx, mut sy) = match &a.scale {
@@ -1232,6 +1384,9 @@ fn place(doc: &mut Document, args: &str) -> R {
     if ids.is_empty() {
         return Err(format!("block '{}' not defined", a.block));
     }
+    if let Some(e) = doc.entity_mut(ids[0]) {
+        e.attrs = a.attrs;
+    }
     ok(ent_json(doc, ids[0]))
 }
 
@@ -1240,7 +1395,7 @@ fn place(doc: &mut Document, args: &str) -> R {
 fn methods() -> R {
     let m = json!([
         {"name": "describe", "args": "{}", "desc": "Scene summary: bounds, entity counts, layers"},
-        {"name": "entities", "args": "{expand?, layer?}", "desc": "List all entities. expand=true flattens block inserts"},
+        {"name": "entities", "args": "{expand?, layer?, type?, attrs?, has?, ids?, bounds?}", "desc": "Entities matching a selector (all without one). expand=true adds block children, matched one by one"},
         {"name": "entity", "args": "{id}", "desc": "Get one entity by ID"},
         {"name": "children", "args": "{id}", "desc": "Expanded child shapes of a block insert"},
         {"name": "addLine", "args": "{start, end, layer?, color?, linetype?, lineweight?, transparency?}", "desc": "Add line"},
@@ -1260,10 +1415,10 @@ fn methods() -> R {
         {"name": "addHatch", "args": "{boundary, holes?, angle?, spacing?, pattern?: lines|cross|solid, layer?}", "desc": "Line hatch clipped to boundary minus holes (rings: points, {center,radius} or entity id)"},
         {"name": "addFill", "args": "{boundary, holes?, layer?, color?, transparency?}", "desc": "Solid fill (DWG SOLID hatch). Circle/arc rings stay exact"},
         {"name": "regionClip", "args": "{subject, clip, op?: intersect|union|subtract|xor}", "desc": "Polygon boolean. Returns [{outer, holes, area}]"},
-        {"name": "defineBlock", "args": "{name, shapes, insert_point?, default_layer?}", "desc": "Define block from shapes: line|circle|arc|polyline|text"},
-        {"name": "place", "args": "{block, at, rotation?, scale? (n | [sx,sy]), xScale?, yScale?, layer?}", "desc": "Place block instance"},
+        {"name": "defineBlock", "args": "{name, shapes, insert_point?, default_layer?, attrs?}", "desc": "Define block from shapes: line|circle|arc|polyline|text"},
+        {"name": "place", "args": "{block, at, rotation?, scale? (n | [sx,sy]), xScale?, yScale?, layer?, attrs?}", "desc": "Place block instance"},
         {"name": "clone", "args": "{source, name, replaceText?}", "desc": "Clone block def with text substitution"},
-        {"name": "remove", "args": "{target}", "desc": "Delete entities by ID(s)"},
+        {"name": "remove", "args": "{target}", "desc": "Delete entities by ID(s) or selector"},
         {"name": "move", "args": "{target, dx, dy}", "desc": "Translate entities"},
         {"name": "copy", "args": "{target, dx, dy}", "desc": "Duplicate entities with offset"},
         {"name": "rotate", "args": "{target, center, angle}", "desc": "Rotate entities (degrees)"},
@@ -1293,6 +1448,25 @@ fn methods() -> R {
         {"name": "redo", "args": "{}", "desc": "Redo last undo"},
         {"name": "methods", "args": "{}", "desc": "List all available cad_call methods"},
     ]);
+    // Attributes and set queries (a second list: one json! array this long
+    // exceeds the macro recursion limit).
+    let more = json!([
+        {"name": "setAttrs", "args": "{target, attrs, replace?}", "desc": "Merge attributes into entities (null removes a key); all or nothing"},
+        {"name": "removeAttrs", "args": "{target, keys}", "desc": "Remove attribute keys from entities"},
+        {"name": "attrs", "args": "{id}", "desc": "One entity's attributes"},
+        {"name": "setBlockAttrs", "args": "{name, attrs, replace?, shape?}", "desc": "Attributes of a block definition, or of one of its shapes"},
+        {"name": "blockAttrs", "args": "{name}", "desc": "A block definition's attributes and its shapes' attributes"},
+        {"name": "pairsWithin", "args": "{a, b?, distance, differ?, attrs?, limit?}", "desc": "All pairs closer than distance (b absent: within a), exact, with closest points"},
+        {"name": "overlapping", "args": "{a, b?, areas?, differ?, attrs?, limit?}", "desc": "All pairs whose outlines meet (areas: or one lies inside the other), with the points"},
+        {"name": "inside", "args": "{a, region, strict?, differ?, attrs?}", "desc": "Entities of a inside a rectangle, a ring, or each closed entity of a selection"},
+        {"name": "nearest", "args": "{a, b?, k?, within?, differ?, attrs?}", "desc": "The k nearest entities of b for each entity of a"},
+        {"name": "near", "args": "{point, radius, select?}", "desc": "Entities within radius of a point, nearest first, with distance"},
+        {"name": "inBounds", "args": "{rect, mode?: intersect|contain, select?}", "desc": "Entities whose bounding box overlaps or lies in a rectangle"},
+    ]);
+    let mut m = m;
+    if let (Some(all), Value::Array(more)) = (m.as_array_mut(), more) {
+        all.extend(more);
+    }
     ok(m)
 }
 

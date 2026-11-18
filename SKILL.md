@@ -138,6 +138,37 @@ inserts appear as single point entities with no child lines. With it,
 each block's internal shapes are transformed to world coordinates and
 returned as individual entities with their block's layer.
 
+### Attributes and set queries
+
+Mark geometry with your own facts, then check rules over whole sets in one
+call. The core stores attributes and compares them; the meaning is yours.
+
+```js
+// Attributes: string, number or boolean values; keys like "net", "pcb.net"
+cad.addLine([0, 0], [10, 0], { layer: "CU", attrs: { net: "GND" } })
+cad.place("R0603", { at: [20, 0], attrs: { ref: "R1" } })   // insert attrs
+cad.setAttrs({ layer: "CU" }, { checked: true })            // null removes a key
+cad.entities({ attrs: { net: "GND" } })                     // select by value
+cad.entities({ has: ["net"], expand: true })                // pads inside blocks too
+
+// Set queries: { pairs, skipped }, exact lines and arcs, one call
+cad.pairsWithin({ layer: "CU" }, null, 0.2, { differ: ["net"], attrs: true })
+cad.overlapping({ layer: "PLAY" }, null, { areas: true })   // meeting or nested
+cad.inside({ layer: "PLAY" }, { layer: "SITE" })            // or a {min, max} / ring
+cad.nearest({ attrs: { kind: "socket" } }, { layer: "WALL" }, { k: 1 })
+```
+
+- **A selector** (`{layer, type, attrs, has, ids, bounds, expand}`) works
+  everywhere a target or a set goes: `entities`, `move`, `remove`,
+  `setAttrs`, the set queries.
+- **Write the rule, not a loop.** Never call a distance per pair in
+  script; ask `pairsWithin` once and filter its pairs.
+- **Read `skipped`.** Splines, ellipses and text have no exact distance yet
+  and are listed there, not silently passed.
+- **Save with `cad.saveJson(path)`** to keep every attribute;
+  `cad.saveDwg` keeps entity attributes (as extended data) and reports what
+  it cannot hold in `attrs`.
+
 ### Introspection
 
 ```js

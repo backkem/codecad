@@ -1024,6 +1024,7 @@ pub fn add_like(
     let layer = layer.unwrap_or(&style.layer).to_string();
     doc.ensure_layer(&layer);
     doc.entities.push(DrawEntity {
+        attrs: Default::default(),
         id,
         layer,
         color: style.color,

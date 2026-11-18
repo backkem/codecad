@@ -8,6 +8,7 @@
 //! - Geometry helper functions (distance, projection, polygon tests)
 
 pub mod annotate;
+pub mod attrs;
 pub mod construct;
 pub mod dispatch;
 pub mod dispatch_ext;
@@ -23,6 +24,8 @@ pub mod pdf;
 pub mod region;
 pub mod render;
 pub mod scene3d;
+pub mod select;
+pub mod setquery;
 pub mod solid;
 pub mod spline;
 pub mod sync;
@@ -391,6 +394,8 @@ mod tests {
     fn clone_block_with_text_replace() {
         let mut doc = Document::new();
         doc.define_block(BlockDef {
+            attrs: Default::default(),
+            shape_attrs: Vec::new(),
             name: "SOCKET_3".into(),
             shapes: vec![
                 (
@@ -648,6 +653,8 @@ mod tests {
     fn make_block_doc() -> Document {
         let mut doc = Document::new();
         doc.define_block(BlockDef {
+            attrs: Default::default(),
+            shape_attrs: Vec::new(),
             name: "BOX".into(),
             shapes: vec![
                 (
@@ -911,6 +918,7 @@ mod tests {
     fn text_entity_has_top_level_fields() {
         let mut doc = Document::new();
         doc.entities.push(DrawEntity {
+            attrs: Default::default(),
             id: EntityId(1),
             layer: "0".to_string(),
             color: None,
@@ -937,6 +945,7 @@ mod tests {
     fn mtext_entity_has_top_level_fields() {
         let mut doc = Document::new();
         doc.entities.push(DrawEntity {
+            attrs: Default::default(),
             id: EntityId(1),
             layer: "0".to_string(),
             color: None,
@@ -980,6 +989,7 @@ mod tests {
     fn expand_for_render_text() {
         let mut doc = Document::new();
         doc.entities.push(DrawEntity {
+            attrs: Default::default(),
             id: EntityId(1),
             layer: "0".into(),
             color: None,
@@ -1009,6 +1019,8 @@ mod tests {
     fn expand_for_render_text_in_blocks() {
         let mut doc = Document::new();
         doc.define_block(BlockDef {
+            attrs: Default::default(),
+            shape_attrs: Vec::new(),
             name: "LABEL".into(),
             shapes: vec![(
                 Shape::Text {

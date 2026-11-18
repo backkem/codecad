@@ -32,7 +32,7 @@ pub struct SyncDoc {
 struct BatchState {
     ent_before: HashMap<u64, u64>,
     layer_before: std::collections::HashSet<String>,
-    block_before: std::collections::HashSet<String>,
+    block_before: HashMap<String, u64>,
     linetype_before: std::collections::HashSet<String>,
 }
 
@@ -163,14 +163,14 @@ impl SyncDoc {
 
         let ent_before = entity_hashes(local_doc);
         let layer_before = layer_names(local_doc);
-        let block_before = block_names(local_doc);
+        let block_before = block_hashes(local_doc);
         let lt_before = linetype_names(local_doc);
 
         let result = crate::cad_call(local_doc, method, args)?;
 
         let ent_after = entity_hashes(local_doc);
         let layer_after = layer_names(local_doc);
-        let block_after = block_names(local_doc);
+        let block_after = block_hashes(local_doc);
         let lt_after = linetype_names(local_doc);
 
         let update = if ent_before != ent_after
@@ -202,7 +202,7 @@ impl SyncDoc {
         *self.batch_state.borrow_mut() = Some(BatchState {
             ent_before: entity_hashes(local_doc),
             layer_before: layer_names(local_doc),
-            block_before: block_names(local_doc),
+            block_before: block_hashes(local_doc),
             linetype_before: linetype_names(local_doc),
         });
     }
@@ -215,7 +215,7 @@ impl SyncDoc {
 
         let ent_after = entity_hashes(local_doc);
         let layer_after = layer_names(local_doc);
-        let block_after = block_names(local_doc);
+        let block_after = block_hashes(local_doc);
         let lt_after = linetype_names(local_doc);
 
         if bs.ent_before != ent_after
@@ -249,8 +249,8 @@ impl SyncDoc {
         ent_after: &HashMap<u64, u64>,
         layer_before: &std::collections::HashSet<String>,
         layer_after: &std::collections::HashSet<String>,
-        block_before: &std::collections::HashSet<String>,
-        block_after: &std::collections::HashSet<String>,
+        block_before: &HashMap<String, u64>,
+        block_after: &HashMap<String, u64>,
         lt_before: &std::collections::HashSet<String>,
         lt_after: &std::collections::HashSet<String>,
     ) -> Vec<u8> {
@@ -298,15 +298,16 @@ impl SyncDoc {
         }
 
         // Removed blocks
-        for name in block_before {
-            if !block_after.contains(name) {
+        for name in block_before.keys() {
+            if !block_after.contains_key(name) {
                 self.blocks.remove(&mut txn, name.as_str());
             }
         }
 
-        // Added or changed blocks
-        for name in block_after {
-            if !block_before.contains(name) {
+        // Added or changed blocks (a redefinition or new attributes change
+        // the hash)
+        for (name, hash) in block_after {
+            if block_before.get(name) != Some(hash) {
                 if let Some(block) = doc.blocks.get(name) {
                     let bytes = crate::block_to_bytes(block);
                     self.blocks.insert(&mut txn, name.as_str(), bytes);
@@ -390,8 +391,16 @@ fn layer_names(doc: &Document) -> std::collections::HashSet<String> {
     doc.layers.iter().map(|l| l.name.clone()).collect()
 }
 
-fn block_names(doc: &Document) -> std::collections::HashSet<String> {
-    doc.blocks.keys().cloned().collect()
+fn block_hashes(doc: &Document) -> HashMap<String, u64> {
+    use std::hash::{Hash, Hasher};
+    doc.blocks
+        .iter()
+        .map(|(name, b)| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            crate::block_to_bytes(b).hash(&mut hasher);
+            (name.clone(), hasher.finish())
+        })
+        .collect()
 }
 
 fn linetype_names(doc: &Document) -> std::collections::HashSet<String> {

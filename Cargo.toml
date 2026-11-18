@@ -6,8 +6,35 @@ members = [
     "crates/cadview-web",
     "crates/cadview-server",
     "crates/mtext",
+    "crates/solid-harness",
 ]
 
 [workspace.package]
 license = "MIT"
 repository = "https://github.com/backkem/codecad"
+
+# The candidate kernel runs its own checker on every operation in debug
+# builds (kept: debug assertions stay on) and is very slow unoptimised.
+# Optimise it in dev builds so the solid-harness tests run in reasonable
+# time; only the test crate solid-harness links it.
+[profile.dev.package.arris]
+opt-level = 3
+[profile.dev.package.arris-check]
+opt-level = 3
+[profile.dev.package.arris-geom]
+opt-level = 3
+[profile.dev.package.arris-math]
+opt-level = 3
+[profile.dev.package.arris-mesh]
+opt-level = 3
+[profile.dev.package.arris-ops]
+opt-level = 3
+[profile.dev.package.arris-topo]
+opt-level = 3
+[profile.dev.package."nalgebra@0.35.0"]
+opt-level = 3
+# The harness's own sampling and certified enclosures are numeric loops
+# that run ten times slower unoptimised; it is a test tool, so optimise it
+# in dev builds too (debug assertions stay on).
+[profile.dev.package.solid-harness]
+opt-level = 3

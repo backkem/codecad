@@ -1,6 +1,6 @@
-//! The prismatic corpus (ladder rung 3D0a): flat woodworking parts made of
-//! extrudes, holes, booleans and chamfers, each with an exact volume and
-//! bounding box.
+//! The prismatic corpus (ladder rung 3D0a): flat test solids, named after the
+//! joints they resemble, made of extrudes, holes, booleans and chamfers,
+//! each with an exact volume and bounding box.
 //!
 //! Every closed form is derived in the comment above its entry in exact
 //! arithmetic, with pi kept symbolic. Dimensions are mm. All parts sit in
@@ -14,8 +14,8 @@ use std::f64::consts::PI;
 use super::{CorpusEntry, CorpusPart};
 use crate::solid::kernel::Aabb3;
 use crate::solid::types::{
-    CapSide, DefId, Depth, EdgeSel, FeatId, Feature, GrainDir, Op, PartDef, PartKind, Placement,
-    Plane3, Point3, Profile2d, ToolRef, Vec3,
+    CapSide, DefId, Depth, EdgeSel, FeatId, Feature, Op, PartDef, Placement, Plane3, Point3,
+    Profile2d, ToolRef, Vec3,
 };
 
 /// Relative volume tolerance of the gate.
@@ -23,18 +23,10 @@ pub const VOLUME_REL_TOL: f64 = 1e-9;
 /// Bounding-box tolerance of the gate (mm).
 pub const BBOX_TOL: f64 = 1e-9;
 
-fn flat(thickness: f64) -> PartKind {
-    PartKind::Flat {
-        thickness,
-        grain: GrainDir::X,
-    }
-}
-
-fn part_def(id: u64, name: &str, kind: PartKind, features: Vec<Feature>) -> PartDef {
+fn part_def(id: u64, name: &str, features: Vec<Feature>) -> PartDef {
     PartDef {
         id: DefId(id),
         name: name.into(),
-        kind,
         features,
     }
 }
@@ -79,7 +71,7 @@ fn single(name: &'static str, def: PartDef, volume: f64, bbox: Aabb3) -> CorpusE
 pub fn board_plain() -> CorpusEntry {
     single(
         "board",
-        part_def(1, "board", flat(18.0), vec![board(600.0, 300.0, 18.0)]),
+        part_def(1, "board", vec![board(600.0, 300.0, 18.0)]),
         3_240_000.0,
         bbox([0.0, 0.0, 0.0], [600.0, 300.0, 18.0]),
     )
@@ -98,7 +90,6 @@ pub fn board_with_through_hole() -> CorpusEntry {
         part_def(
             2,
             "board with hole",
-            flat(18.0),
             vec![
                 board(600.0, 300.0, 18.0),
                 Feature::Hole {
@@ -130,7 +121,6 @@ pub fn dado() -> CorpusEntry {
     let tool = part_def(
         31,
         "dado cutter",
-        PartKind::General,
         vec![extrude(
             1,
             Profile2d::rect(0.0, 0.0, 18.0, 310.0),
@@ -142,7 +132,6 @@ pub fn dado() -> CorpusEntry {
     let side = part_def(
         3,
         "side with dado",
-        flat(18.0),
         vec![
             board(600.0, 300.0, 18.0),
             Feature::Boolean {
@@ -180,7 +169,6 @@ pub fn rabbet() -> CorpusEntry {
         part_def(
             4,
             "back with rabbet",
-            flat(18.0),
             vec![
                 board(600.0, 300.0, 18.0),
                 extrude(
@@ -220,7 +208,6 @@ pub fn mortise_and_tenon() -> CorpusEntry {
     let stile = part_def(
         51,
         "stile with mortise",
-        PartKind::General,
         vec![
             extrude(
                 1,
@@ -241,7 +228,6 @@ pub fn mortise_and_tenon() -> CorpusEntry {
     let rail = part_def(
         52,
         "rail with tenon",
-        flat(25.0),
         vec![
             board(300.0, 70.0, 25.0),
             extrude(
@@ -287,7 +273,6 @@ pub fn half_lap() -> CorpusEntry {
     let tool = part_def(
         61,
         "half-lap cutter",
-        PartKind::General,
         vec![extrude(
             1,
             Profile2d::rect(0.0, 0.0, 70.0, 50.0),
@@ -299,7 +284,6 @@ pub fn half_lap() -> CorpusEntry {
     let rail = part_def(
         6,
         "rail with half-lap",
-        flat(20.0),
         vec![
             board(400.0, 50.0, 20.0),
             Feature::Boolean {
@@ -339,7 +323,6 @@ pub fn counterbored_hole() -> CorpusEntry {
         part_def(
             7,
             "block with counterbore",
-            PartKind::General,
             vec![
                 board(100.0, 100.0, 30.0),
                 Feature::Hole {
@@ -383,7 +366,6 @@ pub fn chamfered_slab() -> CorpusEntry {
         part_def(
             8,
             "chamfered slab",
-            flat(20.0),
             vec![
                 board(200.0, 100.0, 20.0),
                 Feature::Chamfer {
@@ -420,110 +402,9 @@ pub fn entries() -> Vec<CorpusEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::solid::arris_kernel::ArrisKernel;
-    use crate::solid::corpus::measure;
-    use crate::solid::kernel::SolidKernel;
-    use std::time::Instant;
-
-    /// Runs every entry on `kernel` through the trait, prints a table and
-    /// fails on any part that misses the gate.
-    fn run_corpus<K: SolidKernel>(kernel: &K) {
-        let profile = if cfg!(debug_assertions) {
-            "debug"
-        } else {
-            "release"
-        };
-        println!(
-            "\nprismatic corpus on {} ({profile} build)\n{:<26} {:<24} {:>18} {:>18} {:>9} {:>9} {:>5} {:>5} {:>10} {:>10}",
-            kernel.name(),
-            "entry",
-            "part",
-            "closed form",
-            "kernel",
-            "rel err",
-            "bbox err",
-            "valid",
-            "faces",
-            "eval ms",
-            "total ms"
-        );
-        let mut failures = Vec::new();
-        let mut total_eval = 0.0;
-        let all = Instant::now();
-        for entry in entries() {
-            for part in &entry.parts {
-                let t0 = Instant::now();
-                let evaluated = kernel.evaluate(&part.def, &entry);
-                let eval_ms = t0.elapsed().as_secs_f64() * 1e3;
-                total_eval += eval_ms;
-                let brep = match evaluated {
-                    Ok(e) => e.brep,
-                    Err(e) => {
-                        println!(
-                            "{:<26} {:<24} EVALUATION FAILED: {e}",
-                            entry.name, part.def.name
-                        );
-                        failures.push(format!("{} / {}: {e}", entry.name, part.def.name));
-                        continue;
-                    }
-                };
-                let r = match measure(kernel, part, &brep) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        println!(
-                            "{:<26} {:<24} MEASURE FAILED: {e}",
-                            entry.name, part.def.name
-                        );
-                        failures.push(format!("{} / {}: {e}", entry.name, part.def.name));
-                        continue;
-                    }
-                };
-                let total_ms = t0.elapsed().as_secs_f64() * 1e3;
-                println!(
-                    "{:<26} {:<24} {:>18.6} {:>18.6} {:>9.1e} {:>9.1e} {:>5} {:>5} {:>10.2} {:>10.2}",
-                    entry.name,
-                    r.part,
-                    r.expected_volume,
-                    r.volume,
-                    r.volume_rel_err,
-                    r.bbox_err,
-                    if r.valid && r.solids == 1 { "yes" } else { "NO" },
-                    r.faces,
-                    eval_ms,
-                    total_ms
-                );
-                if !r.passes(VOLUME_REL_TOL, BBOX_TOL) {
-                    failures.push(format!(
-                        "{} / {}: valid={} solids={} exact={} rel_err={:e} bbox_err={:e} bbox={:?} problems={:?}",
-                        entry.name,
-                        r.part,
-                        r.valid,
-                        r.solids,
-                        r.exact_volume,
-                        r.volume_rel_err,
-                        r.bbox_err,
-                        r.bbox,
-                        r.problems
-                    ));
-                }
-            }
-        }
-        println!(
-            "evaluation total {:.2} ms, corpus total {:.2} ms",
-            total_eval,
-            all.elapsed().as_secs_f64() * 1e3
-        );
-        assert!(
-            failures.is_empty(),
-            "corpus gate failed:\n{}",
-            failures.join("\n")
-        );
-    }
-
-    #[test]
-    fn arris_passes_the_prismatic_corpus() {
-        run_corpus(&ArrisKernel);
-    }
+    // The corpus on a kernel (the 3D0a gate) runs in the solid-harness
+    // crate: `cargo test -p solid-harness --test corpus -- --nocapture`.
+    // Core links no kernel.
 
     #[test]
     fn corpus_closed_forms_are_self_consistent() {

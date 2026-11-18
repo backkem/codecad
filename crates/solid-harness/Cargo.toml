@@ -1,0 +1,17 @@
+[package]
+name = "solid-harness"
+version = "0.1.0"
+edition = "2021"
+description = "Kernel-independent test harness for CodeCAD's solid kernels: certified reference semantics, evidence layers, broken adapters and scoreboards"
+license.workspace = true
+repository.workspace = true
+# A test tool. No shipped crate (cadview-core, cadview-render, cadview-web,
+# cadview-server) may depend on it.
+publish = false
+
+[dependencies]
+cadview-core = { path = "../cadview-core" }
+kurbo = "0.13"
+# The candidate kernel under test, pinned exactly. Only src/kernels/arris.rs
+# names it.
+arris = { version = "=0.11.1", default-features = false }

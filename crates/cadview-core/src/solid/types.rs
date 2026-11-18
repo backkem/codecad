@@ -763,29 +763,11 @@ impl Feature {
 
 // ── Parts ─────────────────────────────────────────────────────────────
 
-/// Grain direction of a flat part, in its local frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GrainDir {
-    X,
-    Y,
-    /// Sheet goods with no grain (MDF, plastics).
-    None,
-}
-
-/// What kind of part a definition is: decides the cut-list fast path.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PartKind {
-    Flat { thickness: f64, grain: GrainDir },
-    Turned,
-    General,
-}
-
 /// A reusable solid definition in its own local frame (mm, f64).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PartDef {
     pub id: DefId,
     pub name: String,
-    pub kind: PartKind,
     /// Ordered, evaluated top to bottom.
     pub features: Vec<Feature>,
 }

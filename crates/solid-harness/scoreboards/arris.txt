@@ -1,0 +1,264 @@
+# Solid harness scoreboard (docs/3d-test-harness.md section 5).
+# kernel: arris 0.11.1
+# Regenerate: SOLID_HARNESS_BLESS=1 cargo test -p solid-harness --release --test scoreboard
+# Outcomes: correct, refused (typed error), undecided (inside the band), WRONG, n/a.
+#
+# Counts per layer:
+#   closed     30 correct, 123 n/a
+#   enclosure  79 correct, 7 refused, 67 n/a
+#   shell      79 correct, 7 refused, 67 n/a
+#   mesh       81 correct, 7 refused, 65 n/a
+#   equiv      12 correct, 141 n/a
+#   algebra    40 correct, 7 refused, 106 n/a
+#   continuity 1 correct, 2 refused, 3 undecided, 147 n/a
+#   overall    134 correct, 16 refused, 3 undecided
+#
+# case | overall | closed | enclosure | shell | mesh | equiv | algebra | continuity
+part: board | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: board with hole | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: side with dado | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: back with rabbet | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: stile with mortise | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: rail with tenon | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: rail with half-lap | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: block with counterbore | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: chamfered slab | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: slot | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: washer | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: ellipse | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: half ellipse | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: cube with one chamfered edge | correct | correct | n/a | n/a | correct | n/a | n/a | n/a
+#   enclosure: n/a: reference not defined at feature 2: chamfer: only a Cap selector has a reference meaning
+#   shell: n/a: reference not defined at feature 2: chamfer: only a Cap selector has a reference meaning
+part: L with chamfered top | correct | n/a | n/a | n/a | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   enclosure: n/a: reference not defined at feature 2: chamfer: the profile has a concave or straight corner
+#   shell: n/a: reference not defined at feature 2: chamfer: the profile has a concave or straight corner
+part: cube with internal cavity | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: hole entering below the surface | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: box | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: box from two halves | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: box extruded down | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: box on a flipped plane | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: box as an intersection | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: plate with hole | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: plate with drilled tool | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: block with two cylinder cuts | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: rabbet as an L section | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: dado as a subtracted extrude | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: mortise as a boolean tool | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: washer as a subtracted cylinder | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: slot as a box and two cylinders | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: box chamfered on both caps | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: box chamfered cap by cap | correct | correct | correct | correct | correct | n/a | n/a | n/a
+part: board with hole moved | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: board with hole mirrored | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: board with hole + itself | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: board with hole n itself | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: board with hole - itself | refused | n/a | refused | refused | refused | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   enclosure: refused: feature 2: kernel: degenerate result: the result has no thickness (+b2, +b5)
+#   shell: refused: feature 2: kernel: degenerate result: the result has no thickness (+b2, +b5)
+#   mesh: refused: feature 2: kernel: degenerate result: the result has no thickness (+b2, +b5)
+part: side with dado moved | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: side with dado mirrored | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: side with dado + itself | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: side with dado n itself | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: side with dado - itself | refused | n/a | refused | refused | refused | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   enclosure: refused: feature 2: kernel: degenerate result: the result has no thickness (+b3, +b7)
+#   shell: refused: feature 2: kernel: degenerate result: the result has no thickness (+b3, +b7)
+#   mesh: refused: feature 2: kernel: degenerate result: the result has no thickness (+b3, +b7)
+part: rail with half-lap moved | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: rail with half-lap mirrored | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: rail with half-lap + itself | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: rail with half-lap n itself | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: rail with half-lap - itself | refused | n/a | refused | refused | refused | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   enclosure: refused: feature 2: kernel: degenerate result: the result has no thickness (+b3, +b7)
+#   shell: refused: feature 2: kernel: degenerate result: the result has no thickness (+b3, +b7)
+#   mesh: refused: feature 2: kernel: degenerate result: the result has no thickness (+b3, +b7)
+part: block with counterbore moved | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: block with counterbore mirrored | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: block with counterbore + itself | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: block with counterbore n itself | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: block with counterbore - itself | refused | n/a | refused | refused | refused | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   enclosure: refused: feature 2: kernel: degenerate result: the result has no thickness (+b4, +b9)
+#   shell: refused: feature 2: kernel: degenerate result: the result has no thickness (+b4, +b9)
+#   mesh: refused: feature 2: kernel: degenerate result: the result has no thickness (+b4, +b9)
+part: chamfered slab moved | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: chamfered slab mirrored | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: chamfered slab + itself | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: chamfered slab n itself | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: chamfered slab - itself | refused | n/a | refused | refused | refused | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   enclosure: refused: feature 2: kernel: degenerate result: the result has no thickness (+b1, +b3)
+#   shell: refused: feature 2: kernel: degenerate result: the result has no thickness (+b1, +b3)
+#   mesh: refused: feature 2: kernel: degenerate result: the result has no thickness (+b1, +b3)
+part: slot moved | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: slot mirrored | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: slot + itself | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: slot n itself | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: slot - itself | refused | n/a | refused | refused | refused | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   enclosure: refused: feature 2: kernel: degenerate result: the result has no thickness (+b0, +b1)
+#   shell: refused: feature 2: kernel: degenerate result: the result has no thickness (+b0, +b1)
+#   mesh: refused: feature 2: kernel: degenerate result: the result has no thickness (+b0, +b1)
+part: ellipse moved | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: ellipse mirrored | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: ellipse + itself | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: ellipse n itself | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: ellipse - itself | refused | n/a | refused | refused | refused | n/a | n/a | n/a
+#   closed: n/a: no closed form
+#   enclosure: refused: feature 2: kernel: degenerate result: the result has no thickness (+b0, +b1)
+#   shell: refused: feature 2: kernel: degenerate result: the result has no thickness (+b0, +b1)
+#   mesh: refused: feature 2: kernel: degenerate result: the result has no thickness (+b0, +b1)
+part: board with hole and block with counterbore: A u B | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: board with hole and block with counterbore: B u A | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: board with hole and block with counterbore: A n B | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: board with hole and block with counterbore: B n A | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: board with hole and block with counterbore: B placed | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: slot and ellipse: A u B | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: slot and ellipse: B u A | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: slot and ellipse: A n B | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: slot and ellipse: B n A | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: slot and ellipse: B placed | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: side with dado and rail with half-lap: A u B | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: side with dado and rail with half-lap: B u A | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: side with dado and rail with half-lap: A n B | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: side with dado and rail with half-lap: B n A | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: side with dado and rail with half-lap: B placed | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: board with hole split: above | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: board with hole split: below | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: block with counterbore split: above | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: block with counterbore split: below | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: slot split: above | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+part: slot split: below | correct | n/a | correct | correct | correct | n/a | n/a | n/a
+#   closed: n/a: no closed form
+equiv: box: one extrude = two fused halves | correct | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: box: extrude up = extrude down | correct | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: box: extrude down = flipped plane | correct | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: box: one extrude = intersection of prisms | correct | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: through hole: hole = cylinder tool | correct | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: counterbore: hole = two cylinder tools | correct | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: rabbet: subtracted extrude = L section | correct | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: dado: boolean tool = subtracted extrude | correct | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: mortise: subtracted extrude = boolean tool | correct | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: washer: hole loop = subtracted cylinder | correct | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: slot: bulges = box and cylinders | correct | n/a | n/a | n/a | n/a | correct | n/a | n/a
+equiv: chamfer: both caps = one cap then the other | correct | n/a | n/a | n/a | n/a | correct | n/a | n/a
+algebra: motion: board with hole | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: mirror: board with hole | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A + A = A: board with hole | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A n A = A: board with hole | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A - A = empty: board with hole | refused | n/a | n/a | n/a | n/a | n/a | refused | n/a
+#   algebra: refused: feature 2: kernel: degenerate result: the result has no thickness (+b2, +b5)
+algebra: motion: side with dado | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: mirror: side with dado | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A + A = A: side with dado | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A n A = A: side with dado | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A - A = empty: side with dado | refused | n/a | n/a | n/a | n/a | n/a | refused | n/a
+#   algebra: refused: feature 2: kernel: degenerate result: the result has no thickness (+b3, +b7)
+algebra: motion: rail with half-lap | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: mirror: rail with half-lap | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A + A = A: rail with half-lap | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A n A = A: rail with half-lap | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A - A = empty: rail with half-lap | refused | n/a | n/a | n/a | n/a | n/a | refused | n/a
+#   algebra: refused: feature 2: kernel: degenerate result: the result has no thickness (+b3, +b7)
+algebra: motion: block with counterbore | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: mirror: block with counterbore | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A + A = A: block with counterbore | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A n A = A: block with counterbore | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A - A = empty: block with counterbore | refused | n/a | n/a | n/a | n/a | n/a | refused | n/a
+#   algebra: refused: feature 2: kernel: degenerate result: the result has no thickness (+b4, +b9)
+algebra: motion: chamfered slab | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: mirror: chamfered slab | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A + A = A: chamfered slab | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A n A = A: chamfered slab | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A - A = empty: chamfered slab | refused | n/a | n/a | n/a | n/a | n/a | refused | n/a
+#   algebra: refused: feature 2: kernel: degenerate result: the result has no thickness (+b1, +b3)
+algebra: motion: slot | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: mirror: slot | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A + A = A: slot | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A n A = A: slot | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A - A = empty: slot | refused | n/a | n/a | n/a | n/a | n/a | refused | n/a
+#   algebra: refused: feature 2: kernel: degenerate result: the result has no thickness (+b0, +b1)
+algebra: motion: ellipse | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: mirror: ellipse | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A + A = A: ellipse | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A n A = A: ellipse | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: A - A = empty: ellipse | refused | n/a | n/a | n/a | n/a | n/a | refused | n/a
+#   algebra: refused: feature 2: kernel: degenerate result: the result has no thickness (+b0, +b1)
+algebra: union identity: board with hole and block with counterbore | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: operand order (union): board with hole and block with counterbore | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: operand order (intersection): board with hole and block with counterbore | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: union identity: slot and ellipse | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: operand order (union): slot and ellipse | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: operand order (intersection): slot and ellipse | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: union identity: side with dado and rail with half-lap | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: operand order (union): side with dado and rail with half-lap | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: operand order (intersection): side with dado and rail with half-lap | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: split by a plane: board with hole | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: split by a plane: block with counterbore | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+algebra: split by a plane: slot | correct | n/a | n/a | n/a | n/a | n/a | correct | n/a
+sweep: box tool through a flush top face | undecided | n/a | n/a | n/a | n/a | n/a | n/a | undecided
+#   continuity: undecided: jump within the band from s = 1e-8 to 1e-7: dV -4.000e-5
+sweep: dado tool through a flush end face | undecided | n/a | n/a | n/a | n/a | n/a | n/a | undecided
+#   continuity: undecided: wrong direction within the band from s = -1e-6 to -1e-7: dV -2.100e-4; jump within the band from s = -1e-7 to -1e-8: dV 1.890e-4; jump within the band from s = 1e-8 to 1e-7: dV 1.890e-4
+sweep: cylinder tool through tangency with a face | correct | n/a | n/a | n/a | n/a | n/a | n/a | correct
+sweep: hole breaking out through a face | refused | n/a | n/a | n/a | n/a | n/a | n/a | refused
+#   continuity: refused: 6 of 21 steps refused, first s = -1e-8: feature 2: kernel: degenerate result: the faces touch along a curve interior to both result faces (+f2, +f7)
+sweep: two holes through tangency | refused | n/a | n/a | n/a | n/a | n/a | n/a | refused
+#   continuity: refused: 7 of 21 steps refused, first s = -1e-7: feature 3: kernel: degenerate result: the faces touch along a curve interior to both result faces (-f11, +f13)
+sweep: fused box through face contact | undecided | n/a | n/a | n/a | n/a | n/a | n/a | undecided
+#   continuity: undecided: jump within the band from s = -1e-7 to -1e-8: dV 3.867e-5; wrong direction within the band from s = 1e-8 to 1e-7: dV -1.333e-6

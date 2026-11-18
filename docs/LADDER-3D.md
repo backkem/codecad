@@ -22,7 +22,7 @@
 ## Key decisions
 
 - **The feature tree is the document; B-rep and meshes are caches.** `PartDef` (ordered features over exact 2D profiles), `Part` (placement, material, layer), `Material`, `AssetRef` and `scene3d` are new Yrs maps of bincode blobs, following the 2D pattern. B-reps, meshes and BVHs are derived on each peer, keyed by content hash, and never synced (design §4).
-- **Kernel: not decided. arris is the reference backend for tests, behind `SolidKernel`.** ogeom was the first choice (the only candidate that passed every smoke test) until it relicensed to `LGPL-2.1-only`. arris (`MIT OR Apache-2.0`, pinned `=0.11.1`) runs the corpus as a dev-dependency of cadview-core, so no shipped crate links a kernel yet. Which kernel ships (arris, another permissively licensed one, or one of our own) is decided once a kernel-independent test harness has run against the candidates. What arris gives:
+- **Kernel: not decided. arris is the reference backend for tests, behind `SolidKernel`.** ogeom was the first choice (the only candidate that passed every smoke test) until it relicensed to `LGPL-2.1-only`. arris (`MIT OR Apache-2.0`, pinned `=0.11.1`) runs the corpus as a dependency of the test-only `solid-harness` crate, so no shipped crate links a kernel yet. Which kernel ships (arris, another permissively licensed one, or one of our own) is decided once a kernel-independent test harness has run against the candidates. What arris gives:
   - exact volumes integrated on the faces (the prismatic corpus to about 1e-16 relative);
   - a 12-edge fillet followed by booleans that still give a valid B-rep at the closed-form volume;
   - exact planar sections, edge projection to exact 2D curves and exact ray hits, but **no built-in HLR**: the HLR adapter of design §7.3 is ours for every backend;
@@ -85,7 +85,8 @@ Each rung is built by a **builder/tester pair** and sized at **≤ about 2 weeks
 ### 3D0a: what landed (2026-11-17)
 
 - **Reference kernel: arris `=0.11.1`** (`MIT OR Apache-2.0`), test-only:
-  a dev-dependency of cadview-core, compiled under `#[cfg(test)]`, so the
+  since the first harness slice a dependency of the test-only
+  `solid-harness` crate (before that a dev-dependency of cadview-core), so the
   server and the wasm bundle link no kernel yet. The choice of the kernel
   that ships is open. 3D0a was
   first built on ogeom `=0.18.1` (it passed the same corpus), but ogeom
@@ -99,7 +100,8 @@ Each rung is built by a **builder/tester pair** and sized at **≤ about 2 weeks
   with `evaluate`, `mass`, `bbox`, `check`; the rest of the designed trait
   comes with later rungs), `select.rs` (edge selectors resolved to exact
   3D target curves from our own feature tree, kernel-neutral),
-  `arris_kernel.rs` (the only file that names arris) and
+  `arris_kernel.rs` (the only file that names arris; now
+  `crates/solid-harness/src/kernels/arris.rs`) and
   `corpus/prismatic.rs`. Implemented: extrude without taper, hole with an
   optional counterbore, boolean with an inline tool definition, symmetric
   chamfer, and ops add/subtract/intersect. Elliptic profile segments and
@@ -118,7 +120,9 @@ Each rung is built by a **builder/tester pair** and sized at **≤ about 2 weeks
   of every edge curve, and the interior extremes of sphere and torus faces
   kept when they lie on the face (plane, cylinder and cone faces take their
   extremes on their edges). NURBS edges and faces are refused there.
-- **Gate.** `cargo test -p cadview-core solid::corpus::prismatic` passes.
+- **Gate.** `cargo test -p cadview-core solid::corpus::prismatic` passed
+  (since the first harness slice: `cargo test -p solid-harness --test
+  corpus`).
   All 9 parts (8 entries, the mortise and tenon entry has two) are valid
   single solids with no undecided checker rows. The worst relative volume
   error is 4.3e-16 (rail with tenon) and every bounding box matches
@@ -154,7 +158,7 @@ Each rung is built by a **builder/tester pair** and sized at **≤ about 2 weeks
   `select.rs` matches geometrically, so selectors could move to it.
   arris panics in debug builds when an operation's own output fails its
   checker (a kernel bug by its contract); release builds skip that check.
-  The forward-look tests in `arris_kernel.rs` record the smoke part
+  The forward-look tests in the arris adapter record the smoke part
   (fully rounded, valid, 33 faces, volume 3 188 376.635 in 22 ms release),
   tessellation, an exact section and exact ray hits.
 

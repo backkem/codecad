@@ -980,7 +980,6 @@ version = "0.1.0"
 dependencies = [
  "acadrust",
  "anyhow",
- "arris",
  "bincode",
  "earcutr",
  "i_overlay",
@@ -5933,6 +5932,15 @@ checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "solid-harness"
+version = "0.1.0"
+dependencies = [
+ "arris",
+ "cadview-core",
+ "kurbo",
 ]
 
 [[package]]

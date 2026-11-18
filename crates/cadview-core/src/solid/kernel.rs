@@ -195,13 +195,35 @@ impl fmt::Display for EvalError {
 
 impl std::error::Error for EvalError {}
 
+/// A triangle mesh of a solid's boundary (mm).
+///
+/// The contract a kernel's [`SolidKernel::tessellate`] promises:
+///
+/// - every position lies within the requested chord tolerance of the exact
+///   boundary, and every point of the exact boundary lies within the chord
+///   tolerance of some triangle (an inscribed mesh whose sagitta is at
+///   most the chord);
+/// - positions shared by neighbouring triangles are one index, so a closed
+///   boundary gives a closed mesh;
+/// - every triangle is counter-clockwise seen from outside the solid, so
+///   `(b - a) x (c - a)` points out of the material.
+///
+/// Derived data, like the B-rep: never synced or stored.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct TriMesh {
+    pub positions: Vec<Point3>,
+    pub triangles: Vec<[u32; 3]>,
+}
+
 /// A solid-modelling backend.
 ///
-/// This rung (3D0a) carries only what the prismatic corpus uses and tests:
-/// evaluation, mass properties, bounding box and a validity check. The rest
-/// of the designed trait (`tessellate`, `edges`, `project`, `section`,
-/// `distance`, and the face/edge tags on [`Evaluated`]) arrives with the
-/// rungs that need it (3D2b, 3D3a, 3D4a, 3D1b).
+/// Required: evaluation, mass properties, bounding box and a validity
+/// check. Optional capabilities have a default implementation that returns
+/// [`EvalError::Unsupported`]; a test harness reads that as "not
+/// applicable", never as a pass. Optional today: [`Self::tessellate`]. The
+/// rest of the designed trait (`edges`, `project`, `section`, `distance`,
+/// and the face/edge tags on [`Evaluated`]) arrives with the rungs that
+/// need it (3D3a, 3D4a, 3D1b).
 pub trait SolidKernel {
     /// The kernel's B-rep. Derived data: never synced or stored.
     type Brep: Clone;
@@ -224,4 +246,12 @@ pub trait SolidKernel {
 
     /// The kernel's own validity check of the B-rep.
     fn check(&self, brep: &Self::Brep) -> Result<Validity, EvalError>;
+
+    /// Optional capability: the boundary of `brep` as a [`TriMesh`] to the
+    /// chord tolerance `chord` (mm, finite and positive), in the part's
+    /// own frame. The default says the kernel cannot do it.
+    fn tessellate(&self, brep: &Self::Brep, chord: f64) -> Result<TriMesh, EvalError> {
+        let _ = (brep, chord);
+        Err(EvalError::unsupported(None, "tessellation"))
+    }
 }

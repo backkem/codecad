@@ -78,11 +78,10 @@ crates/
       src/solid/              # 3D parts (docs/3d-design.md), no sync or API yet
         types.rs              #   feature tree: PartDef, Feature, Profile2d (exact
                               #   2D segments), EdgeSel, Plane3, Placement
-        kernel.rs             #   SolidKernel trait, EvalError, MassProps, Aabb3
+        kernel.rs             #   SolidKernel trait (optional capabilities default
+                              #   to Unsupported: tessellate), TriMesh, EvalError,
+                              #   MassProps, Aabb3. Core links no kernel
         select.rs             #   EdgeSel -> exact 3D target curves (kernel-neutral)
-        arris_kernel.rs       #   tests only: ArrisKernel (arris =0.11.1, a
-                              #   dev-dependency), the reference backend for the
-                              #   corpus. No shipped crate links a kernel yet
         corpus/               #   reference parts with closed-form volume + bbox,
                               #   generic over SolidKernel (prismatic.rs: 3D0a)
     cadview-render/           # backends for the display list (no CAD logic)
@@ -118,6 +117,19 @@ crates/
                               #   exec_file, host.call bridge, nested exec
       src/render.rs           # cad.render handler (sandbox, WT RPC and --render)
       src/sync.rs             # re-exports cadview_core::sync::SyncDoc
+    solid-harness/            # test tool (publish = false), docs/3d-test-harness.md;
+                              #   no shipped crate may depend on it
+      src/reference/          # certified reference meaning of each feature:
+                              #   sign-exact distance bounds in interval arithmetic
+      src/interval.rs         # outward-rounded intervals (no dependency)
+      src/layers/             # evidence layers: closed_form, enclosure, shell,
+                              #   mesh_invariants, equivalence, algebra, continuity
+      src/cases.rs            # catalogue: corpus parts, extra closed forms,
+                              #   equivalent pairs, algebra/motion cases, sweeps
+      src/kernels/arris.rs    # ArrisKernel (arris =0.11.1), the only file naming arris
+      src/kernels/broken.rs   # broken adapters (mutants) that test the harness
+      src/scoreboard.rs       # committed per-kernel scoreboard + ratchet
+      scoreboards/arris.txt   # the arris scoreboard
   cad-client/                 # build output for sandbox
     cad-api-setup.js          # Vite-built IIFE (from cad-api.ts), a codelib prelude
   web/                        # frontend (TypeScript + React + Vite)
@@ -601,19 +613,36 @@ cargo test -p cadview-core
 cargo test -p cadview-render
 cargo test -p cadview-web
 cargo test -p cadview-server
+cargo test -p solid-harness            # see "Solid harness" below
 ```
 
 cadview-render's GPU tests print `SKIPPED` and pass when no GPU adapter
 is found.
 
 cadview-core: 35+ tests (entity CRUD, cad_call dispatch, geometry).
-The solid corpus runs with
-`cargo test -p cadview-core solid::corpus::prismatic -- --nocapture`:
-every entry must be a valid single solid whose volume matches its closed
-form to 1e-9 relative and its bounding box to 1e-9 mm, and the output
-prints a per-entry table with evaluation timings.
 cadview-web: 12 tests (session registry isolation, create/destroy/use).
 cadview-server: 8 tests (store backends, registry, broadcast isolation).
+
+### Solid harness (3D kernels)
+
+The kernel adapters, the reference semantics and the evidence layers
+live in `solid-harness` (docs/3d-test-harness.md). Core links no kernel.
+
+```bash
+# 3D0a gate: the prismatic corpus on arris, per-part table with timings
+cargo test -p solid-harness --test corpus -- --nocapture
+# Every case on every layer, compared with scoreboards/arris.txt (ratchet)
+cargo test -p solid-harness --release --test scoreboard -- --nocapture
+# Regenerate the scoreboard after an accepted change
+SOLID_HARNESS_BLESS=1 cargo test -p solid-harness --release --test scoreboard
+# Broken adapters: every mutant must be caught; prints which layer caught it
+cargo test -p solid-harness --release --test mutants -- --nocapture
+```
+
+The scoreboard and mutant runs take a few minutes in a debug build; use
+`--release`. The scoreboard test fails on any wrong case, on any case or
+layer that got worse than the committed file, and on a closed form that
+falls outside the reference's certified volume enclosure.
 
 ## Key design decisions
 

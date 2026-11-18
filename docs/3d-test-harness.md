@@ -1,7 +1,8 @@
 # 3D test harness: design
 
 Status: accepted 2026-11-18, after 3D0a. Being built slice by slice
-(section 9); nothing below is implemented unless a slice note says so.
+(section 9); nothing below is implemented unless the "Slices built" note
+in section 9 says so.
 
 ## 1. Why
 
@@ -50,8 +51,33 @@ that involves no boundary representation at all:
 | Loft | it lies inside the section interpolated for its position between the sections |
 
 Evaluated recursively over the feature tree this gives, for any part, a
-function `inside(p)` and where possible a distance bound. It is slow and
-simple, and it shares no code with any kernel. It is the oracle.
+signed function `f`: negative inside, positive outside, and `|f(p)|` a
+guaranteed lower bound on the distance from `p` to the boundary. Each
+primitive contributes an exact signed distance (1-Lipschitz, exact sign);
+booleans combine them with `min` and `max`, which keep the sign exact and
+the magnitude a valid lower bound. The reference is **certified**: it is
+evaluated in outward-rounded interval arithmetic, so rounding can widen
+an answer but never flip it. For a point it answers inside, outside or
+"boundary band" (the interval holds zero), together with the distance
+bound; the harness reports the band as undecided, never as correct. It
+is slow and simple, and it shares no code with any kernel. It is the
+oracle.
+
+The rows the harness implements, written as one exact definition each
+in `solid-harness/src/reference/` (doc comments are the specification):
+
+| Feature | Exact definition |
+|---|---|
+| Extrude (no taper) | `(u, v)` in the profile region (non-zero winding of simple, disjoint loops, holes inside the outer loop) and `w` between `0` and the signed distance |
+| Hole | removes `rho < d/2` for `t` in `[0, depth]` from the entry point along the direction (`t >= 0` for through), plus `rho < cbore/2` for `t` in `[0, cbore depth]`; nothing behind the entry point |
+| Boolean, inline tool | the tool's reference moved by the placement (normalised quaternion), combined by union, difference or intersection |
+| Chamfer, equal distances | defined only on the cap edges of a first, adding extrude over a convex polygon, before any other feature: keeps `s + t >= d`, `s` the distance inside from the edge line and `t` the depth from the cap; mitres at convex corners; every other case is "not defined" |
+
+**No kernel adapter may evaluate a feature before its reference meaning
+is written down as one exact definition.** Property-only checks are
+allowed only where an exact definition is impossible, and the definition
+must say so. Sweep and loft get their definitions when they are first
+implemented.
 
 Two consequences:
 
@@ -74,11 +100,23 @@ Each layer is independent of the others and of the kernel under test.
    exact volume and area for any revolve, the prismatoid formula for ruled
    lofts, the Steinmetz solid for two crossing holes, and standard results
    for cones, spheres, tori and edge rounds.
+
+   1b. **Certified volume enclosure.** No closed form needed: subdivide
+   the reference's bounding box adaptively. A cell whose interval is
+   `<= 0` (or `>= 0`) everywhere, or whose centre value exceeds its
+   half-diagonal, is wholly inside (or outside): that is what the distance
+   bound certifies. This gives guaranteed `V_lo <= V <= V_hi`, refined to
+   a stated relative width or budget. A kernel volume outside the
+   enclosure is wrong, and every hand-derived closed form must fall inside
+   it (that tests the reference). Volume evidence therefore never rests on
+   sampling alone.
 2. **Boundary shell test.** Sample points on every face of the kernel's
    result. Step a small distance inside and outside along the normal and
-   ask the reference. Every inside step must be inside and every outside
-   step outside. This is far sharper than comparing volumes, and it
-   localises a failure to a face.
+   ask the reference. Every inside step must be certified inside and every
+   outside step certified outside. The step is chosen from the mesh
+   tolerance so that a correct kernel never leaves a step in the band.
+   This is far sharper than comparing volumes, and it localises a failure
+   to a face.
 3. **Entity consistency.** Every edge curve lies on both of its faces,
    every vertex on its edges, every loop closes, orientation is
    consistent, and faces that should meet tangentially (roundovers) do.
@@ -112,6 +150,8 @@ Each layer is independent of the others and of the kernel under test.
 10. **Fuzzing.** Random feature trees, biased toward coincident faces,
     shared edges, tangent holes, tiny features and huge coordinates. A
     failing case is shrunk to a minimal recipe and added to the corpus.
+    Fuzzing is a development-time tool: it does not run in CI, and what it
+    finds enters the gate as fixed corpus cases.
 
 ## 5. Outcomes and the scoreboard
 
@@ -166,12 +206,16 @@ or not looking hard enough. Before trusting it:
 The approach has no limit on the class of shape. Its limits are these:
 
 - **Sampling finds bugs, it does not prove their absence.** A sliver
-  thinner than the sample spacing can pass. Where the reference has a
-  distance bound, a grid certifies a whole region, so this becomes a cost
-  limit, not a limit of principle.
+  thinner than the sample spacing can pass the shell test. The reference
+  has a distance bound, so the volume enclosure certifies whole regions
+  instead of sampling them: missing or extra material larger than the
+  enclosure's width cannot pass. The width is a cost limit (boundary area
+  times the smallest cell the budget reaches), not a limit of principle.
 - **Tolerance.** Two faces 1e-12 apart cannot be judged in floating
-  point. The harness has an explicit band, and cases inside it are
-  undecided, not correct.
+  point. The reference never guesses: an interval that holds zero is the
+  boundary band, and the harness reports it as undecided, not correct.
+  Relational checks on kernel numbers (volumes, boxes, continuity) have
+  explicit, justified bands, and evidence inside them is undecided.
 - **Operations with several valid answers.** Corner treatment in
   roundovers, loft interpolation and smooth blends. Unless section 3 fixes
   one definition, only properties can be checked: tangency, radius,
@@ -209,6 +253,62 @@ Each slice lands with its broken-adapter tests and a scoreboard.
 After slice 4 the scoreboards for the candidates exist, and the kernel
 decision in `3d-design.md` section 5 can be made with them.
 
+### Slices built (2026-11-18)
+
+Slice 1 and the tessellation half of slice 2, in the crate
+`crates/solid-harness` (`publish = false`; no shipped crate depends on
+it, and cadview-core links no kernel any more).
+
+- **Kernel boundary.** The arris adapter moved from core to
+  `solid-harness/src/kernels/arris.rs`. `SolidKernel` gained one optional
+  capability, `tessellate(brep, chord) -> TriMesh` (positions and
+  outward triangles), whose default returns `Unsupported`; the harness
+  reads that as not applicable. Point classification is not a capability
+  yet.
+- **Reference** (`src/reference/`): the definitions in the section 3
+  table, certified in interval arithmetic (`src/interval.rs`, no
+  dependency). Convex polygons and circles have closed-form distances;
+  other profile loops use segment distances plus a winding number.
+- **Layers built:** 1 closed forms, 1b certified enclosure, 2 shell test,
+  4 mesh invariants (closed and manifold, zero vector area, Euler
+  characteristic, mesh volume within the chord's Steiner tube of the
+  stated volume at chords 1e-1 to 1e-4), 5 equivalent constructions, 6
+  algebra and motion (`A + A`, `A n A`, `A - A`, operand order, union
+  identity, rigid motion, mirroring, plane split), 7 continuity sweeps.
+  Outcomes and the ratchet are in `src/outcome.rs` and
+  `src/scoreboard.rs`; arris's scoreboard is `scoreboards/arris.txt`.
+- **Catalogue:** 88 solids (the 9 corpus parts, 8 more with or without
+  closed forms, 15 more for 12 equivalent pairs, 56 derived for 47
+  algebra and motion relations), 59 relations and 6 sweeps.
+- **What it found on arris 0.11.1:** no wrong case. 134 cases correct, 16
+  refused (`A - A` is refused as "no thickness" on all 7 bases; the hole
+  breakout and two-tangent-holes sweeps refuse steps within 1e-7 of
+  tangency), 3 undecided (three flush-contact sweeps whose volume moves
+  within the 1e-6 mm band at steps of 1e-7 and below, the kernel's own
+  tolerance). The shell test certified every step it took on every
+  part: no step was left in the band.
+- **What it found in our own code:** the arris adapter drilled holes from
+  `max(dia, 1)` mm behind the entry point, which opens a hole whose entry
+  lies inside the material to the surface. Writing the hole's exact
+  meaning down made that visible (case "hole entering below the
+  surface", wrong on three layers); the adapter now drills from the
+  entry point.
+- **Broken adapters** (`src/kernels/broken.rs`, `tests/mutants.rs`): 11
+  mutants (tool shifted 0.01 mm, hole 0.02 mm wider, last feature
+  dropped, last op swapped, closed cavities dropped, tools snapped to a
+  0.01 mm grid, box ignoring rotation, volume scaled by 1 + 1e-6, and a
+  dropped, flipped or moved mesh triangle or vertex). All are caught.
+  Only the mesh layer catches a dropped triangle and only the algebra
+  layer the box that ignores rotation; no mutant is caught by the shell
+  test alone or by the enclosure alone, because the relational layers
+  compare centroids and the Euler characteristic sees a lost cavity.
+- **Not built yet:** point classification as a capability, topology and
+  geometry access and layer 3, layers 8 to 10, a second kernel, curved
+  features. The enclosure is wide where boxes fit the solid badly
+  (rotated unions, small curved parts: up to 65 % relative width at the
+  default budget), so it catches missing or extra features there, not
+  small shifts.
+
 ## 10. Effect on the ladder
 
 - 3D0a's gate (the closed-form corpus) stays and becomes layer 1.
@@ -226,13 +326,21 @@ Decided:
   the adapters for the candidate kernels, so core links no kernel at all
   until one is chosen. It is a test tool and is never a dependency of a
   shipped crate.
-- **Fuzzing in the normal test run is short and seeded** (a fixed number
-  of cases). Longer runs are opt-in through an environment variable.
-- **The reference starts with plain floating point.** Interval bounds are
-  added when the first sliver-sized bug shows the need.
+- **Fuzzing is a development-time tool only.** It does not run in CI; a
+  case it finds is shrunk and added to the corpus, which is what the gate
+  runs.
+- **The reference is certified from the start.** It returns inside,
+  outside or boundary band with a guaranteed distance lower bound, built
+  from sign-exact 1-Lipschitz functions and evaluated in outward-rounded
+  interval arithmetic. A band answer is undecided, never correct. (This
+  replaces "plain floating point first, intervals later".)
+- **The certified volume enclosure is a layer** (1b), on every part that
+  has a reference.
+- **No adapter evaluates a feature without its exact reference
+  definition.** Property-only checks only where an exact definition is
+  impossible, stated as such. Sweep and loft get their definitions when
+  they are first implemented.
 
 Open:
 
-- The exact definitions of sweep and loft in section 3. They are settled
-  when those features are first evaluated.
-- Whether longer fuzzing runs happen on a schedule in CI.
+- Nothing at the moment.

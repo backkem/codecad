@@ -6,20 +6,20 @@
 //! - [`kernel`]: the `SolidKernel` trait, errors and results.
 //! - [`select`]: kernel-neutral edge-selector resolution.
 //! - [`corpus`]: reference parts with closed-form volumes and boxes.
-//! - `arris_kernel` (tests only): `ArrisKernel`, the reference backend the
-//!   corpus runs on and the only place that names arris. No kernel is
-//!   linked into shipped code yet: which one ships is still open.
 //!
-//! Not here yet: Yrs sync, `cad_call` methods, tessellation, projection.
+//! No kernel is linked here. The kernel adapters (arris today), the
+//! reference semantics and the evidence layers live in the
+//! `solid-harness` crate (docs/3d-test-harness.md), a test tool that no
+//! shipped crate depends on. Which kernel ships is still open.
+//!
+//! Not here yet: Yrs sync, `cad_call` methods, projection.
 
-#[cfg(test)]
-mod arris_kernel;
 pub mod corpus;
 pub mod kernel;
 pub mod select;
 pub mod types;
 
 pub use kernel::{
-    Aabb3, EvalError, Evaluated, MassProps, NoTools, SolidKernel, ToolResolver, Validity,
+    Aabb3, EvalError, Evaluated, MassProps, NoTools, SolidKernel, ToolResolver, TriMesh, Validity,
 };
 pub use types::*;

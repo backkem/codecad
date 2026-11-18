@@ -1,14 +1,16 @@
 //! [`SolidKernel`] on the arris B-rep kernel (docs/3d-design.md section 5).
 //!
-//! This is the only file that names arris. Everything arris builds stays in
-//! an [`ArrisBrep`], which is derived data: never synced, never stored.
+//! The harness's adapter for arris, moved out of cadview-core so that core
+//! links no kernel. This is the only file that names arris. Everything
+//! arris builds stays in an [`ArrisBrep`], which is derived data: never
+//! synced, never stored.
 //!
 //! What each feature maps to:
 //!
 //! | Feature | arris |
 //! |---|---|
 //! | `Extrude` (no taper) | a `geom::Profile` on the sketch plane (`LineTo`, `ArcTo` through the arc's midpoint, `EllipseTo`, or a whole `Circle`/`Ellipse` loop), then `ops::extrude` along the plane normal (against it for a negative distance), then the op |
-//! | `Hole` | `ops::primitive_cylinder` from just outside the entry point, `ops::cut`; a counterbore is a second, wider cylinder, `ops::cut` |
+//! | `Hole` | `ops::primitive_cylinder` starting exactly at the entry point (blind: the depth; through: past the far side of the part), `ops::cut`; a counterbore is a second, wider cylinder from the entry point, `ops::cut` |
 //! | `Boolean` with `ToolRef::Def` | the tool definition evaluated into the same model, moved by `ops::transform`, then the op |
 //! | `Chamfer` (`d1 == d2`) | edges picked by [`edge_query`], then `ops::chamfer` (mitred corners) |
 //! | op `Add` / `Subtract` / `Intersect` | `ops::fuse` / `ops::cut` / `ops::common` |
@@ -23,6 +25,11 @@
 //! the exact box of every edge curve, and the interior extremes of sphere
 //! and torus faces (a plane, cylinder or cone face takes its extremes on
 //! its edges).
+//!
+//! Tessellation is `arris::mesh::tessellate` at the requested chord: every
+//! topological vertex is one mesh vertex, edges are sampled once and shared
+//! by both faces, so the mesh of a solid is closed, and triangles are
+//! counter-clockwise seen from outside (arris documents both).
 
 use std::fmt;
 use std::sync::Arc as Shared;
@@ -38,9 +45,11 @@ use arris::ops::OpError;
 use arris::topo::{Body, Edge, Model};
 use arris::Control;
 
-use super::kernel::{Aabb3, EvalError, Evaluated, MassProps, SolidKernel, ToolResolver, Validity};
-use super::select::{edge_query, EdgeQuery};
-use super::types::{
+use cadview_core::solid::kernel::{
+    Aabb3, EvalError, Evaluated, MassProps, SolidKernel, ToolResolver, TriMesh, Validity,
+};
+use cadview_core::solid::select::{edge_query, EdgeQuery};
+use cadview_core::solid::types::{
     arc_point, DefId, Depth, FeatId, Feature, Frame3, Op, PartDef, Placement, Plane3, Point3,
     Profile2d, Seg2, ToolRef, Vec3,
 };
@@ -76,7 +85,7 @@ impl fmt::Debug for ArrisBrep {
 }
 
 impl ArrisKernel {
-    /// The arris version compiled in: the exact pin in cadview-core's
+    /// The arris version compiled in: the exact pin in solid-harness's
     /// Cargo.toml (arris exports no version constant).
     pub const VERSION: &'static str = "0.11.1";
 }
@@ -161,6 +170,25 @@ impl SolidKernel for ArrisKernel {
             solids,
             faces,
             problems,
+        })
+    }
+
+    fn tessellate(&self, b: &ArrisBrep, chord: f64) -> Result<TriMesh, EvalError> {
+        if !chord.is_finite() || chord <= 0.0 {
+            return Err(EvalError::invalid(
+                None,
+                "chord must be finite and positive",
+            ));
+        }
+        let mesh =
+            arris::mesh::tessellate(&b.model, b.body, chord, &RUN).map_err(kernel_err(None))?;
+        Ok(TriMesh {
+            positions: mesh
+                .positions()
+                .iter()
+                .map(|p| Point3::new(p[0], p[1], p[2]))
+                .collect(),
+            triangles: mesh.triangles().to_vec(),
         })
     }
 }
@@ -380,7 +408,7 @@ fn extrude(
 
 /// One closed profile loop in arris's sketch form. Each segment ends
 /// exactly where the next one starts (the loop's own start points), so
-/// the joins checked to [`super::types::PROFILE_JOIN_TOL`] close exactly.
+/// the joins checked to [`cadview_core::solid::PROFILE_JOIN_TOL`] close exactly.
 fn profile_loop(lp: &[Seg2]) -> Result<ProfileLoop, EvalError> {
     if let [only] = lp {
         if only.is_closed_loop() {
@@ -484,8 +512,13 @@ fn hole(
     if !dia.is_finite() || dia <= CONFUSION {
         return Err(invalid("hole diameter must be finite and positive"));
     }
-    // Tools start this far outside the entry point, so no tool face is
-    // coplanar with the face the hole enters.
+    // The reference meaning (solid-harness reference): the hole removes
+    // only `t` in [0, depth] from the entry point along `d`, never material
+    // behind the entry point. So the drill starts exactly at `at`. (Until
+    // the harness's first run it started max(dia, 1) mm behind `at`, which
+    // cut an opening to the surface when `at` lay inside the material.) A
+    // through hole runs past the far side of the part's box by a margin,
+    // so no tool face is coplanar with the face it leaves through.
     let margin = dia.max(1.0);
     let length = match depth {
         Depth::Blind(x) if x.is_finite() && x > CONFUSION => x,
@@ -506,12 +539,6 @@ fn hole(
             reach + margin
         }
     };
-    let start = at + d.scale(-margin);
-    let axis = Axis::new(pt(start), vec(d)).map_err(kernel_err(Some(id)))?;
-    let drill = arris::ops::primitive_cylinder(model, axis, dia / 2.0, length + margin, &RUN)
-        .map_err(&k)?
-        .0;
-    let mut out = arris::ops::cut(model, current, drill, &RUN).map_err(&k)?.0;
     if let Some((cdia, cdepth)) = cbore {
         if !cdia.is_finite() || cdia <= dia {
             return Err(invalid(
@@ -524,7 +551,14 @@ fn hole(
                 "counterbore depth must be positive and less than the hole's",
             ));
         }
-        let bore = arris::ops::primitive_cylinder(model, axis, cdia / 2.0, cdepth + margin, &RUN)
+    }
+    let axis = Axis::new(pt(at), vec(d)).map_err(kernel_err(Some(id)))?;
+    let drill = arris::ops::primitive_cylinder(model, axis, dia / 2.0, length, &RUN)
+        .map_err(&k)?
+        .0;
+    let mut out = arris::ops::cut(model, current, drill, &RUN).map_err(&k)?.0;
+    if let Some((cdia, cdepth)) = cbore {
+        let bore = arris::ops::primitive_cylinder(model, axis, cdia / 2.0, cdepth, &RUN)
             .map_err(&k)?
             .0;
         out = arris::ops::cut(model, out, bore, &RUN).map_err(&k)?.0;
@@ -766,9 +800,9 @@ fn bounds(model: &Model, body: Body, motion: &Isometry) -> Result<Aabb3, EvalErr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::solid::kernel::NoTools;
-    use crate::solid::types::{DefId, FeatId, GrainDir, PartKind};
-    use crate::types::{LwVertex, Shape as Shape2d};
+    use cadview_core::solid::kernel::NoTools;
+    use cadview_core::solid::types::{DefId, FeatId};
+    use cadview_core::types::{LwVertex, Shape as Shape2d};
     use kurbo::Point as P2;
     use std::f64::consts::PI;
 
@@ -776,10 +810,6 @@ mod tests {
         PartDef {
             id: DefId(1),
             name: "test".into(),
-            kind: PartKind::Flat {
-                thickness: 10.0,
-                grain: GrainDir::X,
-            },
             features,
         }
     }
@@ -917,13 +947,13 @@ mod tests {
             },
             Feature::Fillet {
                 id: FeatId(2),
-                edges: crate::solid::types::EdgeSel::All,
+                edges: cadview_core::solid::types::EdgeSel::All,
                 radius: 1.0,
-                fallback: crate::solid::types::RoundFallback::Error,
+                fallback: cadview_core::solid::types::RoundFallback::Error,
             },
             Feature::Chamfer {
                 id: FeatId(2),
-                edges: crate::solid::types::EdgeSel::All,
+                edges: cadview_core::solid::types::EdgeSel::All,
                 d1: 1.0,
                 d2: 2.0,
             },
@@ -931,7 +961,7 @@ mod tests {
                 id: FeatId(2),
                 op: Op::Subtract,
                 tool: ToolRef::Part {
-                    part: crate::types::EntityId(7),
+                    part: cadview_core::types::EntityId(7),
                     clearance: 0.0,
                 },
             },
@@ -1040,9 +1070,9 @@ mod tests {
         let base = extrude(Profile2d::rect(0.0, 0.0, 10.0, 10.0), 10.0, Op::Add);
         let bad_seg = Feature::Chamfer {
             id: FeatId(2),
-            edges: crate::solid::types::EdgeSel::Cap {
+            edges: cadview_core::solid::types::EdgeSel::Cap {
                 feature: FeatId(1),
-                side: crate::solid::types::CapSide::End,
+                side: cadview_core::solid::types::CapSide::End,
                 segs: Some(vec![9]),
             },
             d1: 1.0,
@@ -1054,9 +1084,9 @@ mod tests {
         assert!(matches!(e, EvalError::Selector { .. }), "{e}");
         let later = Feature::Chamfer {
             id: FeatId(2),
-            edges: crate::solid::types::EdgeSel::Cap {
+            edges: cadview_core::solid::types::EdgeSel::Cap {
                 feature: FeatId(5),
-                side: crate::solid::types::CapSide::End,
+                side: cadview_core::solid::types::CapSide::End,
                 segs: None,
             },
             d1: 1.0,
@@ -1075,7 +1105,7 @@ mod tests {
         let base = extrude(Profile2d::rect(0.0, 0.0, 10.0, 10.0), 10.0, Op::Add);
         let ch = Feature::Chamfer {
             id: FeatId(2),
-            edges: crate::solid::types::EdgeSel::Near {
+            edges: cadview_core::solid::types::EdgeSel::Near {
                 points: vec![Point3::new(10.2, 10.1, 5.0)],
             },
             d1: 1.0,
@@ -1088,7 +1118,7 @@ mod tests {
 
 /// Evidence for the rungs after 3D0a, on arris directly (not through the
 /// trait): roundovers, tessellation, sections, projection and provenance.
-/// Run with `cargo test -p cadview-core solid::arris_kernel::forward_look
+/// Run with `cargo test -p solid-harness kernels::arris::forward_look
 /// -- --nocapture` to see the numbers.
 #[cfg(test)]
 mod forward_look {
@@ -1302,9 +1332,9 @@ mod forward_look {
                 taper_deg: 0.0,
                 op: Op::Add,
             }],
-            &crate::solid::types::EdgeSel::Cap {
+            &cadview_core::solid::types::EdgeSel::Cap {
                 feature: FeatId(1),
-                side: crate::solid::types::CapSide::End,
+                side: cadview_core::solid::types::CapSide::End,
                 segs: None,
             },
             FeatId(2),

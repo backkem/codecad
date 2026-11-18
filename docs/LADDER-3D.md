@@ -22,7 +22,7 @@
 ## Key decisions
 
 - **The feature tree is the document; B-rep and meshes are caches.** `PartDef` (ordered features over exact 2D profiles), `Part` (placement, material, layer), `Material`, `AssetRef` and `scene3d` are new Yrs maps of bincode blobs, following the 2D pattern. B-reps, meshes and BVHs are derived on each peer, keyed by content hash, and never synced (design §4).
-- **Kernel: not decided. arris is the reference backend for tests, behind `SolidKernel`.** ogeom was the first choice (the only candidate that passed every smoke test) until it relicensed to `LGPL-2.1-only`. arris (`MIT OR Apache-2.0`, pinned `=0.11.1`) runs the corpus as a dependency of the test-only `solid-harness` crate, so no shipped crate links a kernel yet. Which kernel ships (arris, another permissively licensed one, or one of our own) is decided once a kernel-independent test harness has run against the candidates. What arris gives:
+- **Kernel: arris for now, behind `SolidKernel`.** ogeom was the first choice (the only candidate that passed every smoke test) until it relicensed to `LGPL-2.1-only`. arris (`MIT OR Apache-2.0`, pinned `=0.11.1`) runs the corpus as a dependency of the test-only `solid-harness` crate, so no shipped crate links a kernel yet. The test harness ran it against a second candidate, and the choice of arris is provisional (design §5). What arris gives:
   - exact volumes integrated on the faces (the prismatic corpus to about 1e-16 relative);
   - a 12-edge fillet followed by booleans that still give a valid B-rep at the closed-form volume;
   - exact planar sections, edge projection to exact 2D curves and exact ray hits, but **no built-in HLR**: the HLR adapter of design §7.3 is ours for every backend;

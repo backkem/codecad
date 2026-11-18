@@ -72,7 +72,9 @@ pub fn render(report: &Report) -> String {
                 _ => true,
             };
             if show {
-                let detail: String = v.detail.chars().take(400).collect();
+                // One line per verdict: a kernel's message may span lines.
+                let detail = v.detail.split_whitespace().collect::<Vec<_>>().join(" ");
+                let detail: String = detail.chars().take(400).collect();
                 let _ = writeln!(s, "#   {}: {}: {}", l.name(), v.outcome, detail);
             }
         }

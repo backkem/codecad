@@ -14,5 +14,8 @@ cadview-core = { path = "../cadview-core" }
 kurbo = "0.13"
 # The candidate kernels under test, pinned exactly. Only src/kernels/arris.rs
 # names arris and only src/kernels/cad_kernel.rs names cad-kernel.
-arris = { version = "=0.11.1", default-features = false }
+# `paranoid`: a release build runs the kernel's checker on every operation's
+# output and returns an error for a result it rejects (a debug build does
+# that anyway, as a panic the adapter turns into the same error).
+arris = { version = "=0.11.1", default-features = false, features = ["paranoid"] }
 cad-kernel = "=0.15.0"

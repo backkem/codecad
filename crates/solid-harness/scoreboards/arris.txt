@@ -5,15 +5,15 @@
 #
 # Counts per layer:
 #   closed     30 correct, 148 n/a
-#   enclosure  96 correct, 12 refused, 3 WRONG, 67 n/a
-#   shell      96 correct, 14 refused, 1 WRONG, 67 n/a
-#   mesh       95 correct, 15 refused, 3 WRONG, 65 n/a
-#   valid      96 correct, 12 refused, 5 WRONG, 65 n/a
+#   enclosure  91 correct, 17 refused, 3 WRONG, 67 n/a
+#   shell      92 correct, 19 refused, 67 n/a
+#   mesh       93 correct, 20 refused, 65 n/a
+#   valid      96 correct, 17 refused, 65 n/a
 #   equiv      12 correct, 166 n/a
 #   algebra    40 correct, 7 refused, 131 n/a
 #   continuity 1 correct, 2 refused, 3 undecided, 172 n/a
-#   overall    11 WRONG, 143 correct, 21 refused, 3 undecided
-# Cases recorded WRONG (findings against this kernel; the gate keeps them, a kernel that ships must have none): 11
+#   overall    3 WRONG, 143 correct, 29 refused, 3 undecided
+# Cases recorded WRONG (findings against this kernel; the gate keeps them, a kernel that ships must have none): 3
 #
 # case | overall | closed | enclosure | shell | mesh | valid | equiv | algebra | continuity
 part: board | correct | correct | correct | correct | correct | correct | n/a | n/a | n/a
@@ -206,28 +206,38 @@ part: fuzz: two near-tangent blind holes breaking out (s1 i24) | refused | n/a |
 part: fuzz: tiny box with a face 1e-9 off (s4 i20) | WRONG | n/a | WRONG | correct | correct | correct | n/a | n/a | n/a
 #   closed: n/a: no closed form
 #   enclosure: WRONG: volume 0.00006000000029999982 outside [5.9999640001e-5, 6.0000000000e-5], rel width 6.0e-6
-part: fuzz: through hole tangent to a side face (s1 i196) | WRONG | n/a | correct | correct | refused | WRONG | n/a | n/a | n/a
+part: fuzz: through hole tangent to a side face (s1 i196) | refused | n/a | refused | refused | refused | refused | n/a | n/a | n/a
 #   closed: n/a: no closed form
-#   mesh: refused: kernel: f31: polygon 0 point 5 lies on polygon 0 segment 12; kernel: f31: polygon 0 point 15 lies on polygon 0 segment 32; kernel: f31: polygon 0 point 46 lies on polygon 0 segment 94
-#   valid: WRONG: kernel check: valid=false solids=1 ["L5 f31: loop 0 intersects itself"]
-part: fuzz: thin pin almost tangent to a side face (s2 i463) | WRONG | n/a | correct | refused | refused | WRONG | n/a | n/a | n/a
+#   enclosure: refused: kernel: the kernel's checker rejects the result: L5 f31: loop 0 intersects itself
+#   shell: refused: kernel: the kernel's checker rejects the result: L5 f31: loop 0 intersects itself
+#   mesh: refused: kernel: the kernel's checker rejects the result: L5 f31: loop 0 intersects itself
+#   valid: refused: kernel: the kernel's checker rejects the result: L5 f31: loop 0 intersects itself
+part: fuzz: thin pin almost tangent to a side face (s2 i463) | refused | n/a | refused | refused | refused | refused | n/a | n/a | n/a
 #   closed: n/a: no closed form
-#   shell: refused: kernel: f12: polygon 1 segment 17 crosses polygon 0 segment 1
-#   mesh: refused: kernel: f12: polygon 1 segment 5 crosses polygon 0 segment 1; kernel: f12: polygon 1 segment 5 crosses polygon 0 segment 1; kernel: f12: polygon 1 segment 5 crosses polygon 0 segment 1; kernel: f12: polygon 1 segment 17 crosses polygon 0 segment 1
-#   valid: WRONG: kernel check: valid=false solids=1 ["L5 f12: loops 0 and 1 intersect", "L5 f14: loops 0 and 1 intersect"]
-part: fuzz: tiny notch 1e-7 inside a face (s4 i733) | WRONG | n/a | correct | correct | correct | WRONG | n/a | n/a | n/a
+#   enclosure: refused: kernel: the kernel's checker rejects the result: L5 f12: loops 0 and 1 intersect
+#   shell: refused: kernel: the kernel's checker rejects the result: L5 f12: loops 0 and 1 intersect
+#   mesh: refused: kernel: the kernel's checker rejects the result: L5 f12: loops 0 and 1 intersect
+#   valid: refused: kernel: the kernel's checker rejects the result: L5 f12: loops 0 and 1 intersect
+part: fuzz: tiny notch 1e-7 inside a face (s4 i733) | refused | n/a | refused | refused | refused | refused | n/a | n/a | n/a
 #   closed: n/a: no closed form
-#   valid: WRONG: kernel check: valid=false solids=1 ["L2 f20: loop 0: pcurves jump 1.0000000005838672e-7 in (u, v) after coedge 2"]
-part: fuzz: hole pointing out of the bottom face (s3 i353) | WRONG | n/a | correct | correct | correct | WRONG | n/a | n/a | n/a
+#   enclosure: refused: feature 2: kernel: kernel bug: the output fails the checker: L2 f20: loop 0: pcurves jump 1.0000000005838672e-7 in (u, v) after coedge 2
+#   shell: refused: feature 2: kernel: kernel bug: the output fails the checker: L2 f20: loop 0: pcurves jump 1.0000000005838672e-7 in (u, v) after coedge 2
+#   mesh: refused: feature 2: kernel: kernel bug: the output fails the checker: L2 f20: loop 0: pcurves jump 1.0000000005838672e-7 in (u, v) after coedge 2
+#   valid: refused: feature 2: kernel: kernel bug: the output fails the checker: L2 f20: loop 0: pcurves jump 1.0000000005838672e-7 in (u, v) after coedge 2
+part: fuzz: hole pointing out of the bottom face (s3 i353) | refused | n/a | refused | refused | refused | refused | n/a | n/a | n/a
 #   closed: n/a: no closed form
-#   valid: WRONG: kernel check: valid=false solids=1 ["L2 f10: loop 0: pcurves jump 1.0001025430028677e-7 in (u, v) after coedge 1"]
-part: fuzz: box cut 1e-6 off a cylinder's tangent line (s2 i179) | WRONG | n/a | correct | correct | WRONG | correct | n/a | n/a | n/a
+#   enclosure: refused: feature 2: kernel: kernel bug: the output fails the checker: L2 f10: loop 0: pcurves jump 1.0001025430028677e-7 in (u, v) after coedge 1
+#   shell: refused: feature 2: kernel: kernel bug: the output fails the checker: L2 f10: loop 0: pcurves jump 1.0001025430028677e-7 in (u, v) after coedge 1
+#   mesh: refused: feature 2: kernel: kernel bug: the output fails the checker: L2 f10: loop 0: pcurves jump 1.0001025430028677e-7 in (u, v) after coedge 1
+#   valid: refused: feature 2: kernel: kernel bug: the output fails the checker: L2 f10: loop 0: pcurves jump 1.0001025430028677e-7 in (u, v) after coedge 1
+part: fuzz: box cut 1e-6 off a cylinder's tangent line (s2 i179) | refused | n/a | correct | refused | refused | correct | n/a | n/a | n/a
 #   closed: n/a: no closed form
-#   mesh: WRONG: chord 1e-1: not closed (6 bad directed edges, 0 degenerate triangles); chord 1e-2: not closed (6 bad directed edges, 0 degenerate triangles); chord 1e-3: not closed (6 bad directed edges, 0 degenerate triangles); chord 1e-4: not closed (6 bad directed edges, 0 degenerate triangles)
-part: fuzz: notched prism with collinear vertices far away (s3 i966) | WRONG | n/a | correct | WRONG | WRONG | correct | n/a | n/a | n/a
+#   shell: refused: kernel: the tessellation at chord 0.0001 is not a closed surface (6 unmatched edges)
+#   mesh: refused: kernel: the tessellation at chord 0.1 is not a closed surface (6 unmatched edges); kernel: the tessellation at chord 0.01 is not a closed surface (6 unmatched edges); kernel: the tessellation at chord 0.001 is not a closed surface (6 unmatched edges); kernel: the tessellation at chord 0.0001 is not a closed surface (6 unmatched edges)
+part: fuzz: notched prism with collinear vertices far away (s3 i966) | refused | n/a | correct | refused | refused | correct | n/a | n/a | n/a
 #   closed: n/a: no closed form
-#   shell: WRONG: 46 steps on the wrong side (3879 certified, 0 band, 75 skipped); step in at (3103784.0000, 0.0010, 228.3236) along normal (0.029, -1.000, 0.000): reference says Outside { margin: 0.0009999999310821295 }; step in at (3103784.0000, 0.0010, 488.5396) along normal (0.029, -1.000, 0.000): reference says Outside { margin: 0.0009999999310821295 }
-#   mesh: WRONG: chord 1e-1: not closed (6 bad directed edges, 0 degenerate triangles); chord 1e-2: not closed (6 bad directed edges, 0 degenerate triangles); chord 1e-3: not closed (6 bad directed edges, 0 degenerate triangles); chord 1e-4: not closed (6 bad directed edges, 0 degenerate triangles)
+#   shell: refused: kernel: the tessellation at chord 0.0001 is not a closed surface (6 unmatched edges)
+#   mesh: refused: kernel: the tessellation at chord 0.1 is not a closed surface (6 unmatched edges); kernel: the tessellation at chord 0.01 is not a closed surface (6 unmatched edges); kernel: the tessellation at chord 0.001 is not a closed surface (6 unmatched edges); kernel: the tessellation at chord 0.0001 is not a closed surface (6 unmatched edges)
 part: fuzz: two tangent blind holes breaking out (s4 i0) | refused | n/a | refused | refused | refused | refused | n/a | n/a | n/a
 #   closed: n/a: no closed form
 #   enclosure: refused: feature 3: kernel: degenerate result: the faces touch along a curve interior to both result faces (-f14, +f17)
@@ -263,16 +273,17 @@ part: fuzz: small washer and turned cylinder (s4 i801) | correct | n/a | correct
 #   closed: n/a: no closed form
 part: fuzz: tiny corner box far from the origin (s13 i455) | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
 #   closed: n/a: no closed form
-part: fuzz: cylinder tangent inside a box corner, fused (s14 i325) | WRONG | n/a | correct | refused | refused | WRONG | n/a | n/a | n/a
+part: fuzz: cylinder tangent inside a box corner, fused (s14 i325) | refused | n/a | refused | refused | refused | refused | n/a | n/a | n/a
 #   closed: n/a: no closed form
-#   shell: refused: kernel: f9: polygon 0 point 61 lies on polygon 1 segment 2
-#   mesh: refused: kernel: f9: polygon 0 point 4 lies on polygon 1 segment 2; kernel: f9: polygon 0 point 61 lies on polygon 1 segment 2
-#   valid: WRONG: kernel check: valid=false solids=1 ["L5 f9: loops 0 and 1 intersect"]
+#   enclosure: refused: kernel: the kernel's checker rejects the result: L5 f9: loops 0 and 1 intersect
+#   shell: refused: kernel: the kernel's checker rejects the result: L5 f9: loops 0 and 1 intersect
+#   mesh: refused: kernel: the kernel's checker rejects the result: L5 f9: loops 0 and 1 intersect
+#   valid: refused: kernel: the kernel's checker rejects the result: L5 f9: loops 0 and 1 intersect
 part: fuzz: turned plate intersected at the top of a tall box (s11 i337) | correct | n/a | correct | correct | correct | correct | n/a | n/a | n/a
 #   closed: n/a: no closed form
-part: fuzz: cylinder cut by a box turned 1e-4 rad (s12 i128) | WRONG | n/a | correct | correct | WRONG | correct | n/a | n/a | n/a
+part: fuzz: cylinder cut by a box turned 1e-4 rad (s12 i128) | refused | n/a | correct | correct | refused | correct | n/a | n/a | n/a
 #   closed: n/a: no closed form
-#   mesh: WRONG: chord 1e-1: not closed (2 bad directed edges, 0 degenerate triangles)
+#   mesh: refused: kernel: the tessellation at chord 0.1 is not a closed surface (2 unmatched edges)
 part: fuzz: side hole along a thin prism (s11 i61) | refused | n/a | refused | refused | refused | refused | n/a | n/a | n/a
 #   closed: n/a: no closed form
 #   enclosure: refused: feature 2: kernel: degenerate result: the faces touch along a curve interior to both result faces (+f8, +f3, +f4)

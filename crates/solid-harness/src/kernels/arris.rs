@@ -30,8 +30,16 @@
 //! topological vertex is one mesh vertex, edges are sampled once and shared
 //! by both faces, so the mesh of a solid is closed, and triangles are
 //! counter-clockwise seen from outside (arris documents both).
+//!
+//! The adapter refuses what arris itself can tell is wrong. arris is built
+//! with its `paranoid` feature, so every operation's output goes through
+//! its checker (an error in a release build, a panic in a debug build that
+//! [`SolidKernel::evaluate`] turns into the same error), and the finished
+//! part must pass the full check level. A tessellation that is not a
+//! closed surface is refused too (the fuzzer found a few on slivers).
 
 use std::fmt;
+use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 use std::sync::Arc as Shared;
 
 use arris::check::domain::FaceDomain;
@@ -53,6 +61,10 @@ use cadview_core::solid::types::{
     arc_point, DefId, Depth, FeatId, Feature, Frame3, Op, PartDef, Placement, Plane3, Point3,
     Profile2d, Seg2, ToolRef, Vec3,
 };
+
+/// How arris's debug-build panic starts when an operation's output fails
+/// its checker (`arris-ops`, `verify`).
+const CHECKER_PANIC: &str = "kernel bug: an operation's output fails the checker";
 
 /// How far (mm) a picked edge may sit from its selector's target curve.
 const PICK_TOL: f64 = 1e-6;
@@ -91,9 +103,14 @@ impl ArrisKernel {
 }
 
 fn kernel_err<E: fmt::Display>(feature: Option<FeatId>) -> impl Fn(E) -> EvalError {
+    // One line: arris's checker reports span several.
     move |e| EvalError::Kernel {
         feature,
-        message: e.to_string(),
+        message: e
+            .to_string()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" "),
     }
 }
 
@@ -125,9 +142,54 @@ impl SolidKernel for ArrisKernel {
         def: &PartDef,
         tools: &dyn ToolResolver,
     ) -> Result<Evaluated<ArrisBrep>, EvalError> {
-        let mut model = Model::new(Precision::DEFAULT).map_err(kernel_err(None))?;
-        let mut stack = vec![def.id];
-        let body = eval_into(&mut model, def, tools, &mut stack)?;
+        // arris checks every operation's output: with the `paranoid`
+        // feature a release build returns an error for a result its checker
+        // rejects, and a debug build panics with `CHECKER_PANIC`. Both are
+        // the kernel saying its own result is invalid, so both are a
+        // refusal here. Any other panic is passed on.
+        let run = catch_unwind(AssertUnwindSafe(|| {
+            let mut model = Model::new(Precision::DEFAULT).map_err(kernel_err(None))?;
+            let mut stack = vec![def.id];
+            let body = eval_into(&mut model, def, tools, &mut stack)?;
+            Ok((model, body))
+        }));
+        let (model, body) = match run {
+            Ok(r) => r?,
+            Err(payload) => {
+                let message = payload
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| payload.downcast_ref::<&str>().copied());
+                match message {
+                    Some(m) if m.starts_with(CHECKER_PANIC) => {
+                        return Err(EvalError::Kernel {
+                            feature: None,
+                            message: format!(
+                                "the kernel's checker rejects an operation's result: {}",
+                                m.lines().nth(1).unwrap_or("").trim()
+                            ),
+                        })
+                    }
+                    _ => resume_unwind(payload),
+                }
+            }
+        };
+        // The per-operation check is the fast level; the result as a whole
+        // must also pass the full one (what `check` below reports).
+        let report = check(&model, body, Level::Full);
+        if !report.is_ok() {
+            return Err(EvalError::Kernel {
+                feature: None,
+                message: format!(
+                    "the kernel's checker rejects the result: {}",
+                    report
+                        .violations()
+                        .first()
+                        .map(|v| v.to_string())
+                        .unwrap_or_default()
+                ),
+            });
+        }
         Ok(Evaluated {
             brep: ArrisBrep {
                 model: Shared::new(model),
@@ -182,14 +244,27 @@ impl SolidKernel for ArrisKernel {
         }
         let mesh =
             arris::mesh::tessellate(&b.model, b.body, chord, &RUN).map_err(kernel_err(None))?;
-        Ok(TriMesh {
+        let mesh = TriMesh {
             positions: mesh
                 .positions()
                 .iter()
                 .map(|p| Point3::new(p[0], p[1], p[2]))
                 .collect(),
             triangles: mesh.triangles().to_vec(),
-        })
+        };
+        // A solid's mesh must be a closed, consistently oriented surface.
+        // arris leaves a few open on slivers; that is a refusal, not a mesh.
+        let topo = crate::mesh::topology(&mesh);
+        if !topo.closed {
+            return Err(EvalError::Kernel {
+                feature: None,
+                message: format!(
+                    "the tessellation at chord {chord} is not a closed surface ({} unmatched edges)",
+                    topo.bad_edges
+                ),
+            });
+        }
+        Ok(mesh)
     }
 }
 

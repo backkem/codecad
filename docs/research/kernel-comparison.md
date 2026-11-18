@@ -6,6 +6,12 @@ it states what was measured, how, and what it does and does not support.
 The decision taken afterwards (arris for now) is recorded in 3d-design.md
 section 5.
 
+The numbers below are from before that decision. Since then the arris
+adapter refuses results that arris's own checker rejects and meshes that
+are not closed (docs/3d-test-harness.md, "After the kernel decision"), so
+8 of the 11 arris cases listed as wrong in section 4 are refusals in the
+committed scoreboard, and its fuzzing figures would shift the same way.
+
 Everything below was run on one Windows x64 machine (24 hardware
 threads), release builds unless a line says otherwise, on 2026-11-18. The
 commands are at the end of each section.

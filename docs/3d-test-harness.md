@@ -361,6 +361,30 @@ it, and cadview-core links no kernel any more).
   when the volume moves by more than 1e-9 relative. Whether that should
   be undecided, as it is in the continuity layer, is open (section 11).
 
+### After the kernel decision (2026-11-18): the arris adapter refuses what arris itself rejects
+
+The ladder continues on arris (3d-design.md section 5), so its recorded
+wrong cases have to go before it ships. Eight of the eleven were results
+arris can detect itself; the adapter now turns them into refusals:
+
+- **The kernel's checker, on every operation.** arris is built with its
+  `paranoid` feature, so a release build checks each operation's output
+  and returns an error for one its checker rejects. A debug build panics
+  there instead; the adapter catches that one panic (by its message) and
+  returns the same refusal, so both builds give the same scoreboard. The
+  whole result must also pass the full check level. Five cases moved
+  from wrong to refused.
+- **Closed meshes only.** The adapter refuses a tessellation that is not
+  a closed, consistently oriented surface. Three cases moved from wrong
+  to refused (two slivers, one prism far from the origin).
+- **Cost:** none measurable on the catalogue (kernel run 7.9 s against
+  7.2 s). No row from before the fuzzer changed.
+- **Left: three wrong cases, all on the enclosure layer**, each a
+  position error under 1e-6 mm: two faces merged at 1e-9 and 1e-7 mm,
+  and rounding on a small box 2.3e6 mm from the origin. They are the
+  open question below (a positional band for the enclosure), not
+  something the adapter can detect.
+
 ## 10. Effect on the ladder
 
 - 3D0a's gate (the closed-form corpus) stays and becomes layer 1.

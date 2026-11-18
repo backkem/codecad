@@ -96,6 +96,11 @@ export interface SavePdfOptions {
    * on the entity or its layer. Default false: uniform hairlines.
    */
   lineweights?: boolean;
+  /**
+   * Layers to leave out, by exact name, on top of the layers the document
+   * marks invisible. Default: none.
+   */
+  skipLayers?: string[];
 }
 
 function parseResult(raw: string): unknown {

@@ -13,12 +13,16 @@ pub struct PdfOptions {
     pub page_width_mm: f32,
     pub page_height_mm: f32,
     pub margin_mm: f32,
+    /// Layers left out of the PDF, by exact name, on top of the layers the
+    /// document marks invisible. The script decides: the core gives no
+    /// layer name a meaning of its own, except `Defpoints`, which never
+    /// plots by DWG convention and is always skipped.
     pub skip_layers: Vec<String>,
     pub line_width_pt: f32,
     pub colors: PdfColorMode,
     /// Stroke entities at their own lineweight (mm) where one is set on
     /// the entity or its layer. Off by default: every stroke then uses
-    /// `line_width_pt` and the per-layer factors.
+    /// `line_width_pt`.
     pub lineweights: bool,
 }
 
@@ -54,7 +58,8 @@ impl PdfColorMode {
 
 impl PdfOptions {
     /// Defaults plus the script-facing options of `cad.savePdf(path, opts)`
-    /// (currently `colors`). Other keys, such as `path`, are ignored.
+    /// (`colors`, `lineweights`, `skipLayers`). Other keys, such as `path`,
+    /// are ignored.
     pub fn from_args(args: &serde_json::Value) -> Result<Self, String> {
         let mut opts = Self::default();
         match args.get("colors") {
@@ -71,6 +76,26 @@ impl PdfOptions {
                 ));
             }
         }
+        match args.get("skipLayers") {
+            None | Some(serde_json::Value::Null) => {}
+            Some(serde_json::Value::Array(names)) => {
+                for name in names {
+                    match name.as_str() {
+                        Some(s) => opts.skip_layers.push(s.to_string()),
+                        None => {
+                            return Err(format!(
+                                "savePdf: skipLayers must be an array of layer names, got {name}"
+                            ));
+                        }
+                    }
+                }
+            }
+            Some(other) => {
+                return Err(format!(
+                    "savePdf: skipLayers must be an array of layer names, got {other}"
+                ));
+            }
+        }
         Ok(opts)
     }
 }
@@ -81,21 +106,7 @@ impl Default for PdfOptions {
             page_width_mm: 297.0,
             page_height_mm: 210.0,
             margin_mm: 10.0,
-            skip_layers: [
-                "E_DEBUG",
-                "E_RAY_HIT",
-                "E_RAY_EP",
-                "E_RAY_MISS",
-                "E_RAY_DOOR",
-                "E_DOORS",
-                "E_RAW",
-                "E_VIS",
-                "E_WALLS",
-                "Defpoints",
-            ]
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
+            skip_layers: Vec::new(),
             line_width_pt: 0.1,
             colors: PdfColorMode::default(),
             lineweights: false,
@@ -114,6 +125,9 @@ struct ExpandedEntity {
 
 const PT_PER_MM: f64 = 72.0 / 25.4;
 
+/// The layer DWG reserves for dimension definition points. It never plots.
+const NON_PLOTTING_LAYER: &str = "Defpoints";
+
 /// The stroke width in mm when it was set on purpose: on the entity, or
 /// on its layer as anything but the 0.25 default.
 fn explicit_lineweight(doc: &Document, entity: Option<f64>, layer: &str) -> Option<f64> {
@@ -121,18 +135,22 @@ fn explicit_lineweight(doc: &Document, entity: Option<f64>, layer: &str) -> Opti
     ((lw - 0.25).abs() > 1e-9).then_some(lw)
 }
 
-pub fn export_pdf(doc: &Document, opts: &PdfOptions) -> Vec<u8> {
-    let skip: std::collections::HashSet<&str> =
-        opts.skip_layers.iter().map(|s| s.as_str()).collect();
+/// Whether entities on `layer` go into the PDF. Left out: the layers the
+/// script names in `skip_layers`, the layers the document marks
+/// invisible, and `Defpoints`. A layer missing from the layer table is not
+/// hidden, so it plots. No other layer name has any meaning here.
+fn layer_plots(doc: &Document, opts: &PdfOptions, layer: &str) -> bool {
+    layer != NON_PLOTTING_LAYER
+        && !opts.skip_layers.iter().any(|s| s == layer)
+        && !doc.layers.iter().any(|l| l.name == layer && !l.visible)
+}
 
+pub fn export_pdf(doc: &Document, opts: &PdfOptions) -> Vec<u8> {
     let expanded = expand_entities(doc);
 
     let visible: Vec<&ExpandedEntity> = expanded
         .iter()
-        .filter(|e| !skip.contains(e.layer.as_str()))
-        .filter(|e| {
-            doc.layers.iter().any(|l| l.name == e.layer && l.visible) || e.layer.starts_with("E_")
-        })
+        .filter(|e| layer_plots(doc, opts, &e.layer))
         .collect();
 
     // Bounding box.
@@ -169,14 +187,6 @@ pub fn export_pdf(doc: &Document, opts: &PdfOptions) -> Vec<u8> {
         }
     };
 
-    let layer_color = |name: &str| -> (f32, f32, f32) {
-        doc.layers
-            .iter()
-            .find(|l| l.name == name)
-            .map(|l| color_f32(l.color))
-            .unwrap_or((0.0, 0.0, 0.0))
-    };
-
     let mut ops: Vec<Op> = Vec::new();
     // Paper mapping runs a few hundred colour conversions; drawings use
     // a handful of distinct colours, so map each one once.
@@ -184,14 +194,16 @@ pub fn export_pdf(doc: &Document, opts: &PdfOptions) -> Vec<u8> {
         std::collections::HashMap::new();
 
     for ent in &visible {
-        let stored = resolve_color(ent, &layer_color);
+        // The entity's own colour, or its layer's when it has none: the
+        // same ByLayer rule the screen renderers use.
+        let stored = color_f32(ent.color);
         let key = [stored.0.to_bits(), stored.1.to_bits(), stored.2.to_bits()];
         let (r, g, b) = *mapped
             .entry(key)
             .or_insert_with(|| map_color(opts.colors, stored));
         let lw = match ent.lineweight.filter(|_| opts.lineweights) {
             Some(mm) => (mm * PT_PER_MM) as f32,
-            None => line_weight(&ent.layer, opts.line_width_pt),
+            None => opts.line_width_pt,
         };
 
         match &ent.shape {
@@ -341,17 +353,6 @@ fn emit_path(ops: &mut Vec<Op>, path: &BezPath, to_pdf: &dyn Fn(Point) -> printp
     }
 }
 
-fn resolve_color(
-    ent: &ExpandedEntity,
-    layer_color: &dyn Fn(&str) -> (f32, f32, f32),
-) -> (f32, f32, f32) {
-    if ent.color != Color::WHITE && ent.color != Color::rgb(0, 0, 0) {
-        color_f32(ent.color)
-    } else {
-        layer_color(&ent.layer)
-    }
-}
-
 // ── Colour mapping ────────────────────────────────────────────────────
 //
 // Contrast is WCAG 2 contrast against white, (1.05) / (Y + 0.05), with Y
@@ -481,16 +482,6 @@ fn oklab_to_linear([l, a, b]: [f64; 3]) -> [f64; 3] {
     ]
 }
 
-fn line_weight(layer: &str, base: f32) -> f32 {
-    if layer.starts_with("E_") {
-        base * 2.5
-    } else if layer.starts_with("S_WALL") {
-        base * 1.5
-    } else {
-        base
-    }
-}
-
 fn update_bounds(
     shape: &Shape,
     min_x: &mut f64,
@@ -578,6 +569,54 @@ fn for_each_point(path: &BezPath, mut f: impl FnMut(Point)) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skip_layers_option_parses_and_defaults_empty() {
+        assert!(PdfOptions::default().skip_layers.is_empty());
+        let o = PdfOptions::from_args(&serde_json::json!({ "skipLayers": ["A", "B"] })).unwrap();
+        assert_eq!(o.skip_layers, vec!["A", "B"]);
+        assert!(PdfOptions::from_args(&serde_json::json!({ "skipLayers": "A" })).is_err());
+        assert!(PdfOptions::from_args(&serde_json::json!({ "skipLayers": [1] })).is_err());
+    }
+
+    #[test]
+    fn only_skipped_hidden_and_defpoints_layers_are_left_out() {
+        let mut doc = Document::new();
+        let layers = ["A", "E_DEBUG", "E_WALLS", "S_WALL", "HIDDEN", "Defpoints"];
+        for (i, layer) in layers.into_iter().enumerate() {
+            // One line per layer, stacked, so the drawing has an extent.
+            let y = i as f64 * 10.0;
+            doc.ensure_layer(layer);
+            doc.add_line(Point::new(0.0, y), Point::new(100.0, y), layer, None);
+        }
+        doc.layers
+            .iter_mut()
+            .find(|l| l.name == "HIDDEN")
+            .unwrap()
+            .visible = false;
+        let defaults = PdfOptions::default();
+
+        // No layer name has a meaning of its own: these all plot.
+        for layer in ["A", "E_DEBUG", "E_WALLS", "S_WALL"] {
+            assert!(layer_plots(&doc, &defaults, layer), "{layer}");
+        }
+        // A layer the document hides, and Defpoints, do not.
+        assert!(!layer_plots(&doc, &defaults, "HIDDEN"));
+        assert!(!layer_plots(&doc, &defaults, "Defpoints"));
+        // A layer missing from the layer table is not hidden.
+        assert!(layer_plots(&doc, &defaults, "NOT_IN_TABLE"));
+
+        // skipLayers leaves out exactly the named layers.
+        let skip = PdfOptions {
+            skip_layers: vec!["E_DEBUG".to_string()],
+            ..PdfOptions::default()
+        };
+        assert!(!layer_plots(&doc, &skip, "E_DEBUG"));
+        assert!(layer_plots(&doc, &skip, "E_WALLS"));
+
+        // And the export honours it: skipping a layer shrinks the output.
+        assert!(export_pdf(&doc, &skip).len() < export_pdf(&doc, &defaults).len());
+    }
 
     #[test]
     fn lineweights_option_parses_and_defaults_off() {

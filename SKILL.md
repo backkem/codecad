@@ -220,6 +220,7 @@ await cad.save("output.json")         // save as JSON to server disk
 await cad.saveDwg("output.dwg")       // save as DWG to server disk
 await cad.savePdf("output.pdf", { colors: "paper" })  // one-page PDF, fitted to A4 landscape
 await cad.savePdf("output.pdf", { lineweights: true }) // stroke at each entity's lineweight where one is set
+await cad.savePdf("output.pdf", { skipLayers: ["CONSTRUCTION"] }) // leave layers out by name
 await cad.loadDwg("input.dwg")        // load DWG from server disk
 await cad.exec("scripts/foo.js")      // run server-side script
 ```
@@ -230,6 +231,10 @@ their lightness inverted (white becomes black) and keep at least 3:1
 contrast; light colours keep their hue and are darkened to at least
 4.5:1. `"mono"` prints everything black, `"screen"` keeps the stored
 colours. Any other value is an error.
+
+`savePdf` layers: every visible layer prints. Hide a layer, or name it in
+`skipLayers`, to leave it out. No layer name has a built-in meaning, apart
+from DWG's `Defpoints`, which never plots.
 
 `save` and `saveDwg` flush pending Yrs sync before writing. Paths are
 relative to the server's working directory.

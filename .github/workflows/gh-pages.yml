@@ -1,8 +1,23 @@
 name: Deploy to GitHub Pages
 
+# Runs only when something the site is built from changes. Docs, the
+# server, the test harness and other crates do not rebuild it.
 on:
   push:
     branches: [main]
+    paths:
+      - "crates/cadview-core/**"
+      - "crates/cadview-render/**"
+      - "crates/cadview-web/**"
+      - "crates/mtext/**"
+      - "web/**"
+      - "site/**"
+      - "examples/**"
+      - "docs/brand/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "justfile"
+      - ".github/workflows/gh-pages.yml"
   workflow_dispatch:
 
 permissions:

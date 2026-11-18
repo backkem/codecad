@@ -15,7 +15,7 @@ Shared code lives in [`lib/drafting.js`](lib/drafting.js). It covers what
 the API doesn't do natively: paper-scaled layers and linetypes, the sheet
 border and title block, leaders, centre marks and tables. Everything else
 uses native `cad.*` calls. Colours are ACI palette indices, so DWG
-save/reload is lossless. The helpers are an ES module; each script loads
+save/reload is lossless. The helpers are a script that returns them; each script loads
 them with `const draft = await cad.use("drafting")`.
 
 ## Reproducing

@@ -272,22 +272,21 @@ relative to the server's working directory.
 
 ### Libraries
 
-Shared helpers live in a library: an ES module in `lib/` next to the
-script. Load it with `cad.use`, and `await` it:
+Shared helpers live in a library: a script in `lib/` next to yours. Load
+it with `cad.use`, and `await` it:
 
 ```js
-const draft = await cad.use("drafting");   // lib/drafting.js
+const draft = await cad.use("drafting");   // runs lib/drafting.js
 draft.setup({ scale: 2 });
 const { P, dim, text } = draft;
-const parts = await cad.use("./parts.js"); // relative to the script's folder
 ```
 
-A library is evaluated once per run and returns a frozen object of its
-exports; it leaves no globals behind. Write it with `export` (and
-`import "other"` for another library), and use only the public `cad.*`
-API in it. Errors name the library file and line (`lib/drafting.js:42:7`).
-Do not load code with `new Function(cad.readFile(...))`. Details and the
-supported module syntax: `docs/api-surface.md`, "Script libraries".
+A library is a script that ends with `return { ... }`: what it returns is
+what `cad.use` gives you. It runs once per run, may load other libraries
+with `cad.use`, and uses only the public `cad.*` API. A name is a plain
+word (`lib/<name>.js`), never a path. Errors name the library file and
+line (`lib/drafting.js:42:7`). Details: `docs/api-surface.md`, "Script
+libraries".
 
 ### Look at what you drew
 

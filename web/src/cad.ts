@@ -255,10 +255,10 @@ const cadCore = buildCadApi({
     );
   },
   readFile: null,
-  // cad.use: the server resolves and transforms the library (against its
-  // working directory, like inline scripts); cad-api.ts evaluates it here.
-  library: (spec, from) =>
-    rpcCall("loadLibrary", { spec, from }).then((r) => JSON.stringify(r)),
+  // cad.use: the server reads the library (from its working directory,
+  // like inline scripts); cad-api.ts runs it here.
+  library: (name) =>
+    rpcCall("loadLibrary", { name }).then((r) => JSON.stringify(r)),
 });
 
 // ── CAD API object (shared core + browser-specific) ─────────────────

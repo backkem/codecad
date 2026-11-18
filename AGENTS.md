@@ -155,8 +155,6 @@ crates/
       src/transport.rs        # WebTransport: stream classification, per-doc sync, RPC
       src/script.rs           # server-side JS execution (codelib): run_script,
                               #   exec_file, host.call bridge, nested exec
-      src/library.rs          # cad.use: library name -> file (path-sandboxed),
-                              #   ES module -> async function transform
       src/render.rs           # cad.render handler (sandbox, WT RPC and --render)
       src/sync.rs             # re-exports cadview_core::sync::SyncDoc
     solid-harness/            # test tool (publish = false), docs/3d-test-harness.md;
@@ -507,7 +505,7 @@ Scripts get `cad` on globalThis with the same API as the browser
 |-----|-------------|
 | `cad.*` | All mutation/query methods (addLine, entities, etc.) |
 | `cad.readFile(path)` | Read file from disk (relative to script dir) |
-| `cad.use(name)` | Load a script library (an ES module, `lib/<name>.js` under the script dir) once per run; resolves to its exports. Also in the browser console. See `docs/api-surface.md`, "Script libraries" |
+| `cad.use(name)` | Run the script `lib/<name>.js` (under the script dir) once per run and resolve to what it returns. `await` it |
 | `cad.save(path)` | Export the `entities()` view as JSON (one way) |
 | `cad.saveJson(path)` / `cad.loadJson(path)` | Save or load the whole document as lossless JSON (attributes, blocks, ids, styles) |
 | `cad.saveDwg(path)` | Save document as DWG. Entity attributes go into extended data; the result's `attrs` lists what DWG cannot hold |
@@ -533,13 +531,12 @@ Scripts get `cad` on globalThis with the same API as the browser
                             ├── cad.<method> -> cadview_core::cad_call()
                             ├── rpc.<method> -> save/saveDwg/loadDwg/exec handlers
                             ├── readFile     -> fs::read (path-sandboxed)
-                            └── lib.load     -> library.rs (cad.use: resolve +
-                                                ES module transform)
+                            └── lib.load     -> the text of lib/<name>.js (cad.use)
 ```
 
-The engine cannot load ES modules (`import()` traps the instance), so
-`library.rs` turns a library's `import`/`export` declarations into an
-async function that the loader in `cad-api.ts` evaluates.
+A library is a script that returns what it offers; `cad.use` runs it once
+and hands that back (the engine cannot load ES modules; see
+`docs/api-surface.md`, "Script libraries").
 
 `cad.exec(path)` runs the file as a nested codelib run on the same
 document (moved into the nested run and handed back), up to 8 deep,

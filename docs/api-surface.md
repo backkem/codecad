@@ -87,128 +87,76 @@ relative to the script's directory and sandboxed to the project root.
 
 ### Script libraries
 
-A library is shared script code: drafting helpers, a woodworking joint
-catalogue, electrical rules. It is an ES module that uses only the public
-`cad.*` API. A script loads it with one call:
+Shared helpers live in a library: a script file in `lib/` next to the
+script that uses it. A script loads it with one call:
 
 ```js
-const draft = await cad.use("drafting");   // lib/drafting.js
+const draft = await cad.use("drafting");   // runs lib/drafting.js
 draft.setup({ scale: 2 });
 const { P, dim, text } = draft;
 ```
 
-`cad.use` returns a promise of the library's exports, like `import()`.
-`await` it. It works the same in the server sandbox and in the browser
-console.
-
-**Names.** The host resolves a name by one rule, with no network access:
-
-| Name | File |
-|---|---|
-| `"drafting"`, `"parts/joints"` | `lib/drafting.js`, `lib/parts/joints.js` under the script's folder |
-| `"./tools.js"`, `"../shared/units"` | relative to the script's folder, or to the importing library's folder |
-
-`.js` is added unless the name ends in `.js` or `.mjs`. The file must be
-inside the script's folder, the same rule as `cad.readFile`: `..` above it,
-absolute paths and URLs are refused. "The script's folder" is the folder of
-the file run with `exec` (`/api/run {"exec": ...}`, `cad.exec`,
-`--exec`). For inline programs (`/api/run {"program": ...}`,
-`cad.runScript`) and for the browser console it is the server's working
-directory.
-
-**Writing a library.** Write a normal ES module:
+A library is a script like any other, so it is written as the body of an
+async function and ends by returning what it offers:
 
 ```js
-// lib/joints.js
-import { P } from "drafting";          // another library
-import * as units from "./units.js";   // relative to this file
+// lib/drafting.js
+const geom = await cad.use("geom");        // a library loads another the same way
 
-export const KERF = 3;
-export function dado(at, w) { /* cad.* calls */ }
-export default { name: "joints" };
+function dim(a, b, off) { /* ... */ }
+function leader(tip, knee, label) { /* ... */ }
+
+return { dim, leader };
 ```
 
-Supported at the top level: `import "x"`, `import d from "x"`,
-`import * as ns from "x"`, `import { a, b as c } from "x"`;
-`export const|let|var`, `export function`, `export async function`,
-`export class`, `export default ...`, `export { a, b as c }`,
-`export { a } from "x"`, `export * from "x"`, `export * as ns from "x"`.
+That is all `cad.use(name)` does: read `lib/<name>.js`, run it, and hand
+back what it returned. It is the old
+`new Function(cad.readFile("lib/drafting.js"))()` with three additions:
 
-What a script gets back:
+- **Once per run.** Later calls for the same name get the same result.
+- **Named in errors.** The file name and its own line numbers appear in
+  stack traces (`boom@lib/late.js:2:9`).
+- **A name, never a path.** A name is letters, digits, `-` and `_`. The
+  host builds the path `lib/<name>.js` under the script's folder itself and
+  reads it under the same rule as `cad.readFile`. A missing library fails
+  with `cad.use: library "nope" not found (no file lib/nope.js)`.
 
-- **Evaluated once per run.** Every `cad.use` and `import` of the same
-  file in one run gets the same namespace object. A nested `cad.exec` is
-  a new run and evaluates its libraries again.
-- **No globals.** The module body is a function; its declarations stay
-  in it. It runs in strict mode, so assigning to an undeclared name is an
-  error, not a new global.
-- **A frozen namespace.** Its properties read the exports live, so an
-  `export let` that the library changes later shows the new value. A
-  name imported with `import { a }` is bound once, when the import runs:
-  read `ns.a` from `import * as ns` to follow a changing value.
-- **Named in errors and stack traces.** Frames show the file:
-  `boom@lib/tools.js:4:3`, and an uncaught error in library code reads
-  `TypeError: ... (at lib/tools.js:4:3)`. A missing library, a library
-  that throws while loading and an import cycle each fail with a message
-  that names the library and the line (as `/api/run` reports them):
-  - `cad.use: library "nope" not found (no file lib/nope.js) (at script.js:2:11)`
-  - `cad.use: library lib/bad.js threw while loading at lib/bad.js:3:7: RangeError: bad setup (at script.js:1:11)`
-  - `cad.use: library cycle: lib/c2.js -> lib/c1.js -> lib/c2.js (imported at lib/c2.js:2)`
+Things to know:
 
-Not supported in a library, each a load error with its line: `import()`,
-`import.meta`, import attributes (`with { type: "json" }`), string export
-names, and exporting a destructuring pattern (`export const { a } = o`;
-declare the names, then `export { a }`). Imports are not hoisted: they run
-where they stand, so keep them at the top of the file. Names starting with
-`__cad` are reserved for the loader. Inside a library, load other
-libraries with `import`, not `cad.use`: an import cycle is reported, but
-a library that awaits `cad.use` of itself only fails with the sandbox's
-"waiting for something that can never happen" error.
+- `cad.use` returns a promise, so `await` it. In the browser the text comes
+  from the server (the `loadLibrary` RPC, read from the server's working
+  directory); in the sandbox it is the `lib.load` host call. The same
+  script and the same library run in both.
+- A library runs in strict mode, so it cannot create a global by accident.
+  It can still write to `globalThis` on purpose.
+- Two libraries that wait for each other never finish loading. The sandbox
+  ends such a run with "waiting for something that can never happen"; it
+  does not hang.
+- A library uses only the public `cad.*` API. Domain libraries are script
+  code (see `architecture.md`, "Semantics live in code").
 
-#### Research: can the sandbox load ES modules?
+The loader is about twenty lines in `web/src/cad-api.ts`
+(`createLibraryLoader`); the host side is `load_library` in
+`crates/cadview-server/src/script.rs`.
 
-Not today. Verified by running code in the sandbox (codelib at the
-revision pinned in `Cargo.lock`; StarlingMonkey, SpiderMonkey compiled to
-WebAssembly, built with componentize-js):
+#### Why not ES modules?
+
+Libraries are scripts, not ES modules, because the sandbox engine cannot
+load modules today. Checked by running code in it (codelib's guest:
+StarlingMonkey, built with componentize-js):
 
 | Probe | Result |
 |---|---|
-| `import { x } from "./m.js"` or `export const x` in a script | `SyntaxError: import declarations may only appear at top level of a module`. codelib evaluates every program and prelude as the body of an async function, through indirect `eval`, so it is never a module. |
-| `import.meta` | `SyntaxError: import.meta may only appear in a module` |
-| `await import("drafting")`, `import("./lib/m.js")`, even `import("data:text/javascript,...")` | The engine's module loader tries to stat the file through WASI (`path_filestat_get`). codelib's world (`wit/codelib.wit`, world `script`) imports no `wasi:filesystem`, so that call is a stub and the instance **traps**: the run dies with `guest trapped ... wasm unreachable`, not a catchable error. |
-| Module loader globals (`ShadowRealm`, `Compartment`, `ModuleSource`, `require`, `WebAssembly`) | None exist. There is no JavaScript hook to supply module source. |
-| `eval` with `//# sourceURL=lib/x.js` | Works: frames are named `fn@lib/x.js:2:9`, and a `SyntaxError` carries `lineNumber` and `columnNumber`. |
-| `"use strict"` at the start of the evaluated text | Applies: an assignment to an undeclared name throws. |
+| `import` or `export` in a script | `SyntaxError`: codelib evaluates every program as the body of an async function, so it is never a module. |
+| `await import("lib/m.js")` | The engine's module loader can only read files, and its file table is fixed when the engine snapshot is built. Mounting a folder at run time changes nothing: every import fails with "Bad file descriptor". |
+| A hook to hand the engine module source | None: no `ShadowRealm`, `Compartment`, `ModuleSource` or `require`. |
 
-So the most canonical form available today is: libraries written as ES
-modules, a loader call that returns a promise of the namespace (the
-shape of `import()`), and a host that does the module system's work. The
-server (`crates/cadview-server/src/library.rs`) resolves the name, reads
-the file and rewrites the module's `import` and `export` declarations into
-plain statements of an `async function (__cadImport)`, keeping every line
-where it was. The loader (`cad.use`, in `web/src/cad-api.ts`) evaluates
-that function with indirect `eval` and a `sourceURL`, caches the result per
-run, detects cycles and builds the namespace object. In the sandbox the
-host call is `lib.load`; in the browser the same server code answers the
-WebTransport RPC `loadLibrary`.
-
-**What real ES modules would take.** Scripts see only `cad.use`, so the
-mechanism can change without touching them. Two changes upstream, in
-codelib, would let the engine load modules itself:
-
-1. The guest world imports `wasi:filesystem` (`types` and `preopens`), and
-   the guest component is rebuilt (`guest/build.sh`) against it, so the
-   engine's loader gets errors instead of a trap.
-2. The host offers a read-only module tree per run, for example a
-   `Script::modules(dir)` option that preopens one directory with read
-   permissions only (wasmtime-wasi `preopened_dir` with `DirPerms::READ`
-   and `FilePerms::READ`), or an in-memory tree.
-
-Then `cad.use(name)` would become `import(resolved path)`, with the host
-still owning the name rule. Not verified: how StarlingMonkey resolves a
-specifier from code that is not itself a module (indirect `eval` has no
-referrer), and whether it supports import maps for bare names. If it
-does not, the host keeps mapping names to paths, as it does now.
+So real modules need a change below codelib, in how the engine is built
+and snapshotted. A first version of this rung kept `import`/`export`
+syntax by rewriting it on the server; that took a hand-written JavaScript
+tokenizer and was dropped for the form above. If the engine gains module
+loading, a library changes its last line and the loader is swapped;
+scripts keep calling `cad.use`.
 
 ### Render to PNG
 

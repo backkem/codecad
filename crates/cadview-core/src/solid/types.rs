@@ -8,6 +8,7 @@
 //! Units are document units (mm), f64 throughout. The world frame has Z up.
 
 use kurbo::{Arc, Circle, Line, Point};
+use serde::{Deserialize, Serialize};
 
 use crate::types::{EntityId, LwVertex, Shape};
 
@@ -16,18 +17,18 @@ use super::kernel::EvalError;
 // ── Ids ───────────────────────────────────────────────────────────────
 
 /// Identity of a [`PartDef`]. Stable across edits and peers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct DefId(pub u64);
 
 /// Identity of a [`Feature`] within its [`PartDef`]. Edge selectors name
 /// features by this id, so it must stay stable when features are edited.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct FeatId(pub u32);
 
 // ── 3D points, vectors, planes, placements ────────────────────────────
 
 /// A point in 3D (mm).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Point3 {
     pub x: f64,
     pub y: f64,
@@ -35,7 +36,7 @@ pub struct Point3 {
 }
 
 /// A vector in 3D (mm, or unitless for a direction).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Vec3 {
     pub x: f64,
     pub y: f64,
@@ -150,7 +151,7 @@ impl std::ops::Neg for Vec3 {
 /// Profile coordinates `(u, v)` map to `origin + u * x_axis + v * y_axis`,
 /// where `y_axis = normal x x_axis`. `x_axis` and `normal` must be unit
 /// length and perpendicular ([`Plane3::frame`] checks this).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Plane3 {
     pub origin: Point3,
     pub x_axis: Vec3,
@@ -237,7 +238,7 @@ impl Plane3 {
 /// A rigid transform: rotation (unit quaternion `w, x, y, z`) then
 /// translation. Maps a local point `p` to `R p + t`. No scale: parts use
 /// explicit dimensions (design 4.4).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Placement {
     pub rotation: [f64; 4],
     pub translation: Vec3,
@@ -289,7 +290,7 @@ impl Placement {
 
 /// One exact segment of a profile loop. A loop is walked segment by
 /// segment, each starting where the previous one ends.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Seg2 {
     /// A straight segment from `p0` to `p1`.
     Line(Line),
@@ -313,7 +314,7 @@ pub enum Seg2 {
 ///
 /// Segment indices used by [`EdgeSel`] count the outer loop first, then
 /// each hole loop in order.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Profile2d {
     pub outer: Vec<Seg2>,
     pub holes: Vec<Vec<Seg2>>,
@@ -588,13 +589,13 @@ fn loop_from_bulges(vertices: &[LwVertex]) -> Result<Vec<Seg2>, EvalError> {
 
 /// A 3D path for a sweep: a chain of exact segments, each starting where
 /// the previous one ends, tangent-continuous at every joint (G1).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Path3 {
     pub segs: Vec<Seg3>,
 }
 
 /// One segment of a [`Path3`].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Seg3 {
     Line {
         from: Point3,
@@ -731,7 +732,7 @@ impl Path3 {
 // ── Features ──────────────────────────────────────────────────────────
 
 /// How a feature's body combines with the part so far.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Op {
     Add,
     Subtract,
@@ -739,7 +740,7 @@ pub enum Op {
 }
 
 /// How deep a hole goes.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Depth {
     /// To this depth (mm) from `at`, flat bottom.
     Blind(f64),
@@ -748,7 +749,7 @@ pub enum Depth {
 }
 
 /// Which cap of an extrude an [`EdgeSel::Cap`] names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CapSide {
     /// The cap on the sketch plane.
     Start,
@@ -758,7 +759,7 @@ pub enum CapSide {
 }
 
 /// What happens when the kernel refuses an exact roundover (design 5).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RoundFallback {
     Error,
     /// Render-only bevel plus a 2D note.
@@ -766,7 +767,7 @@ pub enum RoundFallback {
 }
 
 /// Edge selection by meaning, never by kernel topology (design 4.3).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum EdgeSel {
     /// Edges of an extrude's start or end cap, by profile segment index
     /// (`None` = every segment).
@@ -789,7 +790,7 @@ pub enum EdgeSel {
 }
 
 /// A tool body for a boolean (joinery).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ToolRef {
     /// Another part as placed in the scene, grown by `clearance`.
     Part { part: EntityId, clearance: f64 },
@@ -798,7 +799,7 @@ pub enum ToolRef {
 }
 
 /// One step of a part's feature tree, evaluated top to bottom.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Feature {
     Extrude {
         id: FeatId,
@@ -908,7 +909,7 @@ impl Feature {
 // ── Parts ─────────────────────────────────────────────────────────────
 
 /// A reusable solid definition in its own local frame (mm, f64).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PartDef {
     pub id: DefId,
     pub name: String,

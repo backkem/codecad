@@ -51,6 +51,29 @@ and accepting it. The numbered points are checked by tests where a number
 exists (silhouette area, edge pixels where the geometry says an edge is,
 byte equality, time), and by eye where it does not.
 
+## Status (2026-11-18)
+
+Nine of the eleven exist as scripts in `examples/3d/` (see its
+`index.md`), with working renders. Each script checks its parts against
+values it computes itself (exact volumes from closed forms, boxes, part
+counts) and fails if one does not hold; a server test runs them all. The
+recipes went straight to scripts; the harness does not hold them as
+scoreboard cases yet.
+
+| # | Script | Parts | What is simplified, and why |
+|---|---|---|---|
+| 1 | `01-pipe-flange.js` | 1 | Bore Ø52.5, not Ø60.3 (that would leave no wall at the weld end). |
+| 2 | `02-mounting-bracket.js` | 1 | Nothing. |
+| 3 | `03-bookshelf.js` | 12 | The list names nine parts for "twelve"; a plinth, a low rail and a hanging rail make twelve. No interference check (later rung). |
+| 4 | `04-enclosure.js` | 9 | The board's corners are notched to clear the corner bosses. |
+| 5 | `05-piston-and-rod.js` | 3 | Square pin bosses and blind pin bores that stop short of the skirt: where two cylinders meet, the kernel adapter cannot give the part's box, so it could be neither queried nor rendered. |
+| 6 | `06-spur-gears.js` | 2 | One arc per flank, no root fillets. No mesh interference check. |
+| 7 | `07-pipe-spool.js` | 7 | The third flange is the mating flange of the next spool, on a stub. No gaskets, bolts or welds. |
+| 8 | `08-turned-stool.js` | 7 | Beads are half circles (a flatter bead's circle crosses the leg axis: refused as a spindle torus). Joints are not cut: tenons overlap the seat and legs; feet and shoulders stay square to the 8° leg. |
+| 9 | not started | | Waits for the presentation render. |
+| 10 | not started | | Waits for the presentation render. |
+| 11 | `11-play-tower-frame.js` | 36 | The timber frame only: posts, platform frame and deck, swing beam on a head rail, A-frame, stairs. No cabin, roof, railings, sandbox, slide, swings, fixings or clearance rules yet. |
+
 ## The examples
 
 ### Useful cases

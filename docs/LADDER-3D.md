@@ -69,7 +69,7 @@ Each rung is built by a **builder/tester pair** and sized at **≤ about 2 weeks
 |---|---|---|
 | **3D0a** kernel boundary and prismatic corpus | `cadview-core/src/solid/`: the `PartDef`, `Feature`, `Profile2d` and `EdgeSel` types (no sync yet), the `SolidKernel` trait and `ArrisKernel` pinned to an exact version (`=0.11.1`). A **prismatic corpus** with closed-form volume and bbox per entry:<br>• board<br>• board with through hole<br>• dado<br>• rabbet<br>• mortise and tenon pair<br>• half-lap<br>• counterbored hole<br>• chamfered slab | `cargo test -p cadview-core solid::corpus::prismatic` passes. Every entry is a valid B-rep, and its volume matches the closed form to ≤ 1e-9 relative. The bbox matches to 1e-9 mm. Per-entry native timings are recorded in the test output. |
 | **3D0b** curved corpus, Truck and wasm | Curved corpus entries:<br>• fully rounded board<br>• tapered leg (loft)<br>• turned leg (revolve with beads and coves)<br>• swept handrail<br><br>`TruckKernel` behind the `kernel-truck` feature (no fillets). A wasm runner `node scripts/solid-corpus.mjs`, built the same way as `research/3d-smoke/`.<br><br>**Changed in the build (see "3D0b: what landed"):** the Truck cross-check is dropped, because cad-kernel 0.15.0 in the test harness fills the second-kernel role (with fillets); the wasm runner is a wasmtime host in the harness, since there is no Node on the build machine; corpus names are general shapes (rounded slab, tapered square bar, revolved profile, swept round bar). | Curved entries match the closed form to ≤ 1e-6 relative. Truck agrees with arris to ≤ 1e-6 relative on every non-filleted entry (`cargo test -p cadview-core --features kernel-truck solid::corpus`). The wasm runner passes the full corpus and prints per-entry timings. A table of native and wasm timings and the `cadview-web` wasm size delta is committed in `docs/research/3d-corpus-timings.md`. Any entry arris refuses is listed there, with an upstream issue link. |
-| **3D1a** parts in the document | Yrs maps `partdefs`, `parts`, `materials`, `assets` and `scene3d`. A content-hashed evaluation cache. Undo/redo covers parts. JSON save/load includes parts, and DWG export ignores them. Flat-part API in `cad_call` and `cad-api.ts`: `board`, `subtract`, `hole`, `pocket`, `move3d`, `copy3d`, `material`, `parts`. | A core test runs two Yrs peers. One applies a script that builds the bookshelf parts, and the other converges to byte-identical `partdefs`/`parts` maps. `cad.parts()` returns identical bboxes and volumes on both. `saveDwg` output for a document with parts is byte-identical to the same document without them. `undo()` after a `subtract` restores the previous volume exactly. |
+| **3D1a** parts in the document | Yrs maps `partdefs`, `parts`, `materials`, `assets` and `scene3d`. A content-hashed evaluation cache. Undo/redo covers parts. JSON save/load includes parts, and DWG export ignores them. Flat-part API in `cad_call` and `cad-api.ts`: `board`, `subtract`, `hole`, `pocket`, `move3d`, `copy3d`, `material`, `parts`.<br><br>**Changed in the build (see "3D1a: what landed"):** a general shape API instead of the flat-part one (`board`, `pocket` and `material` are library code or later rungs, design 4.0); two maps (`partdefs`, `parts`), not five; the DWG check compares 2D content, not bytes. | A core test runs two Yrs peers. One applies a script that builds the bookshelf parts, and the other converges to byte-identical `partdefs`/`parts` maps. `cad.parts()` returns identical bboxes and volumes on both. `saveDwg` output for a document with parts is byte-identical to the same document without them. `undo()` after a `subtract` restores the previous volume exactly. |
 | **3D1b** general features and checks | `extrude` (with taper), `revolve`, `union`, `intersect`, `rotate3d`, `measure3d`, `interference`. `describe()` reports parts. `POST /api/run` runs 3D scripts in the sandbox. | Via `curl /api/run`, the bookshelf script with one shelf 2 mm too long gets back exactly one interference record (the right pair, volume equal to the closed form to 1e-6 relative). With the correct shelf it gets none. `measure3d` between two parallel boards returns the gap to 1e-9 mm. A turned leg built by `revolve` matches its 3D0b corpus volume. |
 | **3D2a** one GPU stack (= NATIVE N0a) | Bump `vello 0.9 → 0.11` and `eframe/egui 0.34 → 0.36` together, so the web bundle has one wgpu, 30. Add `GpuContext`: one `wgpu::Device` per page, shared by every canvas (today each Vello canvas creates its own). No 3D code yet. | `cargo tree -p cadview-web --target wasm32-unknown-unknown -d` lists no duplicate `wgpu`. Every example DWG renders in both the Vello and the egui renderer with **≤ 0.1 % of pixels differing by more than 8/255 in any channel** from the committed PNGs (`examples/lib/render.mjs` plus a diff script). Opening three tabs creates exactly one device (debug counter). |
 | **3D2b** 3D viewport, shaded | New crate `cadview-render3d` with the `Renderer3d` trait and the Kiss3d backend initialised on the `GpuContext` device. Scene sync from `Document`: part meshes from core's tessellation cache, materials, layer visibility. Orbit, pan and zoom; ortho/perspective; named views. Shaded mode only. React: a 2D/3D toggle per tab. Wasm export `cadview_frame_stats()` returns frame times. | Perf harness `web/tests/perf3d.mjs` (Chrome DevTools Protocol) loads the bookshelf scene (12 parts, no assets) at 1920x1080 and orbits it for 10 s. **p95 frame time ≤ 16.7 ms on GPU-A and ≤ 33 ms on GPU-B.** After the orbit stops, the frame counter stays flat for 5 s (zero idle frames). The 2D/3D toggle keeps the 2D camera unchanged. |
@@ -198,6 +198,102 @@ Each rung is built by a **builder/tester pair** and sized at **≤ about 2 weeks
   for the size arris adds and native against wasm timings, measured with
   a wasmtime host in the harness instead of the planned Node runner (the
   build machine has no Node).
+- **The adapter ships (after 3D0b).** `ArrisKernel` moved, unchanged,
+  from the harness to the new crate `crates/cadview-solid`, the only
+  crate that names arris; it compiles for wasm32. When it moved, nothing
+  linked it yet; cadview-core still links no kernel. The harness tests it
+  from there, its arris scoreboard came out byte-identical, and a test
+  fails if that scoreboard records a wrong case. The harness gates got
+  fast again: scoreboard 262 s to 50 s, mutants 54 to 4 minutes, in
+  release; see [3d-test-harness.md](3d-test-harness.md), "After slice 5".
+
+### 3D1a: what landed (2026-11-18)
+
+Parts in the document and the first 3D script API. Reference:
+`docs/api-surface.md`, "Solid parts".
+
+- **Part model.** A definition (`PartDef`: feature tree, shape only) placed
+  by a part (`Part`: definition, placement, attributes). Ids from the one
+  document counter, printed `p_<n>` (parts) and `d_<n>` (definitions).
+  `copy3d` shares the definition; a modifying call changes the definition
+  and so every part that shares it; `unique: true` gives a copy its own.
+  Positions in modifying calls are world coordinates, moved into the
+  part's frame (`frame: "local"` skips that). A part used as a tool is
+  stored as its definition and its placement relative to the target at the
+  time of the call. The feature types got serde derives and nothing else.
+- **Calls** (`cadview-core/src/dispatch_3d.rs`): `extrude`, `revolve`,
+  `sweep`, `loft`; `cut`, `union`, `intersect` with an inline body or
+  another part; `hole` (blind, through, counterbore); `fillet3d`,
+  `chamfer3d` on edge selectors; `move3d`, `rotate3d`, `copy3d` (with
+  `count` for a row), `remove3d` (unused definitions go too);
+  `setPartAttrs`, `removePartAttrs`; `parts`, `part`, `partDef`;
+  `describe()` counts parts, part attributes and names the kernel. Parts
+  are selected with the entity selector's shape (`ids`, `attrs`, `has`,
+  `bounds`, plus `def`). Typed in `web/src/cad-api.ts`.
+- **Evaluation without a kernel in core.** `solid::eval`: an object-safe
+  `Evaluator` (any `SolidKernel` through `KernelEvaluator`) that a shell
+  puts on the document as a `SolidEnv` (never synced, serialized or
+  undone). With one, every new or changed definition, and every definition
+  that uses it as a tool, is evaluated before it is stored; a refusal fails
+  the call naming the call, the part, the feature and the reason, and the
+  document stays as it was. Without one, input is checked and stored, and
+  geometry queries say "this build has no solid kernel". The cache lives in
+  the `SolidEnv`, keyed by the bytes of the features and of every tool
+  definition reached; solids, mass properties and render meshes (per chord)
+  are cached; least recently used entries go past 4096. Core links no
+  kernel (`cargo tree -p cadview-core -e normal` shows none).
+- **Document.** Definitions and parts on `Document`, in undo snapshots,
+  in `clear`, in `saveJson`/`loadJson` (files from before load with none),
+  and in two Yrs maps, `partdefs` and `parts`, diffed by content hash.
+  `saveDwg` writes the 2D content only and reports the parts it dropped.
+- **Server.** `cadview-server` depends on `cadview-solid` (`ArrisKernel`)
+  and gives every document one process-wide `SolidEnv` (`src/solids.rs`),
+  so documents share the cache. Loads and sync rebuilds keep it
+  (`Document::replace_keeping_solids`). `cad.render` draws the parts when
+  it gets a `view`: core builds the `Scene3d` (`solid::scene`: selection,
+  colours by part, definition or attribute, chord a quarter pixel rounded
+  down to a power of two, named views, projection, edges, occlusion,
+  ground, up to four clip planes, explode), `cadview-render3d` draws it on
+  the shared GPU device. The browser stores and syncs parts but has no
+  kernel and no 3D view yet.
+- **Evidence.** Core (`solid/tests.rs`, on a closed-form fake kernel): every
+  call, 32 degenerate inputs that each fail and change nothing, a refused
+  feature with its exact message, undo after a cut restoring the definition
+  and the volume from the cache, JSON round trip (bit for bit) and old
+  files, DWG 2D content equal with and without parts, two Yrs peers that
+  build a seven-call assembly in a batch and end with byte-identical part
+  maps and equal `parts()` (then the other way round with a move and a
+  removal), and the render scene. Server (through the script entry, on
+  arris): a twelve-part assembly (a base plate with four through holes and
+  a slot with exact arcs, two uprights sharing one definition with a groove
+  and a blind hole, a shelf with two holes and a lip added by `union`, four
+  pins and four feet as copies) matches hand-computed volumes to 1e-9
+  relative, boxes to 1e-9 mm and two centroids, and survives `saveJson`,
+  `clear`, `loadJson` unchanged; every call once more against its closed
+  form (bulge profile, clockwise profile, revolved tube, swept bar along a
+  line and a half turn, ruled loft, a profile from a 2D entity, intersect
+  with a part, union, counterbore, one-edge fillet by cap and by point,
+  chamfer, a local-frame cut); a tapered extrude, a round larger than the
+  plate and a revolve across its own axis are refused and the document is
+  unchanged; 3D renders of the assembly (plain with a ground, a cutaway, an
+  exploded view coloured by an attribute) come back at the requested size
+  with 23 to 36 % of the pixels drawn.
+- **Times** (debug server, one GPU machine, 960x640): the first 3D render
+  of the assembly 1.0 s (device, pipelines and tessellation at chord 0.25
+  mm, 680 triangles), the next four 90 to 380 ms each, with meshes from
+  the cache, including PNG encoding.
+- **2D unchanged.** The twelve examples rendered with `--exec ...
+  --render` differ from the committed PNGs on at most 0.048 % of pixels
+  (the known anti-aliasing difference, as before).
+- **Typed API.** The calls are typed in `web/src/cad-api.ts` and in the
+  rebuilt sandbox prelude (`cad-client/cad-api-setup.js`), so scripts call
+  `cad.extrude`, `cad.cut`, `cad.parts` and the rest directly; the server
+  tests above use the typed calls end to end.
+- **Open.** No kernel in the browser (geometry
+  queries say so), no 3D viewport, no interference or measuring, no
+  projection, no materials, assets or `scene3d` map, no live tool links or
+  clearances, no CPU fallback for 3D renders. `fillet3d`'s `fallback:
+  "visual"` is stored but a kernel refusal still fails the call.
 
 ### 3D2a: what landed (2026-11-17)
 
@@ -363,6 +459,42 @@ backend only carries it out.
   separate meshes 1.8 ms (first 7 ms). The default scene with occlusion
   2.1 to 3.4 ms including PNG encoding. On DX12 WARP 31 ms, within 2 levels
   of the GPU image.
+
+### 3D examples, first gallery (2026-11-18)
+
+Nine of the eleven targets in [3d-examples.md](3d-examples.md) are scripts
+in `examples/3d/` (01 to 08, and the timber frame of 11), with shared
+helpers in `examples/3d/lib/` loaded by `cad.use`. Each checks its parts
+against closed forms it computes (volumes to 1e-9 relative, boxes, counts)
+and writes an isometric working render, committed, plus the other views to
+`target/3d-views/`. `the_3d_examples_run_and_check_themselves` (server)
+runs them all through the script entry, renders to a temporary folder.
+What each simplifies is listed in 3d-examples.md.
+
+- **Render changes.** Three more isometric corners (`iso-sw`, `iso-ne`,
+  `iso-nw`): the play tower's stairs are edge-on from `iso`. `clipMode:
+  "all"` removes only what lies beyond every clip plane, so two planes
+  give a quarter cutaway (`ClipMode` in `scene3d.rs`, the shader's
+  removal test, cut line and cut depth). A part's palette colour follows
+  its place in the document, so views that `select` some parts keep the
+  colours of the full view. `any` mode renders as before (the existing
+  cutaway and first-slice tests are unchanged).
+- **API fix.** A call whose result the kernel builds but cannot measure
+  used to store the change and still report a failure. It now fails as a
+  whole, names the call and changes nothing (create, modify, `copy3d`).
+- **Findings.** Where two cylinders meet (a cross bore, a round boss in a
+  skirt, a tee) the arris adapter evaluates the solid but cannot give its
+  box ("a tight bounding box of a NURBS edge is not supported by this
+  kernel yet"), so the part can be neither queried nor rendered. An arc
+  whose circle crosses a revolve axis is refused ("a spindle torus"),
+  though the arc stays clear of it. Every call re-evaluates the whole
+  feature list, so a part with n features costs O(n^2): the enclosure base
+  (20 features) takes 7.6 s of the enclosure's 11 s. A `near` point on
+  +x of a revolve's sketch picks the seam edge.
+- **Times** (release, one GPU machine, 960x640): whole script runs 0.4 to
+  3.5 s, the enclosure 11.7 s; evaluation is most of it. Two to three
+  renders per example take 0.36 to 0.56 s together, the GPU device's
+  creation included. Two runs give byte-identical PNGs.
 
 ## Risks
 

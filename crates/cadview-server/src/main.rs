@@ -11,6 +11,7 @@ mod http;
 pub mod registry;
 mod render;
 pub mod script;
+mod solids;
 pub mod store;
 mod sync;
 mod transport;

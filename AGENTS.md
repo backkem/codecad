@@ -88,6 +88,11 @@ crates/
                               #   bincode serialize/deserialize
       src/sync.rs             # Yrs CRDT sync (SyncDoc): diffing, state vectors,
                               #   update encoding. Used by both web and server.
+                              #   Parts: maps partdefs (d_<n>) and parts (p_<n>)
+      src/dispatch_3d.rs      # cad_call methods for solid parts: extrude, revolve,
+                              #   sweep, loft, cut, union, intersect, hole,
+                              #   fillet3d, chamfer3d, move3d, rotate3d, copy3d,
+                              #   remove3d, parts (rung 3D1a)
       src/geo.rs              # geometry helpers (distance, lerp, polygon tests)
       src/attrs.rs            # free-form attributes on entities and block
                               #   definitions: stored and matched, never interpreted
@@ -105,7 +110,14 @@ crates/
                               #   named views, fit, matrices), RenderMesh (normals
                               #   and sharp edges at a crease angle), build_frame
                               #   (silhouettes per view), reference shade + tone curve
-      src/solid/              # 3D parts (docs/3d-design.md), no sync or API yet
+      src/solid/              # 3D parts (docs/3d-design.md)
+        part.rs               #   Part (a placed definition + attrs), p_/d_ ids,
+                              #   placement maths
+        eval.rs               #   Evaluator a shell supplies (SolidEnv on the
+                              #   Document) + content-keyed cache of solids and
+                              #   meshes; NO_KERNEL error without one
+        scene.rs              #   parts -> Scene3d for cad.render (view, colours,
+                              #   chord, cutaway, explode)
         types.rs              #   feature tree: PartDef, Feature, Profile2d (exact
                               #   2D segments), EdgeSel, Plane3, Placement
         kernel.rs             #   SolidKernel trait (optional capabilities default
@@ -113,6 +125,8 @@ crates/
                               #   MassProps (centroid optional), Aabb3. Core links
                               #   no kernel
         select.rs             #   EdgeSel -> exact 3D target curves (kernel-neutral)
+        mesh.rs               #   TriMesh topology (closed, Euler counts), shared by
+                              #   the arris adapter and the harness
         corpus/               #   reference parts with closed-form volume + bbox,
                               #   generic over SolidKernel (prismatic.rs: 3D0a;
                               #   curved.rs: round, loft, revolve, sweep, 3D0b)
@@ -156,8 +170,13 @@ crates/
       src/transport.rs        # WebTransport: stream classification, per-doc sync, RPC
       src/script.rs           # server-side JS execution (codelib): run_script,
                               #   exec_file, host.call bridge, nested exec
-      src/render.rs           # cad.render handler (sandbox, WT RPC and --render)
+      src/render.rs           # cad.render handler (sandbox, WT RPC and --render);
+                              #   with a view: parts in 3D via cadview-render3d
+      src/solids.rs           # the arris evaluator (cadview-solid), one per process
       src/sync.rs             # re-exports cadview_core::sync::SyncDoc
+    cadview-solid/            # the shipped kernel adapter (wasm32 + native)
+      src/arris.rs            # ArrisKernel (arris =0.11.1), the only file naming
+                              #   arris; arris forward-look tests
     solid-harness/            # test tool (publish = false), docs/3d-test-harness.md;
                               #   no shipped crate may depend on it
       src/reference/          # certified reference meaning of each feature:
@@ -169,7 +188,7 @@ crates/
       src/cases.rs            # catalogue: corpus parts, extra closed forms,
                               #   equivalent pairs, algebra/motion cases, sweeps,
                               #   regression cases found by the fuzzer
-      src/kernels/arris.rs    # ArrisKernel (arris =0.11.1), the only file naming arris
+      src/kernels/mod.rs      # re-exports ArrisKernel from cadview-solid
       src/kernels/cad_kernel.rs # CadKernel (cad-kernel =0.15.0), the only file
                               #   naming cad-kernel
       src/kernels/broken.rs   # broken adapters (mutants) that test the harness
@@ -517,7 +536,8 @@ Scripts get `cad` on globalThis with the same API as the browser
 | `cad.saveDwg(path)` | Save document as DWG. Entity attributes go into extended data; the result's `attrs` lists what DWG cannot hold |
 | `cad.savePdf(path, { colors, lineweights, skipLayers })` | Save a one-page PDF. `colors`: `"paper"` (default, readable on white), `"mono"`, `"screen"` (as stored). `lineweights: true` strokes entities at their own lineweight where one is set (default: uniform hairlines). `skipLayers`: layer names to leave out, on top of the layers the document hides (default: none) |
 | `cad.exec(path)` | Execute another .js file |
-| `cad.render(opts)` | Render the document to a PNG (GPU, else CPU) |
+| `cad.render(opts)` | Render the document to a PNG (GPU, else CPU); with a `view`, its solid parts in 3D (GPU) |
+| `cad.extrude`, `cad.cut`, `cad.parts`, ... | Solid parts, evaluated on the server's kernel (arris); see `docs/api-surface.md`, "Solid parts" |
 | `console.log(...)` | Captured in response `stdout` field |
 
 ### Architecture
@@ -695,6 +715,7 @@ cargo test -p cadview-render
 cargo test -p cadview-render3d
 cargo test -p cadview-web
 cargo test -p cadview-server
+cargo test -p cadview-solid            # the arris adapter
 cargo test -p solid-harness            # see "Solid harness" below
 ```
 
@@ -707,8 +728,9 @@ cadview-server: 8 tests (store backends, registry, broadcast isolation).
 
 ### Solid harness (3D kernels)
 
-The kernel adapters, the reference semantics and the evidence layers
-live in `solid-harness` (docs/3d-test-harness.md). Core links no kernel.
+The arris adapter ships in `cadview-solid`; cad-kernel (a test-only second
+opinion), the reference semantics and the evidence layers live in
+`solid-harness` (docs/3d-test-harness.md). Core links no kernel.
 
 ```bash
 # 3D0a and 3D0b gates: the prismatic and the curved corpus on arris,
@@ -716,14 +738,18 @@ live in `solid-harness` (docs/3d-test-harness.md). Core links no kernel.
 cargo test -p solid-harness --test corpus -- --nocapture
 # Every case on every layer, for every kernel with a file in scoreboards/
 # (arris.txt, cad-kernel.txt), compared with that file (ratchet)
+# (about 1 min in release, 2 min in debug; a shipped kernel must record
+# no wrong case)
 cargo test -p solid-harness --release --test scoreboard -- --nocapture
 # Regenerate the scoreboards after an accepted change (filter by test name,
 # e.g. cad_kernel_scoreboard, to regenerate one)
 SOLID_HARNESS_BLESS=1 cargo test -p solid-harness --release --test scoreboard
 # Broken adapters: every mutant must be caught; prints which layer caught it
+# (about 4 min in release, 9 min in debug)
 cargo test -p solid-harness --release --test mutants -- --nocapture
 # Capability evidence per kernel (revolve, sweep, loft, rounds, offsets,
 # sections, tessellation), each against a closed form
+cargo test -p cadview-solid --release forward_look -- --nocapture
 cargo test -p solid-harness --release --lib forward_look -- --nocapture
 # The corpus in wasm (development-time, needs no Node): build the module,
 # then time it natively and under wasmtime (docs/research/3d-corpus-timings.md)
@@ -731,8 +757,10 @@ cargo build -p solid-harness --release --target wasm32-unknown-unknown --example
 cargo run -p solid-harness --release --features wasm-runner --example wasm_timings -- target/wasm32-unknown-unknown/release/examples/wasm_corpus.wasm
 ```
 
-The scoreboard and mutant runs take a few minutes in a debug build; use
-`--release`. The scoreboard test fails on any wrong case the committed
+Parts, relations and sweep steps run in parallel, one thread per
+hardware thread (`SOLID_HARNESS_THREADS=1` runs them serially); the
+scoreboards come out the same either way. A mutant runs only the parts
+its mutation changes. The scoreboard test fails on any wrong case the committed
 file does not record as wrong (fuzzer findings against a candidate
 kernel are recorded and printed), on any case or layer that got worse
 than the committed file, on a closed form that falls outside the

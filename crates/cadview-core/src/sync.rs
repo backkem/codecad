@@ -6,12 +6,22 @@
 //!
 //! Entities and layers are stored as bincode blobs in Yrs YMaps.
 //! Lossless roundtrip, no intermediate format.
+//!
+//! Solid parts use two maps of their own, in the same pattern: `partdefs`
+//! (one `PartDef` blob per `d_<n>`) and `parts` (one `Part` blob per
+//! `p_<n>`). The feature tree is the only synced geometry; evaluated solids
+//! and meshes are derived on each peer and never synced.
 
+use crate::solid::part::part_to_bytes;
+use crate::solid::part::{def_from_bytes, def_key, def_to_bytes, part_from_bytes, part_key};
 use crate::{Document, EntityId};
 use std::collections::HashMap;
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
 use yrs::{Any, Doc, Map, Out, ReadTxn, Transact};
+
+/// Key and bincode blob of each entry of a map, sorted by key.
+pub type Blobs = Vec<(String, Vec<u8>)>;
 
 /// Shared Yrs-backed document state. Each peer (browser or server) owns one.
 ///
@@ -23,17 +33,60 @@ pub struct SyncDoc {
     layers: yrs::MapRef,
     blocks: yrs::MapRef,
     linetypes: yrs::MapRef,
+    partdefs: yrs::MapRef,
+    parts: yrs::MapRef,
     meta: yrs::MapRef,
-    /// When Some, we're inside a batch. Stores the entity hashes and layer
-    /// names captured at begin_batch. Diffs are deferred until end_batch.
-    batch_state: std::cell::RefCell<Option<BatchState>>,
+    /// When Some, we're inside a batch. Stores the state captured at
+    /// begin_batch. Diffs are deferred until end_batch.
+    batch_state: std::cell::RefCell<Option<State>>,
 }
 
-struct BatchState {
-    ent_before: HashMap<u64, u64>,
-    layer_before: std::collections::HashSet<String>,
-    block_before: HashMap<String, u64>,
-    linetype_before: std::collections::HashSet<String>,
+/// What a diff compares: content hashes per key (entities, blocks, part
+/// definitions, parts) and names (layers, linetypes).
+#[derive(PartialEq)]
+struct State {
+    entities: HashMap<u64, u64>,
+    layers: std::collections::HashSet<String>,
+    blocks: HashMap<String, u64>,
+    linetypes: std::collections::HashSet<String>,
+    defs: HashMap<u64, u64>,
+    parts: HashMap<u64, u64>,
+}
+
+fn hash_bytes(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
+}
+
+impl State {
+    fn of(doc: &Document) -> Self {
+        State {
+            entities: doc
+                .entities
+                .iter()
+                .map(|e| (e.id.0, hash_bytes(&crate::entity_to_bytes(e))))
+                .collect(),
+            layers: doc.layers.iter().map(|l| l.name.clone()).collect(),
+            blocks: doc
+                .blocks
+                .iter()
+                .map(|(name, b)| (name.clone(), hash_bytes(&crate::block_to_bytes(b))))
+                .collect(),
+            linetypes: doc.linetypes.keys().cloned().collect(),
+            defs: doc
+                .part_defs
+                .values()
+                .map(|d| (d.id.0, hash_bytes(&def_to_bytes(d))))
+                .collect(),
+            parts: doc
+                .parts
+                .iter()
+                .map(|p| (p.id.0, hash_bytes(&part_to_bytes(p))))
+                .collect(),
+        }
+    }
 }
 
 impl SyncDoc {
@@ -43,6 +96,8 @@ impl SyncDoc {
         let layers = doc.get_or_insert_map("layers");
         let blocks = doc.get_or_insert_map("blocks");
         let linetypes = doc.get_or_insert_map("linetypes");
+        let partdefs = doc.get_or_insert_map("partdefs");
+        let parts = doc.get_or_insert_map("parts");
         let meta = doc.get_or_insert_map("meta");
         Self {
             doc,
@@ -50,6 +105,8 @@ impl SyncDoc {
             layers,
             blocks,
             linetypes,
+            partdefs,
+            parts,
             meta,
             batch_state: std::cell::RefCell::new(None),
         }
@@ -61,7 +118,7 @@ impl SyncDoc {
     /// No-op on empty documents (avoids generating degenerate Yrs updates
     /// from clearing already-empty maps).
     pub fn populate_from_document(&self, doc: &Document) {
-        if doc.entities.is_empty() && doc.layers.is_empty() {
+        if doc.entities.is_empty() && doc.layers.is_empty() && doc.parts.is_empty() {
             return;
         }
 
@@ -71,6 +128,8 @@ impl SyncDoc {
         self.layers.clear(&mut txn);
         self.blocks.clear(&mut txn);
         self.linetypes.clear(&mut txn);
+        self.partdefs.clear(&mut txn);
+        self.parts.clear(&mut txn);
 
         for ent in &doc.entities {
             let key = format!("e_{}", ent.id.0);
@@ -93,8 +152,18 @@ impl SyncDoc {
             self.linetypes.insert(&mut txn, name.as_str(), bytes);
         }
 
-        let max_id = doc.entities.iter().map(|e| e.id.0).max().unwrap_or(0);
-        self.meta.insert(&mut txn, "next_id", (max_id + 1) as f64);
+        for def in doc.part_defs.values() {
+            self.partdefs
+                .insert(&mut txn, def_key(def.id).as_str(), def_to_bytes(def));
+        }
+
+        for part in &doc.parts {
+            self.parts
+                .insert(&mut txn, part_key(part.id).as_str(), part_to_bytes(part));
+        }
+
+        self.meta
+            .insert(&mut txn, "next_id", (doc.max_used_id() + 1) as f64);
     }
 
     /// Rebuild a Document from the current Yrs state.
@@ -134,12 +203,33 @@ impl SyncDoc {
             }
         }
 
+        for (_key, value) in self.partdefs.iter(&txn) {
+            if let Out::Any(Any::Buffer(buf)) = value {
+                if let Some(def) = def_from_bytes(&buf) {
+                    doc.part_defs.insert(def.id, def);
+                }
+            }
+        }
+
+        for (_key, value) in self.parts.iter(&txn) {
+            if let Out::Any(Any::Buffer(buf)) = value {
+                if let Some(part) = part_from_bytes(&buf) {
+                    doc.parts.push(part);
+                }
+            }
+        }
+
         if let Some(Out::Any(Any::Number(n))) = self.meta.get(&txn, "next_id") {
             doc.set_next_id(n as u64);
+        }
+        // Never hand out an id that is already in use.
+        if doc.next_id() <= doc.max_used_id() {
+            doc.set_next_id(doc.max_used_id() + 1);
         }
 
         // Preserve draw order
         doc.entities.sort_by_key(|e| e.id.0);
+        doc.parts.sort_by_key(|p| p.id.0);
         doc
     }
 
@@ -161,34 +251,12 @@ impl SyncDoc {
             return Ok((result, Vec::new()));
         }
 
-        let ent_before = entity_hashes(local_doc);
-        let layer_before = layer_names(local_doc);
-        let block_before = block_hashes(local_doc);
-        let lt_before = linetype_names(local_doc);
-
+        let before = State::of(local_doc);
         let result = crate::cad_call(local_doc, method, args)?;
+        let after = State::of(local_doc);
 
-        let ent_after = entity_hashes(local_doc);
-        let layer_after = layer_names(local_doc);
-        let block_after = block_hashes(local_doc);
-        let lt_after = linetype_names(local_doc);
-
-        let update = if ent_before != ent_after
-            || layer_before != layer_after
-            || block_before != block_after
-            || lt_before != lt_after
-        {
-            self.diff_into_yrs(
-                local_doc,
-                &ent_before,
-                &ent_after,
-                &layer_before,
-                &layer_after,
-                &block_before,
-                &block_after,
-                &lt_before,
-                &lt_after,
-            )
+        let update = if before != after {
+            self.diff_into_yrs(local_doc, &before, &after)
         } else {
             Vec::new()
         };
@@ -199,61 +267,27 @@ impl SyncDoc {
     /// Start a batch. Mutations via apply_mutation will skip per-call diffs.
     /// Call end_batch to produce one combined Yrs update.
     pub fn begin_batch(&self, local_doc: &Document) {
-        *self.batch_state.borrow_mut() = Some(BatchState {
-            ent_before: entity_hashes(local_doc),
-            layer_before: layer_names(local_doc),
-            block_before: block_hashes(local_doc),
-            linetype_before: linetype_names(local_doc),
-        });
+        *self.batch_state.borrow_mut() = Some(State::of(local_doc));
     }
 
     /// End a batch and produce a single Yrs update covering all mutations
     /// since begin_batch. Returns empty vec if nothing changed.
     pub fn end_batch(&self, local_doc: &Document) -> Vec<u8> {
         let state = self.batch_state.borrow_mut().take();
-        let Some(bs) = state else { return Vec::new() };
-
-        let ent_after = entity_hashes(local_doc);
-        let layer_after = layer_names(local_doc);
-        let block_after = block_hashes(local_doc);
-        let lt_after = linetype_names(local_doc);
-
-        if bs.ent_before != ent_after
-            || bs.layer_before != layer_after
-            || bs.block_before != block_after
-            || bs.linetype_before != lt_after
-        {
-            self.diff_into_yrs(
-                local_doc,
-                &bs.ent_before,
-                &ent_after,
-                &bs.layer_before,
-                &layer_after,
-                &bs.block_before,
-                &block_after,
-                &bs.linetype_before,
-                &lt_after,
-            )
+        let Some(before) = state else {
+            return Vec::new();
+        };
+        let after = State::of(local_doc);
+        if before != after {
+            self.diff_into_yrs(local_doc, &before, &after)
         } else {
             Vec::new()
         }
     }
 
     /// Diff Document changes into the Yrs Doc and return the incremental
-    /// update bytes. Generic over any before/after entity state.
-    #[allow(clippy::too_many_arguments)]
-    fn diff_into_yrs(
-        &self,
-        doc: &Document,
-        ent_before: &HashMap<u64, u64>,
-        ent_after: &HashMap<u64, u64>,
-        layer_before: &std::collections::HashSet<String>,
-        layer_after: &std::collections::HashSet<String>,
-        block_before: &HashMap<String, u64>,
-        block_after: &HashMap<String, u64>,
-        lt_before: &std::collections::HashSet<String>,
-        lt_after: &std::collections::HashSet<String>,
-    ) -> Vec<u8> {
+    /// update bytes. Generic over any before/after state.
+    fn diff_into_yrs(&self, doc: &Document, before: &State, after: &State) -> Vec<u8> {
         let sv_before = {
             let txn = self.doc.transact();
             txn.state_vector()
@@ -262,15 +296,15 @@ impl SyncDoc {
         let mut txn = self.doc.transact_mut();
 
         // Removed entities
-        for id in ent_before.keys() {
-            if !ent_after.contains_key(id) {
+        for id in before.entities.keys() {
+            if !after.entities.contains_key(id) {
                 self.entities.remove(&mut txn, &format!("e_{}", id));
             }
         }
 
         // Added or changed entities
-        for (id, hash) in ent_after {
-            if ent_before.get(id) != Some(hash) {
+        for (id, hash) in &after.entities {
+            if before.entities.get(id) != Some(hash) {
                 if let Some(ent) = doc.entity(EntityId(*id)) {
                     let key = format!("e_{}", id);
                     let bytes = crate::entity_to_bytes(ent);
@@ -279,14 +313,15 @@ impl SyncDoc {
             }
         }
 
-        // Update next_id
-        if let Some(max_id) = ent_after.keys().max() {
-            self.meta.insert(&mut txn, "next_id", (*max_id + 1) as f64);
+        // Update next_id: past every id in use (entities, parts, definitions)
+        let max_id = doc.max_used_id();
+        if max_id > 0 {
+            self.meta.insert(&mut txn, "next_id", (max_id + 1) as f64);
         }
 
         // Removed layers
-        for name in layer_before {
-            if !layer_after.contains(name) {
+        for name in &before.layers {
+            if !after.layers.contains(name) {
                 self.layers.remove(&mut txn, name.as_str());
             }
         }
@@ -298,16 +333,16 @@ impl SyncDoc {
         }
 
         // Removed blocks
-        for name in block_before.keys() {
-            if !block_after.contains_key(name) {
+        for name in before.blocks.keys() {
+            if !after.blocks.contains_key(name) {
                 self.blocks.remove(&mut txn, name.as_str());
             }
         }
 
         // Added or changed blocks (a redefinition or new attributes change
         // the hash)
-        for (name, hash) in block_after {
-            if block_before.get(name) != Some(hash) {
+        for (name, hash) in &after.blocks {
+            if before.blocks.get(name) != Some(hash) {
                 if let Some(block) = doc.blocks.get(name) {
                     let bytes = crate::block_to_bytes(block);
                     self.blocks.insert(&mut txn, name.as_str(), bytes);
@@ -316,18 +351,49 @@ impl SyncDoc {
         }
 
         // Removed linetypes
-        for name in lt_before {
-            if !lt_after.contains(name) {
+        for name in &before.linetypes {
+            if !after.linetypes.contains(name) {
                 self.linetypes.remove(&mut txn, name.as_str());
             }
         }
 
         // Added or changed linetypes
-        for name in lt_after {
-            if !lt_before.contains(name) {
+        for name in &after.linetypes {
+            if !before.linetypes.contains(name) {
                 if let Some(lt) = doc.linetypes.get(name) {
                     let bytes = crate::linetype_to_bytes(lt);
                     self.linetypes.insert(&mut txn, name.as_str(), bytes);
+                }
+            }
+        }
+
+        // Part definitions: removed, then added or changed (by content)
+        for id in before.defs.keys() {
+            if !after.defs.contains_key(id) {
+                self.partdefs
+                    .remove(&mut txn, &def_key(crate::solid::DefId(*id)));
+            }
+        }
+        for (id, hash) in &after.defs {
+            if before.defs.get(id) != Some(hash) {
+                if let Some(def) = doc.part_defs.get(&crate::solid::DefId(*id)) {
+                    self.partdefs
+                        .insert(&mut txn, def_key(def.id).as_str(), def_to_bytes(def));
+                }
+            }
+        }
+
+        // Parts: removed, then added or changed (placement, attributes)
+        for id in before.parts.keys() {
+            if !after.parts.contains_key(id) {
+                self.parts.remove(&mut txn, &part_key(EntityId(*id)));
+            }
+        }
+        for (id, hash) in &after.parts {
+            if before.parts.get(id) != Some(hash) {
+                if let Some(part) = doc.part(EntityId(*id)) {
+                    self.parts
+                        .insert(&mut txn, part_key(part.id).as_str(), part_to_bytes(part));
                 }
             }
         }
@@ -372,39 +438,24 @@ impl SyncDoc {
         txn.apply_update(yrs::Update::decode_v1(update)?)?;
         Ok(())
     }
-}
 
-fn entity_hashes(doc: &Document) -> HashMap<u64, u64> {
-    use std::hash::{Hash, Hasher};
-    doc.entities
-        .iter()
-        .map(|e| {
-            let bytes = crate::entity_to_bytes(e);
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            bytes.hash(&mut hasher);
-            (e.id.0, hasher.finish())
-        })
-        .collect()
-}
-
-fn layer_names(doc: &Document) -> std::collections::HashSet<String> {
-    doc.layers.iter().map(|l| l.name.clone()).collect()
-}
-
-fn block_hashes(doc: &Document) -> HashMap<String, u64> {
-    use std::hash::{Hash, Hasher};
-    doc.blocks
-        .iter()
-        .map(|(name, b)| {
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            crate::block_to_bytes(b).hash(&mut hasher);
-            (name.clone(), hasher.finish())
-        })
-        .collect()
-}
-
-fn linetype_names(doc: &Document) -> std::collections::HashSet<String> {
-    doc.linetypes.keys().cloned().collect()
+    /// The raw blobs of the two part maps, sorted by key: what a test
+    /// compares to check that two peers converged.
+    pub fn part_blobs(&self) -> (Blobs, Blobs) {
+        let txn = self.doc.transact();
+        let read = |m: &yrs::MapRef| {
+            let mut v: Vec<(String, Vec<u8>)> = m
+                .iter(&txn)
+                .filter_map(|(k, value)| match value {
+                    Out::Any(Any::Buffer(buf)) => Some((k.to_string(), buf.to_vec())),
+                    _ => None,
+                })
+                .collect();
+            v.sort();
+            v
+        };
+        (read(&self.partdefs), read(&self.parts))
+    }
 }
 
 #[cfg(test)]

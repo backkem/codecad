@@ -302,6 +302,56 @@ Renders on the server (GPU, else CPU) exactly what the browser's Vello
 view shows: dark background, 1 px strokes, hatches as light tints. Read
 the PNG back to check placement and proportions before saving the DWG.
 
+### Solid parts
+
+Exact 3D solids, in mm with Z up. A part places a definition (a feature
+tree: shape only) and carries attributes. Server scripts evaluate every
+change on the kernel; elsewhere geometry queries throw "this build has no
+solid kernel".
+
+```js
+const side = cad.extrude({ min: [0, 0], max: [300, 800] },
+                         { plane: "yz", at: [0, 0, 0], distance: 18, attrs: { part: "side" } });
+const shelf = cad.extrude([[0, 0], [560, 0], [560, 300], [0, 300]], { at: [12, 0, 200], distance: 18 });
+cad.cut(side, { extrude: { min: [0, 200], max: [300, 218] }, plane: "yz", at: [12, 0, 0], distance: 6 });
+cad.cut(side, { part: shelf })                  // another part as the tool, as placed now
+cad.hole(shelf, { at: [50, 40, 218], dia: 8, depth: 12 })   // dir defaults to [0, 0, -1]
+const other = cad.copy3d(side, { rotate: { angle: 180, about: [292, 150, 0] } })
+cad.copy3d(shelf, { move: [0, 0, 200], count: 2 })          // copies share the definition
+cad.parts({ attrs: { part: "side" } })   // [{id, def, attrs, placement, bbox, localBbox, volume, centroid}]
+cad.render({ view: "iso", out: "check3d.png", ground: true })
+cad.render({ view: "iso", out: "cut.png", clip: { point: [300, 150, 0], normal: [0, -1, 0] } })
+cad.render({ view: "iso", out: "exploded.png", explode: 0.6, colorBy: { attr: "part" } })
+```
+
+- Profiles stay exact: vertex lists with bulges, `{center, radius}`,
+  `{min, max}`, a closed 2D entity, or `{outer, holes}`.
+- Planes: `"xy"` (normal +Z), `"xz"` (normal -Y), `"yz"` (normal +X), or
+  `{origin, x, normal}`; `at` moves the origin. A negative `distance`
+  extrudes against the normal.
+- Modifying a part changes its definition, so every copy changes too.
+  `copy3d(p, { unique: true })` makes an independent copy.
+- Positions in modifying calls are world coordinates (`frame: "local"`
+  for the part's own frame).
+- A refused feature throws `hole: part p_3 ("name"), feature 4 (hole):
+  <reason>` and changes nothing. Read the reason, change the input.
+- Check what you built: compare `parts()` volumes and boxes with what you
+  meant, and look at the render.
+- Meaning goes in attributes (`attrs: { part: "shelf" }`), never in the
+  geometry. Details: `docs/api-surface.md`, "Solid parts".
+- Cut joints with the parts that fill them: `cad.cut(side, { part: shelf })`
+  makes the dado exactly where the shelf sits.
+- Pick a round edge of a revolve or a circle extrude with a `near` point
+  away from +x of its sketch: the seam lies there, and a point on it is as
+  near to the seam edge.
+- Check volumes against closed forms the script computes (Pappus for a
+  revolve, area times length for an extrude or sweep): a wrong bulge sign
+  or a misplaced cut shows up as a number, not only in the picture. The
+  helpers in `examples/3d/lib/shapes.js` do this for profiles with arcs.
+- Views: `"iso"` is the south-east corner; `"iso-sw"`, `"iso-ne"` and
+  `"iso-nw"` look from the others (stairs climbing toward +x face
+  `"iso-sw"`). A quarter cutaway is two planes with `clipMode: "all"`.
+
 ### Viewport
 
 ```js

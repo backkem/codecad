@@ -403,6 +403,8 @@ fn rpc_call(state: &mut RunState, method: &str, args: &str) -> Result<String, St
                 "entities": doc.entities.len(),
                 // Which attributes the DWG keeps and which it cannot hold.
                 "attrs": cadview_core::dwg_attr_losses(doc),
+                // DWG holds 2D only; parts are left out (saveJson keeps them).
+                "parts": cadview_core::dispatch_3d::dwg_part_losses(doc),
             })
             .to_string())
         }
@@ -418,6 +420,7 @@ fn rpc_call(state: &mut RunState, method: &str, args: &str) -> Result<String, St
                 "path": resolved.to_string_lossy(),
                 "entities": doc.entities.len(),
                 "bytes": text.len(),
+                "parts": doc.parts.len(),
             })
             .to_string())
         }
@@ -428,9 +431,11 @@ fn rpc_call(state: &mut RunState, method: &str, args: &str) -> Result<String, St
             let text = std::fs::read_to_string(&resolved)
                 .map_err(|e| format!("loadJson: read '{path_str}': {e}"))?;
             let new_doc = cadview_core::document_from_json(&text)?;
-            let count = new_doc.entities.len();
-            *doc = new_doc;
-            Ok(format!(r#"{{"ok":true,"entities":{count}}}"#))
+            let (count, parts) = (new_doc.entities.len(), new_doc.parts.len());
+            doc.replace_keeping_solids(new_doc);
+            Ok(format!(
+                r#"{{"ok":true,"entities":{count},"parts":{parts}}}"#
+            ))
         }
         "savePdf" => {
             let a: Value = serde_json::from_str(args).map_err(|e| e.to_string())?;
@@ -456,7 +461,7 @@ fn rpc_call(state: &mut RunState, method: &str, args: &str) -> Result<String, St
             let new_doc = cadview_core::load_dwg(&resolved.to_string_lossy())
                 .map_err(|e| format!("loadDwg: {e}"))?;
             let count = new_doc.entities.len();
-            *doc = new_doc;
+            doc.replace_keeping_solids(new_doc);
             Ok(format!(r#"{{"ok":true,"entities":{count}}}"#))
         }
         _ => cadview_core::cad_call(doc, method, args),
@@ -1049,6 +1054,355 @@ mod tests {
         assert_eq!(exec_a8(&registry, "play-free-space.js").await, expected);
     }
 
+    // ── Solid parts (rung 3D1a) ──────────────────────────────────────
+
+    /// Build the twelve-part assembly in `tests/3d1a/assembly.js` the way
+    /// `/api/run` runs `{"exec": ...}`.
+    async fn assembly(registry: &Arc<Mutex<DocumentRegistry>>) -> Value {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/3d1a/assembly.js");
+        let output = exec_file(&SANDBOX, registry, "doc", path.to_str().unwrap(), None)
+            .await
+            .unwrap_or_else(|e| panic!("assembly.js: {e}"));
+        value(&output)
+    }
+
+    fn rel_err(got: f64, want: f64) -> f64 {
+        (got - want).abs() / want.abs()
+    }
+
+    fn assert_box(got: &Value, min: [f64; 3], max: [f64; 3], what: &str) {
+        for i in 0..3 {
+            for (k, want) in [("min", min[i]), ("max", max[i])] {
+                let g = got[k][i].as_f64().unwrap();
+                assert!(
+                    (g - want).abs() <= 1e-9 * want.abs().max(1.0),
+                    "{what} bbox.{k}[{i}] = {g}, want {want}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_assembly_matches_its_closed_forms_and_survives_json() {
+        use std::f64::consts::PI;
+        let (dir, registry) = registry();
+        let v = assembly(&registry).await;
+        let parts = v["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 12, "{v}");
+        let d = &v["describe"];
+        assert_eq!(
+            (d["parts"].as_u64(), d["partDefs"].as_u64()),
+            (Some(12), Some(5)),
+            "{d}"
+        );
+        assert_eq!(d["partAttrs"]["group"], 12);
+        assert!(
+            d["solidKernel"].as_str().unwrap().starts_with("arris"),
+            "{d}"
+        );
+
+        // Hand-computed closed forms (mm, mm^3).
+        let base_v =
+            400.0 * 300.0 * 12.0 - 4.0 * PI * 25.0 * 12.0 - (100.0 * 20.0 + PI * 100.0) * 12.0;
+        let upright_v = 300.0 * 200.0 * 10.0 - 6.0 * 300.0 * 10.0 - PI * 16.0 * 5.0;
+        let shelf_v = 352.0 * 300.0 * 10.0 - 2.0 * PI * 9.0 * 10.0 + 352.0 * 10.0 * 5.0;
+        let pin_v = PI * 25.0 * 20.0;
+        let foot_v = 40.0 * 40.0 * 8.0;
+        let ids = &v["ids"];
+        let mut seen = std::collections::BTreeMap::new();
+        for p in parts {
+            let group = p["group"].as_str().unwrap();
+            *seen.entry(group.to_string()).or_insert(0) += 1;
+            let want = match group {
+                "base" => base_v,
+                "upright" => upright_v,
+                "shelf" => shelf_v,
+                "pin" => pin_v,
+                "foot" => foot_v,
+                g => panic!("unexpected group {g}"),
+            };
+            let got = p["volume"].as_f64().unwrap();
+            assert!(
+                rel_err(got, want) <= 1e-9,
+                "{group} volume {got}, want {want}"
+            );
+        }
+        assert_eq!(
+            seen,
+            [
+                ("base", 1),
+                ("foot", 4),
+                ("pin", 4),
+                ("shelf", 1),
+                ("upright", 2)
+            ]
+            .into_iter()
+            .map(|(k, n)| (k.to_string(), n))
+            .collect()
+        );
+        let by_id = |id: &Value| parts.iter().find(|p| p["id"] == *id).unwrap();
+        assert_box(
+            &by_id(&ids["base"])["bbox"],
+            [0.0, 0.0, 0.0],
+            [400.0, 300.0, 12.0],
+            "base",
+        );
+        assert_box(
+            &by_id(&ids["left"])["bbox"],
+            [20.0, 0.0, 12.0],
+            [30.0, 300.0, 212.0],
+            "left",
+        );
+        // Half a turn about the vertical axis through (200, 150).
+        assert_box(
+            &by_id(&ids["right"])["bbox"],
+            [370.0, 0.0, 12.0],
+            [380.0, 300.0, 212.0],
+            "right",
+        );
+        assert_eq!(by_id(&ids["right"])["def"], by_id(&ids["left"])["def"]);
+        assert_eq!(by_id(&ids["left"])["instances"], 2);
+        assert_box(
+            &by_id(&ids["shelf"])["bbox"],
+            [24.0, 0.0, 100.0],
+            [376.0, 300.0, 115.0],
+            "shelf",
+        );
+        assert_box(
+            &by_id(&ids["pin"])["bbox"],
+            [25.0, 25.0, -4.0],
+            [35.0, 35.0, 16.0],
+            "pin",
+        );
+        assert_box(
+            &by_id(&ids["foot"])["bbox"],
+            [50.0, 50.0, -8.0],
+            [90.0, 90.0, 0.0],
+            "foot",
+        );
+        let pins: Vec<&Value> = parts.iter().filter(|p| p["group"] == "pin").collect();
+        assert!(pins.iter().all(|p| p["instances"] == 4));
+        assert_box(
+            &pins[3]["bbox"],
+            [365.0, 265.0, -4.0],
+            [375.0, 275.0, 16.0],
+            "last pin",
+        );
+
+        // Centroids: a pin's is its axis midpoint; the left upright's is the
+        // volume-weighted mean of the board, the groove and the blind hole.
+        let c = &by_id(&ids["pin"])["centroid"];
+        for (i, want) in [30.0, 30.0, 6.0].into_iter().enumerate() {
+            assert!(
+                (c[i].as_f64().unwrap() - want).abs() <= 1e-9,
+                "pin centroid {c}"
+            );
+        }
+        let (vb, vg, vh) = (600_000.0, 18_000.0, PI * 16.0 * 5.0);
+        let want = [
+            (vb * 25.0 - vg * 27.0 - vh * 22.5) / upright_v,
+            150.0,
+            (vb * 112.0 - vg * 105.0 - vh * 180.0) / upright_v,
+        ];
+        let c = &by_id(&ids["left"])["centroid"];
+        for i in 0..3 {
+            assert!(
+                rel_err(c[i].as_f64().unwrap(), want[i]) <= 1e-9,
+                "left centroid {c}, want {want:?}"
+            );
+        }
+
+        // JSON keeps every part; DWG says it left them out.
+        let json_path =
+            serde_json::to_string(&dir.path().join("a.json").to_string_lossy()).unwrap();
+        let dwg_path = serde_json::to_string(&dir.path().join("a.dwg").to_string_lossy()).unwrap();
+        let after = program(
+            dir.path(),
+            &registry,
+            &format!(
+                "const before = cad.parts();\n\
+                 const saved = cad.saveJson({json_path});\n\
+                 const dwg = cad.saveDwg({dwg_path});\n\
+                 cad.clear({{ all: true }});\n\
+                 const cleared = cad.describe().parts;\n\
+                 const loaded = cad.loadJson({json_path});\n\
+                 const again = cad.parts();\n\
+                 return {{ saved: saved.parts, dwg: dwg.parts, cleared, loaded: loaded.parts,\n\
+                           same: JSON.stringify(before) === JSON.stringify(again) }};"
+            ),
+        )
+        .await;
+        assert_eq!(after["saved"], 12, "{after}");
+        assert_eq!(after["dwg"]["dropped"], 12, "{after}");
+        assert_eq!(after["cleared"], 0);
+        assert_eq!(after["loaded"], 12);
+        assert_eq!(after["same"], true, "{after}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn every_part_call_runs_on_the_kernel_to_its_closed_form() {
+        use std::f64::consts::PI;
+        let (_dir, registry) = registry();
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/3d1a/calls.js");
+        let output = exec_file(&SANDBOX, &registry, "doc", path.to_str().unwrap(), None)
+            .await
+            .unwrap_or_else(|e| panic!("calls.js: {e}"));
+        let v = value(&output);
+        let plate = 100.0 * 50.0 * 18.0;
+        let want = [
+            ("bulge", (4000.0 + PI * 2500.0 / 2.0) * 6.0),
+            ("clockwise", 24_000.0),
+            ("tube", PI * (400.0 - 100.0) * 50.0),
+            // Pappus: a disc of radius 6 along 100 of line and half a turn
+            // of radius 50.
+            ("sweep", PI * 36.0 * (100.0 + 50.0 * PI)),
+            // Prismatoid: h / 3 (A1 + A2 + sqrt(A1 A2)).
+            ("loft", 100.0 * (1600.0 + 576.0 + 960.0)),
+            ("fromEntity", (1200.0 + 50.0 * PI) * 10.0),
+            ("intersect", 50.0 * 25.0 * 18.0),
+            ("union", plate + 100.0 * 10.0 * 5.0),
+            (
+                "cbore",
+                plate - PI * 6.25 * 18.0 - PI * (20.25 - 6.25) * 3.0,
+            ),
+            ("fillet", plate - (1.0 - PI / 4.0) * 9.0 * 100.0),
+            ("filletNear", plate - (1.0 - PI / 4.0) * 9.0 * 100.0),
+            ("chamfer", plate - 0.5 * 18.0),
+            ("localCut", plate - 10.0 * 50.0 * 18.0),
+        ];
+        for (k, w) in want {
+            let got = v[k].as_f64().unwrap_or_else(|| panic!("{k}: {}", v[k]));
+            assert!(rel_err(got, w) <= 1e-9, "{k}: {got}, want {w}");
+        }
+        assert_box(
+            &v["localCutBox"],
+            [1010.0, 0.0, 0.0],
+            [1100.0, 50.0, 18.0],
+            "local cut",
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_refused_feature_leaves_the_document_unchanged() {
+        let (dir, registry) = registry();
+        let v = assembly(&registry).await;
+        let base = v["ids"]["base"].as_str().unwrap().to_string();
+        let out = program(
+            dir.path(),
+            &registry,
+            &format!(
+                "const snap = () => JSON.stringify([cad.partDef(cad.part('{base}')), cad.parts(), cad.describe()]);\n\
+                 const before = snap();\n\
+                 const errors = [];\n\
+                 for (const call of [\n\
+                   () => cad.cut('{base}', {{ extrude: {{ min: [10, 10], max: [20, 20] }}, distance: 5, taper: 3 }}),\n\
+                   () => cad.fillet3d('{base}', {{ edges: 'all', radius: 50 }}),\n\
+                   () => cad.revolve({{ min: [0, 0], max: [10, 10] }}, {{ axis: [[5, 0], [5, 1]] }}),\n\
+                 ]) {{\n\
+                   try {{ call(); errors.push(null); }} catch (e) {{ errors.push(e.message); }}\n\
+                 }}\n\
+                 return {{ errors, same: snap() === before }};"
+            ),
+        )
+        .await;
+        let errors = out["errors"].as_array().unwrap();
+        assert_eq!(
+            errors[0],
+            format!("cut: part {base} (\"base\"), feature 7 (extrude): a tapered extrude is not supported by this kernel yet").as_str(),
+            "{out}"
+        );
+        // A round larger than the plate is thick: the kernel refuses it.
+        let fillet = errors[1]
+            .as_str()
+            .unwrap_or_else(|| panic!("fillet accepted: {out}"));
+        assert!(
+            fillet.starts_with(&format!(
+                "fillet3d: part {base} (\"base\"), feature 7 (fillet): "
+            )),
+            "{fillet}"
+        );
+        // A profile that crosses its own axis.
+        let revolve = errors[2]
+            .as_str()
+            .unwrap_or_else(|| panic!("revolve accepted: {out}"));
+        assert!(revolve.starts_with("revolve: definition d_"), "{revolve}");
+        assert!(revolve.contains("feature 1 (revolve)"), "{revolve}");
+        assert_eq!(out["same"], true, "{out}");
+    }
+
+    /// The PNG's width and height from its IHDR chunk.
+    fn png_size(bytes: &[u8]) -> (u32, u32) {
+        assert_eq!(&bytes[1..4], b"PNG");
+        let be = |i: usize| u32::from_be_bytes(bytes[i..i + 4].try_into().unwrap());
+        (be(16), be(20))
+    }
+
+    #[cfg(feature = "gpu")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_assembly_renders_in_3d_with_a_cutaway_and_exploded() {
+        let (dir, registry) = registry();
+        assembly(&registry).await;
+        let variants = [
+            ("iso", serde_json::json!({ "view": "iso", "ground": true })),
+            (
+                "cutaway",
+                serde_json::json!({ "view": "iso", "clip": { "point": [200, 150, 0], "normal": [0, -1, 0] } }),
+            ),
+            (
+                "exploded",
+                serde_json::json!({ "view": "iso", "explode": 0.8, "colorBy": { "attr": "group" } }),
+            ),
+        ];
+        for (name, opts) in variants {
+            let out = dir.path().join(format!("{name}.png"));
+            let mut args = opts.clone();
+            args["out"] = serde_json::json!(out.to_string_lossy());
+            args["size"] = serde_json::json!([480, 320]);
+            let program_text = format!("return cad.render({args});");
+            let result =
+                run_script(&SANDBOX, &registry, "doc", &program_text, dir.path(), None).await;
+            let r = match result {
+                Ok(o) => value(&o),
+                Err(e) if e.contains("GPU") || e.contains("adapter") => {
+                    eprintln!("SKIPPED 3D render ({name}): {e}");
+                    return;
+                }
+                Err(e) => panic!("{name}: {e}"),
+            };
+            assert_eq!(r["mode"], "3d", "{r}");
+            assert_eq!(r["parts"], 12, "{r}");
+            let png = std::fs::read(&out).unwrap();
+            assert_eq!(png_size(&png), (480, 320), "{name}");
+            assert_eq!(r["bytes"].as_u64(), Some(png.len() as u64));
+
+            // The same scene drawn to pixels: how much of the image is not
+            // background.
+            let reg = registry.lock().await;
+            let doc = &reg.get("doc").unwrap().document;
+            let opts3 = cadview_render3d::RenderOptions3d {
+                size: [480, 320],
+                ..Default::default()
+            };
+            let scene =
+                cadview_core::solid::scene::parts_scene(doc, &opts, opts3.pixel_size()).unwrap();
+            let px = cadview_render3d::render_rgba(&scene.scene, &opts3).unwrap();
+            let bg = cadview_core::scene3d::LIGHT_BACKGROUND;
+            let ink = px
+                .rgba
+                .chunks(4)
+                .filter(|p| (0..3).any(|i| p[i].abs_diff(bg[i]) > 8))
+                .count();
+            let share = ink as f64 / (480.0 * 320.0);
+            eprintln!(
+                "3D render {name}: {:.1} % of pixels drawn, {} triangles, chord {}",
+                share * 100.0,
+                r["triangles"],
+                r["chord"]
+            );
+            assert!((0.15..0.85).contains(&share), "{name}: {share}");
+        }
+    }
+
     /// Every example loads `lib/drafting.js` through `cad.use` and runs.
     #[tokio::test(flavor = "multi_thread")]
     async fn the_examples_run_with_their_library() {
@@ -1079,6 +1433,113 @@ mod tests {
                 .await
                 .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
             assert!(entity_count(&registry).await > 50, "{}", path.display());
+        }
+    }
+
+    /// Can this machine draw a 3D render? (No GPU: the examples run their
+    /// checks without rendering.)
+    fn renders_3d() -> bool {
+        #[cfg(feature = "gpu")]
+        {
+            let mut scene = cadview_core::scene3d::Scene3d::default();
+            scene.add_mesh(
+                &cadview_core::scene3d::shapes::cuboid(
+                    cadview_core::solid::Point3::ORIGIN,
+                    cadview_core::solid::Point3::new(1.0, 1.0, 1.0),
+                ),
+                cadview_core::solid::Placement::IDENTITY,
+                cadview_core::scene3d::Material::default(),
+            );
+            let opts = cadview_render3d::RenderOptions3d {
+                size: [8, 8],
+                ..Default::default()
+            };
+            match cadview_render3d::render_rgba(&scene, &opts) {
+                Ok(_) => true,
+                Err(e) => {
+                    eprintln!("SKIPPED 3D example renders: {e}");
+                    false
+                }
+            }
+        }
+        #[cfg(not(feature = "gpu"))]
+        false
+    }
+
+    /// Every script in examples/3d runs through the script entry (the one
+    /// `/api/run` uses), passes the checks it makes on itself and returns
+    /// its summary. Its renders go to a temporary folder, never over the
+    /// committed pictures: the test sets `EXAMPLE_RENDER_DIR` (and
+    /// `EXAMPLE_RENDER = false` without a GPU) before the script's text.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_3d_examples_run_and_check_themselves() {
+        let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/3d");
+        let mut scripts: Vec<PathBuf> = std::fs::read_dir(&folder)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| {
+                p.extension().is_some_and(|x| x == "js")
+                    && p.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with(|c: char| c.is_ascii_digit())
+            })
+            .collect();
+        scripts.sort();
+        assert!(scripts.len() >= 9, "{scripts:?}");
+        let draw = renders_3d();
+        for path in scripts {
+            let name = path.file_stem().unwrap().to_string_lossy().to_string();
+            let (dir, registry) = registry();
+            let out = dir.path().join("renders");
+            let prelude = format!(
+                "globalThis.EXAMPLE_RENDER_DIR = {}; globalThis.EXAMPLE_RENDER = {draw};\n",
+                serde_json::to_string(&out.to_string_lossy()).unwrap()
+            );
+            let program = prelude + &std::fs::read_to_string(&path).unwrap();
+            let started = Instant::now();
+            let output = run_script(
+                &SANDBOX,
+                &registry,
+                "doc",
+                &program,
+                &folder,
+                Some(Duration::from_secs(600)),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+            let v = value(&output);
+            eprintln!(
+                "3D example {name}: {} parts, {} checks, {:.1} s ({})",
+                v["parts"],
+                v["checks"],
+                started.elapsed().as_secs_f64(),
+                v["ms"]
+            );
+            assert_eq!(v["example"], name.as_str(), "{v}");
+            assert!(v["parts"].as_u64().unwrap() >= 1, "{v}");
+            assert!(v["checks"].as_u64().unwrap() >= 3, "{v}");
+            assert!(v["volume"].as_f64().unwrap() > 0.0, "{v}");
+            let files = v["files"].as_array().unwrap();
+            if draw {
+                assert!(!files.is_empty(), "{v}");
+                for f in files {
+                    let f = Path::new(f.as_str().unwrap());
+                    assert!(
+                        f.starts_with(&out),
+                        "{name}: {} outside the temporary folder",
+                        f.display()
+                    );
+                    let png = std::fs::read(f).unwrap();
+                    assert_eq!(png_size(&png), (960, 640), "{}", f.display());
+                }
+                assert!(
+                    out.join(format!("{name}.png")).exists(),
+                    "{name}: no isometric render"
+                );
+            } else {
+                assert!(files.is_empty(), "{v}");
+            }
         }
     }
 }

@@ -65,6 +65,8 @@ impl DocumentRegistry {
                 tracing::info!("Created empty slot for '{}'", key);
                 Document::new()
             };
+            let mut doc = doc;
+            doc.solids = crate::solids::env();
 
             let client_id = self.next_server_client_id;
             self.next_server_client_id += 1;
@@ -114,6 +116,8 @@ impl DocumentRegistry {
         doc: Document,
         source_dwg_path: Option<String>,
     ) -> &mut DocumentSlot {
+        let mut doc = doc;
+        doc.solids = crate::solids::env();
         let client_id = self.next_server_client_id;
         self.next_server_client_id += 1;
         let sync_doc = SyncDoc::new(client_id);

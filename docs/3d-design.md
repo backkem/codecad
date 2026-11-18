@@ -122,8 +122,8 @@ wasm was run in Node with stubbed imports.
  cadview-core (wasm32 + native, zero global state)
  ├── document.rs   Document { entities (2D), layers, blocks, ..., solids: SolidStore }
  ├── solid/        feature tree (PartDef, Feature, Profile2d, Placement, Material, AssetRef)
- │   ├── kernel.rs     trait SolidKernel  ── impl ArrisKernel (default) / TruckKernel (tests)
- │   ├── eval.rs       content-hashed evaluation cache: PartDef -> Brep (never synced)
+ │   ├── kernel.rs     trait SolidKernel  ── impl ArrisKernel in the crate cadview-solid
+ │   ├── eval.rs       evaluator a shell supplies + content-keyed cache: PartDef -> solid, meshes (never synced)
  │   ├── mesh.rs       tessellation cache: (Brep hash, tolerance bucket) -> Mesh (never synced)
  │   ├── project.rs    3D -> 2D: HLR, sections, analytic re-fit -> Shape entities in a block
  │   ├── cutlist.rs    flat-part cut list from the feature tree (exact, no kernel needed)
@@ -304,6 +304,18 @@ DWG export ignores all five maps. DWG save stays byte-identical for a
 document whose 2D content is unchanged, and rung 3D1a tests this. JSON
 `cad.save` includes them.
 
+**As built in 3D1a (2026-11-18).** Two of the five maps exist: `partdefs`
+(key `d_<n>`) and `parts` (key `p_<n>`); materials, assets and `scene3d`
+wait for the rungs that use them. A `Part` is `{id, def, placement,
+attrs}`: material, layer and label became attributes or render options
+(4.0). Part and definition ids come from the document's one id counter.
+DWG bytes differ between two saves even with no change, so 3D1a compares
+the DWG's 2D content (entities and layers after a reload) with and without
+parts, and `saveDwg` reports the parts it left out. JSON is `saveJson`
+(lossless), not `cad.save`. The cache lives with the evaluator the shell
+supplies (`solid::eval::SolidEnv`), not in core's own state; see
+`docs/api-surface.md`, "Solid parts".
+
 ### 4.3 Stable references (the "topological naming" problem)
 
 Fillets, chamfers and dimension anchors need to name edges and faces across
@@ -351,10 +363,16 @@ bundle, so ogeom was dropped in 3D0a before anything with it landed.
   store no kernel data, cad-kernel stays on the scoreboard as a second
   opinion, and a kernel of our own remains possible with the harness as
   its gate.
-- **No shipped crate links a kernel yet.** The adapters live in the
-  harness crate. Before arris ships, its recorded wrong cases must be
-  gone from its scoreboard (3d-test-harness.md, section 5): fixed
-  upstream, or turned into refusals by the adapter.
+- **The arris adapter is in a shipped crate, `cadview-solid`; nothing
+  links it yet.** `ArrisKernel` moved there from the harness unchanged
+  (the exact pin, default features off, `paranoid`, the refusals of what
+  arris's checker rejects and of meshes that are not closed). It is the
+  only crate that names arris and it compiles for wasm32. cadview-core
+  still links no kernel; the server and the browser bundle will link
+  `cadview-solid` when they evaluate parts. The harness tests the adapter
+  from there, and a test fails if arris's committed scoreboard records
+  any wrong case (3d-test-harness.md, section 5). It records none since
+  3D0b. cad-kernel stays in the harness, test-only.
 - **Reference backend: [arris](https://github.com/arris-labs/arris)**, pinned
   to `=0.11.1` (`MIT OR Apache-2.0`, pure Rust, no `unsafe`). Default
   features are off: no serde and no rayon, so it starts no threads, and it
@@ -416,7 +434,7 @@ still die or change terms. The plan:
 
 1. **Trait boundary.** All kernel use goes through `SolidKernel` (below). No
    kernel type leaks into the feature tree, the sync format or the API;
-   `solid/arris_kernel.rs` is the only file that names arris.
+   `cadview-solid/src/arris.rs` is the only file that names arris.
 2. **Exact pin + vendoring right.** arris 0.11.1 is `MIT OR Apache-2.0`,
    and so is every crate it adds, so if upstream disappears or relicenses
    we vendor the pinned crate set and maintain the subset we use
@@ -786,6 +804,15 @@ way we do not write a tracer from scratch.
 
 ## 10. Scripting API sketch
 
+**Superseded where it differs by the API built in 3D1a** (reference:
+`docs/api-surface.md`, "Solid parts"): `subtract` is `cut` (with `union`
+and `intersect`), taking an inline tool body or another part; `roundover`
+is `fillet3d`; `copy3d` shares the definition by default (`unique: true`
+for an independent copy), the reverse of the sketch below, so repeated
+parts evaluate once; `board`, `pocket`, `material` and the cut list are
+library code or later rungs (4.0); 3D renders go through the existing
+`cad.render` with a `view`.
+
 New `cad_call` methods, exposed through `cad-api.ts`. All units are document
 mm and all angles degrees, as in the 2D API. Every creation call returns the
 created object with an `id`, and all mutations accept the usual target forms
@@ -928,7 +955,8 @@ Expected cut list (checked by hand, and a golden test in rung 3D3b):
 
 | Crate | Kind | Change | Targets |
 |---|---|---|---|
-| `cadview-core` | core | new `solid/` module (types, eval, kernel trait + `ArrisKernel`, `TruckKernel` behind the `kernel-truck` feature for tests, mesh cache, project, section, cutlist, check); `dispatch_3d.rs`; sync maps | wasm32 + native |
+| `cadview-core` | core | new `solid/` module (types, eval, kernel trait, mesh checks and cache, project, section, cutlist, check); `dispatch_3d.rs`; sync maps. Links no kernel | wasm32 + native |
+| `cadview-solid` | core | new: `ArrisKernel`, the only crate that names arris (exact pin). Built and tested; no shipped crate links it yet | wasm32 + native |
 | `cadview-render` | shell-shared | new (LADDER-NATIVE N0b): the 2D Vello scene builder, camera, LOD and path cache, extracted from `cadview-web` | wasm32 + native |
 | `cadview-render3d` | shell-shared | new: `Renderer3d` trait, Kiss3d backend, scene sync, camera, headless | wasm32 + native |
 | `cadview-store` | shell-shared | new (LADDER-NATIVE N2b): `DocumentStore` trait, `SingleFileStore`, `FolderStore`, moved out of `cadview-server` | native |

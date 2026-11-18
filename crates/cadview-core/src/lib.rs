@@ -11,6 +11,7 @@ pub mod annotate;
 pub mod attrs;
 pub mod construct;
 pub mod dispatch;
+pub mod dispatch_3d;
 pub mod dispatch_ext;
 pub mod document;
 pub mod dwg;

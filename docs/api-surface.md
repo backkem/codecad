@@ -175,9 +175,10 @@ cad.render({
 Same picture as the browser's Vello view (decided by
 `cadview_core::render`, drawn by `cadview-render`). In the browser,
 `cad.render` flushes pending sync first, like `savePdf`. Unknown fields
-are ignored, so the 3D form `cad.render({out, size, spp})` from
-`docs/3d-design.md` already parses; `spp` has no effect in 2D. The same
-render is available from the CLI:
+are ignored; `spp` has no effect yet. With a `view` (or `mode: "3d"`, or a
+document that has solid parts and no 2D entities) it draws the parts in 3D
+instead: see "Solid parts", "Render". The same render is available from
+the CLI:
 `cadview-server drawing.dwg --render out.png --size 960x640
 --render-backend auto`.
 
@@ -688,6 +689,211 @@ const most = Math.max(...cad.entities(items).map((e) => e.attrs.free));
 const tight = cad.pairsWithin(items, null, most, { attrs: true }).pairs
   .filter((p) => p.distance < Math.max(p.aAttrs.free, p.bAttrs.free));
 ```
+
+---
+
+## Solid parts
+
+Built in rung 3D1a (`docs/LADDER-3D.md`). A script builds exact solid parts,
+the document stores and syncs them, and a script asks about them and renders
+them. The core speaks a general shape language (`docs/3d-design.md`, section
+4.0): no part kinds, no materials with meaning, no grain, no joinery words.
+A domain library (woodworking, sheet metal, enclosures) builds its own
+vocabulary from these calls and keeps its meaning in attributes.
+
+```js
+const side  = cad.extrude({ min: [0, 0], max: [300, 1782] },
+                          { plane: "yz", distance: 18, attrs: { part: "side" } });
+const shelf = cad.extrude({ min: [12, 6], max: [788, 300] }, { at: [0, 0, 400], distance: 18 });
+cad.cut(side, { extrude: { min: [6, 400], max: [300, 418] }, plane: "yz", at: [12, 0, 0], distance: 6 });
+cad.hole(shelf, { at: [50, 40, 418], dir: [0, 0, -1], dia: 8, depth: 12 });
+const right = cad.copy3d(side, { rotate: { angle: 180, about: [400, 150, 0] } });
+cad.parts({ attrs: { part: "side" } });   // ids, attrs, placement, bbox, volume, centroid
+cad.render({ view: "iso", out: "shelf.png" });
+```
+
+Units are drawing units (mm), angles degrees, and Z is up. The 2D drawing
+plane is world XY at z = 0.
+
+### The part model
+
+| Choice | Decision | Why |
+|---|---|---|
+| What a part is | A **definition** (`PartDef`: an id, a name and an ordered feature list in its own frame) placed by a **part** (a rigid placement and attributes). Features: extrude, revolve, sweep, loft, hole, boolean with a tool, fillet, chamfer. | Shape only. What the shape is for lives in the script. |
+| Ids | Parts take numbers from the document's one id counter, the one entities use, and print as `p_12`; definitions print as `d_3`; entities stay `e_7`. | One counter: a number is never both. Separate prefixes: a part id passed where an entity is expected fails instead of picking something else. |
+| Definitions and instances | `copy3d` places the same definition again, with no re-evaluation; parts differ in placement and attributes. A modifying call changes the part's **definition**, so every part that shares it changes too, like editing a block definition. `copy3d(p, { unique: true })` gives copies with definitions of their own. | Repeated parts (shelves, pins, legs) are one shape. Editing it once is the common case; a variant is asked for. |
+| Coordinates in modifying calls | World coordinates, moved into the part's own frame before they are stored. `frame: "local"` gives them in that frame directly. | A script cuts where it sees the part. Because definitions are shared, a cut through one copy appears at the same place on every copy (in each one's frame). |
+| A part as a tool | `cut(a, { part: b })` stores b's definition and b's placement relative to a at the time of the call. Moving b later does not move the cut; editing b's definition does change it. A definition used as a tool stays while any part uses it, directly or as a tool. A part can never reach itself through its tools. | The definition stays self-contained in its own frame, so instances keep sharing it. A live link to b's placement would give each instance a different cut. |
+| Profiles | Exact lines and arcs (`Profile2d`), never flattened: vertex lists with bulges (`[x, y, bulge]`), `{center, radius}`, `{min, max}`, a closed 2D entity (closed polyline, circle, full ellipse, closed spline) by id or object, or `{outer, holes}` of any of these (the shape `regionClip` returns; its rings are already polygons). | "Draw the outline in 2D, then extrude it" with no loss. |
+| Sketch planes | `"xy"` (u along X, normal +Z), `"xz"` (u along X, v along Z, normal -Y, so right-handed), `"yz"` (u along Y, v along Z, normal +X), or `{origin, x, normal}`; `at` moves the origin. | Z up; the three principal planes cover most parts, a general plane the rest. |
+| Attributes | The same `attrs` mechanism as entities: same value types, keys and limits, never interpreted. | One way for a script to mark its facts. |
+| Selection | The entity selector's shape: an id, a list, or `{ids, def, attrs, has, bounds}`. `bounds` is a box (`min`, `max` with 3 coordinates) or a plan rectangle (2 coordinates, every height) and needs a kernel. Parts have no layer or type. | A script filters parts the way it filters entities. Layers are 2D grouping; a part's grouping is an attribute. |
+
+### Where the geometry comes from
+
+cadview-core links no kernel. A shell that has one hands each document an
+evaluator (`Document::solids`, a `SolidEnv`): the server gives every
+document the arris adapter from `crates/cadview-solid`. It is shell state:
+never synced, serialized or undone.
+
+- **With a kernel** (server scripts, `/api/run`, the CLI) every new or
+  changed definition is evaluated before it is stored, and so is every
+  definition that uses it as a tool. A refusal fails the call and leaves the
+  document as it was:
+  `cut: part p_2 ("base"), feature 7 (extrude): a tapered extrude is not supported by this kernel yet`.
+  The message names the call, the part (or `definition d_4` for a new part
+  that was refused), the feature number and kind, and the reason. A call
+  whose result the kernel builds but cannot measure (its box or volume)
+  fails the same way and changes nothing, since the part could be neither
+  queried nor rendered.
+- **Without a kernel** (the browser today) part calls check the input's
+  shape (closed profiles, sane numbers, known ids) and store and sync it.
+  Geometry fails with `this build has no solid kernel: ...`: `parts()` and
+  `part()` with geometry (default), `bounds` in a selector, and 3D renders.
+  `parts({ geometry: false })` lists parts in every build.
+- **The evaluation cache** lives in the `SolidEnv`, so in the shell, next to
+  the evaluator. It is keyed by content: the bytes of a definition's features
+  plus those of every tool definition it reaches. The same features evaluate
+  once, whichever part, copy or document holds them; an edit changes the key,
+  so a stale result is never used; undo usually finds the old key still
+  cached. Meshes are cached per entry and chord. The server shares one cache
+  between its documents. The least recently used entries go past 4096.
+
+### How parts survive
+
+| Path | Behaviour |
+|---|---|
+| Yrs sync | Two maps of their own: `partdefs` (one bincode `PartDef` per `d_<n>`) and `parts` (one `Part` per `p_<n>`), diffed by content hash like entities. Concurrent edits to one definition are last-writer-wins on that definition. Meshes and B-reps are never synced; each peer derives them. |
+| Undo, redo | Part of the snapshot (`cad.checkpoint()` before, as for 2D). |
+| `clear` | Removes parts and definitions too. |
+| JSON | `saveJson` / `loadJson` keep definitions and parts exactly (numbers bit for bit). Files from before parts load with none. |
+| DWG | `saveDwg` writes the 2D content only and says so: `parts: {dropped, defs, note}` in its result. The 2D content of the DWG is the same with or without parts. |
+| PDF, 2D PNG | Ignore parts. |
+
+### Calls
+
+Creating calls take `attrs` and `name` and return the new part. Modifying
+calls take one part (an id, a part object, or a selector that picks exactly
+one), add a feature to its definition and return the part. With a kernel,
+the returned part carries its geometry.
+
+```js
+// Create
+cad.extrude(profile, { plane, at, distance, taper, attrs, name })
+cad.extrude([[0, 0], [100, 0], [100, 40, 1], [0, 40]], { distance: 6 })   // a bulge: an exact arc
+cad.revolve(profile, { plane, at, axis: [[u0, v0], [u1, v1]], angle: 360, attrs, name })
+cad.revolve({ min: [10, 0], max: [20, 50] }, { plane: "xz", axis: [[0, 0], [0, 1]] })  // a tube
+cad.sweep(profile, path, { plane, at, attrs, name })   // path: [{to}, {via, to}, ...] from the plane origin
+cad.sweep({ center: [0, 0], radius: 6 }, [{ to: [0, 0, 100] }, { via: [50, 0, 150], to: [100, 0, 100] }])
+cad.loft(sections, { ruled, attrs, name })             // sections: [{profile, plane, at}, ...]
+cad.loft([{ profile: { min: [-20, -20], max: [20, 20] } },
+          { profile: { min: [-12, -12], max: [12, 12] }, at: [0, 0, 300] }], { ruled: true })
+
+// Modify: a tool is {extrude|revolve|sweep|loft: ..., <its options>} or {part}
+cad.cut(part, { extrude: { min: [0, 20], max: [100, 30] }, at: [0, 0, 12], distance: 6 })
+cad.union(part, { extrude: lip, at: [0, 0, 110], distance: 5 })
+cad.intersect(part, { part: other })
+cad.hole(part, { at: [20, 10, 18], dir: [0, 0, -1], dia: 8, depth: 12 })   // depth: mm or "through" (default)
+cad.hole(part, { at: [60, 10, 18], dia: 5, cbore: [9, 3] })               // counterbore [dia, depth]
+cad.fillet3d(part, { edges: { cap: "end" }, radius: 3, fallback: "error" })
+cad.chamfer3d(part, { edges: { lateral: [0] }, d: 1 })
+
+// Place
+cad.move3d(target, [dx, dy, dz])
+cad.rotate3d(target, { angle: 90, axis: [0, 0, 1], about: [0, 0, 0] })
+cad.copy3d(part, { move: [0, 0, 300], count: 4 })        // a row of four, sharing the definition
+cad.copy3d(part, { rotate: { angle: 90, about: [0, 0, 0] }, count: 3, unique: true })
+cad.remove3d(target)                                     // -> {removed, defsRemoved}
+
+// Attributes
+cad.setPartAttrs({ has: ["part"] }, { checked: true })
+cad.removePartAttrs("p_12", ["checked"])
+
+// Query
+cad.parts({ attrs: { part: "shelf" } })
+// [{ id: "p_12", def: "d_3", name, placement: { translation, rotation: [w, x, y, z] },
+//    features: [{ id: 1, kind: "extrude" }, ...], instances: 2, attrs,
+//    bbox: { min, max }, localBbox: { min, max }, volume, centroid }]
+cad.parts({ geometry: false })     // without box, volume, centroid: works in every build
+cad.part("p_12")
+cad.partDef("d_3")                 // the whole feature tree, the parts using it, its tools
+cad.describe()                     // ... parts, partDefs, partAttrs, solidKernel
+```
+
+Edge selectors name edges by meaning, never by kernel topology
+(`docs/3d-design.md`, 4.3): `"all"`, `{cap: "start" | "end" | "both",
+feature?, segs?}` (the edges of an extrude's caps, by profile segment
+index), `{lateral: [segs], feature?}` (edges swept from profile vertices),
+or `{near: [[x, y, z], ...]}` (the edge nearest each point, in world
+coordinates). `feature` defaults to the definition's first feature; feature
+ids are listed in `parts()`.
+
+`bbox` is the tight box of the exact solid in the world; `localBbox` the
+same in the part's own frame (what a cut list wants). `volume` is
+integrated on the exact faces (no mesh); `centroid` is in the world, or
+null where a kernel computes no first moments.
+
+What the kernel (arris 0.11.1) does not do yet, and refuses: tapered
+extrudes, asymmetric chamfers, spline profile segments, elliptic segments
+in a revolve, and fillets whose corners it has no closed form for. Each is
+a refusal with the message above.
+
+### Render
+
+`cad.render` draws the parts when it gets a `view` (or `mode: "3d"`, or the
+document has parts and no 2D entities). It takes the 2D options (`out`,
+`size`, `pixelRatio`, `backend`: "auto" or "gpu") and these:
+
+```js
+cad.render({
+  out: "renders/assembly.png", size: [960, 640],
+  view: "iso",                 // iso (south-east) | iso-sw | iso-ne | iso-nw | front | back | left | right | top | bottom
+  projection: "orthographic",  // or "perspective"
+  select: { attrs: { part: "shelf" } },        // which parts (default all)
+  colorBy: "part",             // "part" | "def" | { attr: "key" } ("#rrggbb" values are colours)
+  edges: true, occlusion: true,                // occlusion: true | false | strength 0..1
+  ground: true,                // or { height, color }: a contact shadow
+  background: "light",         // "light" | "viewer" | [r, g, b] | "#rrggbb"
+  clip: { point: [200, 150, 0], normal: [0, -1, 0] },   // cutaway, up to 4 planes
+  clipMode: "any",             // remove what is beyond any plane; "all": beyond every plane (two planes: a quarter cutaway)
+  explode: 0.8,                // or { factor, axes: "xyz" }
+  chord: 0.25,                 // mm; default a quarter pixel, as a power of two
+})
+// -> { ok, path, width, height, backend: "gpu", bytes, ms, mode: "3d", parts, triangles, chord, kernel }
+```
+
+The scene is decided in core (`cadview_core::solid::scene`): which parts,
+colours, the tolerance, view, cues, cuts. The colour attribute is a render
+option, not part data. Colours follow the document's part order, so a part
+keeps its colour in a view that `select`s only some parts. The server draws it with `cadview-render3d` on the
+GPU device the 2D renderer uses; there is no CPU path for 3D yet.
+
+### A domain library on top
+
+A woodworking library is script code over these calls. It never reaches
+the core:
+
+```js
+// lib/boards.js
+function board(name, [w, l], t, { plane = "xy", at = [0, 0, 0], ...attrs } = {}) {
+  return cad.extrude({ min: [0, 0], max: [w, l] },
+                     { plane, at, distance: t, name, attrs: { board: name, t, ...attrs } });
+}
+function dado(part, { plane, at, from, to, depth }) {
+  return cad.cut(part, { extrude: { min: from, max: to }, plane, at, distance: depth });
+}
+const cutList = () => cad.parts({ has: ["board"] }).map((p) => ({
+  name: p.attrs.board, size: [0, 1, 2].map((i) => p.localBbox.max[i] - p.localBbox.min[i]),
+}));
+return { board, dado, cutList };
+```
+
+### Not yet
+
+Interference and distance between parts, projected 2D views, sections, a
+browser viewport and a kernel in the browser, materials, assets and
+`scene3d` settings, live tool links (`ToolRef::Part`) and clearances on
+tool parts are later rungs (3D1b to 3D6b).
 
 ---
 

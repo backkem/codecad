@@ -27,23 +27,12 @@ pub fn render_to_file(doc: &Document, args: &str, base: &Path) -> Result<Value, 
         Some(other) => return Err(format!("render: out must be a path, got {other}")),
     };
     let opts = RenderOptions::from_json(args)?;
+    if cadview_core::solid::scene::wants_3d(doc, &a).map_err(|e| format!("render: {e}"))? {
+        return render_3d(doc, &a, &opts, out, base, start);
+    }
     let rendered = cadview_render::render_png(doc, &opts).map_err(|e| format!("render: {e}"))?;
 
-    let path = {
-        let p = Path::new(out);
-        if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            base.join(p)
-        }
-    };
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("render: create {}: {e}", parent.display()))?;
-        }
-    }
-    std::fs::write(&path, &rendered.png).map_err(|e| format!("render: write {out}: {e}"))?;
+    let path = write_png(out, base, &rendered.png)?;
 
     let ms = (start.elapsed().as_secs_f64() * 1000.0 * 10.0).round() / 10.0;
     tracing::info!(
@@ -68,6 +57,98 @@ pub fn render_to_file(doc: &Document, args: &str, base: &Path) -> Result<Value, 
         "bytes": rendered.png.len(),
         "ms": ms,
     }))
+}
+
+/// Write `png` to `out`, resolved against `base` when relative, creating
+/// its folder. Returns the path written.
+fn write_png(out: &str, base: &Path, png: &[u8]) -> Result<std::path::PathBuf, String> {
+    let path = {
+        let p = Path::new(out);
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            base.join(p)
+        }
+    };
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("render: create {}: {e}", parent.display()))?;
+        }
+    }
+    std::fs::write(&path, png).map_err(|e| format!("render: write {out}: {e}"))?;
+    Ok(path)
+}
+
+/// The 3D branch of `cad.render`: the document's parts, shaded. Core builds
+/// the scene (`cadview_core::solid::scene`); `cadview-render3d` draws it on
+/// the process-wide GPU device.
+#[cfg(feature = "gpu")]
+fn render_3d(
+    doc: &Document,
+    a: &Value,
+    opts: &RenderOptions,
+    out: &str,
+    base: &Path,
+    start: Instant,
+) -> Result<Value, String> {
+    use cadview_render3d::{Quality, RenderOptions3d};
+    if opts.backend == cadview_render::Backend::Cpu {
+        return Err("render: 3D renders need the GPU (backend \"auto\" or \"gpu\")".into());
+    }
+    let quality = match a.get("quality").and_then(Value::as_str) {
+        None => Quality::Working,
+        Some(q) => q.parse::<Quality>().map_err(|e| format!("render: {e}"))?,
+    };
+    let opts3 = RenderOptions3d {
+        size: opts.size,
+        pixel_ratio: opts.pixel_ratio,
+        background: None,
+        quality,
+        fit: true,
+    };
+    opts3.validate().map_err(|e| format!("render: {e}"))?;
+    let built = cadview_core::solid::scene::parts_scene(doc, a, opts3.pixel_size())
+        .map_err(|e| format!("render: {e}"))?;
+    let rendered =
+        cadview_render3d::render_png(&built.scene, &opts3).map_err(|e| format!("render: {e}"))?;
+    let path = write_png(out, base, &rendered.png)?;
+    let ms = (start.elapsed().as_secs_f64() * 1000.0 * 10.0).round() / 10.0;
+    tracing::info!(
+        "Rendered {} parts in 3D, {}x{} PNG on {} to {} ({} bytes, {ms} ms)",
+        built.parts,
+        rendered.width,
+        rendered.height,
+        rendered.adapter,
+        path.display(),
+        rendered.png.len(),
+    );
+    Ok(json!({
+        "ok": true,
+        "path": path.to_string_lossy(),
+        "width": rendered.width,
+        "height": rendered.height,
+        "backend": "gpu",
+        "bytes": rendered.png.len(),
+        "ms": ms,
+        "mode": "3d",
+        "parts": built.parts,
+        "triangles": built.triangles,
+        "chord": built.chord,
+        "kernel": built.kernel,
+    }))
+}
+
+#[cfg(not(feature = "gpu"))]
+fn render_3d(
+    _doc: &Document,
+    _a: &Value,
+    _opts: &RenderOptions,
+    _out: &str,
+    _base: &Path,
+    _start: Instant,
+) -> Result<Value, String> {
+    Err("render: this server was built without the gpu feature; 3D renders need it".into())
 }
 
 #[cfg(test)]

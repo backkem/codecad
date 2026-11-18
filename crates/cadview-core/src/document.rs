@@ -1,10 +1,11 @@
 use crate::attrs::Attrs;
 use crate::geo;
+use crate::solid::{DefId, Part, PartDef, SolidEnv};
 use crate::tessellate::mirror_affine;
 use crate::types::*;
 use kurbo::{Affine, Circle, Line, Point};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::f64::consts::PI;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,6 +115,8 @@ struct Snapshot {
     entities: Vec<DrawEntity>,
     blocks: HashMap<String, BlockDef>,
     linetypes: HashMap<String, LinetypeDef>,
+    part_defs: BTreeMap<DefId, PartDef>,
+    parts: Vec<Part>,
     next_id: u64,
 }
 
@@ -123,6 +126,13 @@ pub struct Document {
     pub entities: Vec<DrawEntity>,
     pub blocks: HashMap<String, BlockDef>,
     pub linetypes: HashMap<String, LinetypeDef>,
+    /// Solid part definitions (feature trees, shape only), by id.
+    pub part_defs: BTreeMap<DefId, PartDef>,
+    /// Placed parts in id order; several may share one definition.
+    pub parts: Vec<Part>,
+    /// The evaluator a shell supplies for part geometry (`solid::eval`).
+    /// Shell state: never synced, serialized or undone.
+    pub solids: SolidEnv,
     next_id: u64,
     undo_stack: Vec<Snapshot>,
     redo_stack: Vec<Snapshot>,
@@ -163,6 +173,9 @@ impl Document {
             entities: Vec::new(),
             blocks: HashMap::new(),
             linetypes: standard_linetypes(),
+            part_defs: BTreeMap::new(),
+            parts: Vec::new(),
+            solids: SolidEnv::none(),
             next_id: 1,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
@@ -171,18 +184,35 @@ impl Document {
 
     /// Save current state to undo stack. Call before any mutation.
     pub fn checkpoint(&mut self) {
-        self.undo_stack.push(Snapshot {
-            layers: self.layers.clone(),
-            entities: self.entities.clone(),
-            blocks: self.blocks.clone(),
-            linetypes: self.linetypes.clone(),
-            next_id: self.next_id,
-        });
+        let snap = self.snapshot();
+        self.undo_stack.push(snap);
         self.redo_stack.clear();
         // Cap at 50 snapshots
         if self.undo_stack.len() > 50 {
             self.undo_stack.remove(0);
         }
+    }
+
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            layers: self.layers.clone(),
+            entities: self.entities.clone(),
+            blocks: self.blocks.clone(),
+            linetypes: self.linetypes.clone(),
+            part_defs: self.part_defs.clone(),
+            parts: self.parts.clone(),
+            next_id: self.next_id,
+        }
+    }
+
+    fn restore(&mut self, snap: Snapshot) {
+        self.layers = snap.layers;
+        self.entities = snap.entities;
+        self.blocks = snap.blocks;
+        self.linetypes = snap.linetypes;
+        self.part_defs = snap.part_defs;
+        self.parts = snap.parts;
+        self.next_id = snap.next_id;
     }
 
     pub fn undo_depth(&self) -> usize {
@@ -191,18 +221,9 @@ impl Document {
 
     pub fn undo(&mut self) -> bool {
         if let Some(snap) = self.undo_stack.pop() {
-            self.redo_stack.push(Snapshot {
-                layers: self.layers.clone(),
-                entities: self.entities.clone(),
-                blocks: self.blocks.clone(),
-                linetypes: self.linetypes.clone(),
-                next_id: self.next_id,
-            });
-            self.layers = snap.layers;
-            self.entities = snap.entities;
-            self.blocks = snap.blocks;
-            self.linetypes = snap.linetypes;
-            self.next_id = snap.next_id;
+            let now = self.snapshot();
+            self.redo_stack.push(now);
+            self.restore(snap);
             true
         } else {
             false
@@ -211,27 +232,54 @@ impl Document {
 
     pub fn redo(&mut self) -> bool {
         if let Some(snap) = self.redo_stack.pop() {
-            self.undo_stack.push(Snapshot {
-                layers: self.layers.clone(),
-                entities: self.entities.clone(),
-                blocks: self.blocks.clone(),
-                linetypes: self.linetypes.clone(),
-                next_id: self.next_id,
-            });
-            self.layers = snap.layers;
-            self.entities = snap.entities;
-            self.blocks = snap.blocks;
-            self.linetypes = snap.linetypes;
-            self.next_id = snap.next_id;
+            let now = self.snapshot();
+            self.undo_stack.push(now);
+            self.restore(snap);
             true
         } else {
             false
         }
     }
 
+    /// Replace everything the document holds with `other`'s content, keeping
+    /// this document's solid environment (shell state). For loads that build
+    /// a fresh document (JSON, DWG, a rebuild from sync).
+    pub fn replace_keeping_solids(&mut self, other: Document) {
+        let solids = std::mem::take(&mut self.solids);
+        *self = other;
+        self.solids = solids;
+    }
+
+    /// The largest id in use by an entity, a part or a definition (0 when
+    /// there is none).
+    pub fn max_used_id(&self) -> u64 {
+        let e = self.entities.iter().map(|e| e.id.0).max().unwrap_or(0);
+        let p = self.parts.iter().map(|p| p.id.0).max().unwrap_or(0);
+        let d = self.part_defs.keys().map(|d| d.0).max().unwrap_or(0);
+        e.max(p).max(d)
+    }
+
+    pub fn part(&self, id: EntityId) -> Option<&Part> {
+        self.parts.iter().find(|p| p.id == id)
+    }
+
+    pub fn part_mut(&mut self, id: EntityId) -> Option<&mut Part> {
+        self.parts.iter_mut().find(|p| p.id == id)
+    }
+
+    /// A new definition id from the shared id counter.
+    pub(crate) fn alloc_def_id(&mut self) -> DefId {
+        DefId(self.alloc_id().0)
+    }
+
     /// Set the next entity ID counter (used when restoring from external state).
     pub fn set_next_id(&mut self, id: u64) {
         self.next_id = id;
+    }
+
+    /// The id the next new entity, part or definition gets.
+    pub fn next_id(&self) -> u64 {
+        self.next_id
     }
 
     pub(crate) fn alloc_id(&mut self) -> EntityId {
@@ -1187,10 +1235,17 @@ struct DocumentFile {
     linetypes: std::collections::BTreeMap<String, LinetypeDef>,
     blocks: std::collections::BTreeMap<String, BlockDef>,
     entities: Vec<DrawEntity>,
+    /// Solid part definitions; absent in files from before parts.
+    #[serde(default, rename = "partDefs")]
+    part_defs: Vec<PartDef>,
+    /// Placed parts; absent in files from before parts.
+    #[serde(default)]
+    parts: Vec<Part>,
 }
 
 /// The whole document as JSON: layers, linetypes, blocks and entities with
-/// their attributes, ids and ByLayer styles, exactly as stored. Numbers
+/// their attributes, ids and ByLayer styles, and solid part definitions and
+/// parts, exactly as stored. Numbers
 /// round-trip bit for bit. The lossless format; DWG drops what it cannot
 /// hold (see `dwg_attr_losses`).
 pub fn document_to_json(doc: &Document) -> Result<String, String> {
@@ -1202,6 +1257,8 @@ pub fn document_to_json(doc: &Document) -> Result<String, String> {
         linetypes: doc.linetypes.clone().into_iter().collect(),
         blocks: doc.blocks.clone().into_iter().collect(),
         entities: doc.entities.clone(),
+        part_defs: doc.part_defs.values().cloned().collect(),
+        parts: doc.parts.clone(),
     };
     serde_json::to_string(&file).map_err(|e| format!("saveJson: {e}"))
 }
@@ -1223,13 +1280,26 @@ pub fn document_from_json(text: &str) -> Result<Document, String> {
             file.version
         ));
     }
-    let max_id = file.entities.iter().map(|e| e.id.0).max().unwrap_or(0);
     let mut doc = Document::new();
     doc.layers = file.layers;
     doc.linetypes = file.linetypes.into_iter().collect();
     doc.blocks = file.blocks.into_iter().collect();
     doc.entities = file.entities;
-    doc.next_id = file.next_id.max(max_id + 1);
+    doc.part_defs = file.part_defs.into_iter().map(|d| (d.id, d)).collect();
+    doc.parts = file.parts;
+    doc.parts.sort_by_key(|p| p.id.0);
+    if let Some(p) = doc
+        .parts
+        .iter()
+        .find(|p| !doc.part_defs.contains_key(&p.def))
+    {
+        return Err(format!(
+            "loadJson: part {} uses definition {}, which the file does not hold",
+            crate::solid::part::part_key(p.id),
+            crate::solid::part::def_key(p.def)
+        ));
+    }
+    doc.next_id = file.next_id.max(doc.max_used_id() + 1);
     Ok(doc)
 }
 

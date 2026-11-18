@@ -680,7 +680,11 @@ fn globals(frame: &Frame3d<'_>) -> Vec<u8> {
         &[
             frame.clip_planes.len() as f32,
             (width * frame.pixel_ratio) as f32,
-            0.0,
+            // 1: remove only what lies beyond every plane.
+            match frame.clip_mode {
+                cadview_core::scene3d::ClipMode::Any => 0.0,
+                cadview_core::scene3d::ClipMode::All => 1.0,
+            },
             0.0,
         ],
     );

@@ -260,8 +260,73 @@ export interface RenderOptions {
   backend?: "auto" | "gpu" | "cpu";
   /** Device pixels per CSS pixel; scales size and stroke width. Default 1. */
   pixelRatio?: number;
-  /** Samples per pixel for future 3D renders; ignored in 2D. */
+  /** Samples per pixel for future path-traced renders; ignored today. */
   spp?: number;
+
+  // ── 3D: the document's solid parts (server with a kernel and a GPU) ──
+  /**
+   * "3d" draws the parts, "2d" the drawing. Default: 3D when `view` is
+   * given, or when the document has parts and no 2D entities.
+   */
+  mode?: "2d" | "3d";
+  /**
+   * Named view. Default "iso", the south-east isometric corner (also
+   * "iso-se"); "iso-sw", "iso-ne" and "iso-nw" are the other three.
+   */
+  view?:
+    | "iso"
+    | "isometric"
+    | "iso-se"
+    | "iso-sw"
+    | "iso-ne"
+    | "iso-nw"
+    | "front"
+    | "back"
+    | "left"
+    | "right"
+    | "top"
+    | "bottom";
+  /** Default "orthographic". */
+  projection?: "orthographic" | "perspective";
+  /** Which parts to draw (default all). */
+  select?: PartTarget | null;
+  /**
+   * Colours: "part" (default, one palette colour per part), "def" (one per
+   * definition), or {attr: key} (one per value of that attribute; a value
+   * written "#rrggbb" is used as the colour). A render option only: the
+   * core gives the attribute no other meaning.
+   */
+  colorBy?: "part" | "def" | { attr: string };
+  /** Sharp edges and silhouettes over the shading. Default true. */
+  edges?: boolean;
+  /** Ambient occlusion: true (default), false, or a strength 0..1. */
+  occlusion?: boolean | number;
+  /** A ground with a contact shadow: true, or {height?, color?}. Default none. */
+  ground?:
+    | boolean
+    | { height?: number; color?: [number, number, number] | string };
+  /** [r, g, b], "#rrggbb", "light" (default) or "viewer" (the 2D viewer's dark). */
+  background?: [number, number, number] | string;
+  /** Cutaway: up to 4 planes; each removes the side its normal points into. */
+  clip?: ClipPlane | ClipPlane[];
+  /**
+   * With several clip planes: "any" (default) removes what lies beyond any
+   * plane; "all" removes only what lies beyond every plane (a quarter
+   * cutaway from two planes).
+   */
+  clipMode?: "any" | "all";
+  /** Exploded view: a factor, or {factor, axes: "xyz"}. */
+  explode?: number | { factor?: number; axes?: string };
+  /** Tessellation chord in mm. Default: a quarter pixel, as a power of two. */
+  chord?: number;
+  /** "working" (default). "presentation" is not available yet. */
+  quality?: "working" | "presentation";
+}
+
+export interface ClipPlane {
+  point: Point3;
+  /** Points into the side that is removed. */
+  normal: Point3;
 }
 
 export interface RenderResult {
@@ -272,6 +337,161 @@ export interface RenderResult {
   backend: "gpu" | "cpu";
   bytes: number;
   ms: number;
+  /** 3D renders only. */
+  mode?: "3d";
+  parts?: number;
+  triangles?: number;
+  chord?: number;
+  kernel?: string;
+}
+
+// ── Solid parts ──────────────────────────────────────────────────────
+
+/** A 3D point or vector [x, y, z] in mm (Z up). */
+export type Point3 = [number, number, number];
+
+/**
+ * One closed profile loop, kept exact (lines and arcs, never flattened):
+ * vertices ([x, y] or [x, y, bulge]), a circle, a rectangle, or a closed 2D
+ * entity (closed polyline, circle, full ellipse, closed spline).
+ */
+export type ProfileLoop =
+  | Vertex[]
+  | { center: Point2; radius: number }
+  | { min: Point2; max: Point2 }
+  | EntityRef;
+
+/** A profile: one loop, or an outer loop with holes (the shape regionClip returns). */
+export type Profile =
+  | ProfileLoop
+  | { outer: ProfileLoop; holes?: ProfileLoop[] };
+
+/**
+ * A sketch plane. "xy": u along X, normal +Z. "xz": u along X, v along Z,
+ * normal -Y. "yz": u along Y, v along Z, normal +X. Or a general plane.
+ */
+export type Plane =
+  | "xy"
+  | "xz"
+  | "yz"
+  | { origin?: Point3; x: Point3; normal: Point3 };
+
+export interface SketchOpts {
+  plane?: Plane;
+  /** Moves the plane's origin here. */
+  at?: Point3;
+}
+
+/** A path segment: a line to `to`, or an arc through `via` to `to`. */
+export type PathSeg = { to: Point3 } | { via: Point3; to: Point3 };
+
+export interface LoftSection extends SketchOpts {
+  profile: Profile;
+}
+
+export interface NewPartOpts {
+  /** The part's attributes (the script's own facts; never interpreted). */
+  attrs?: Attrs;
+  /** A name for the definition, for messages and reports. */
+  name?: string;
+}
+
+/** A placed part as cad.parts() reports it. */
+export interface PartJson {
+  /** "p_12": parts share the id counter with entities ("e_12") but not the prefix. */
+  id: string;
+  /** "d_3": the definition (feature tree) this part places. */
+  def: string;
+  name: string;
+  /** Definition frame to world: rotation as a unit quaternion [w, x, y, z]. */
+  placement: {
+    translation: Point3;
+    rotation: [number, number, number, number];
+  };
+  features: { id: number; kind: string }[];
+  /** How many parts share the definition. */
+  instances: number;
+  attrs?: Attrs;
+  /** With a kernel: tight box in the world and in the part's own frame. */
+  bbox?: { min: Point3; max: Point3 };
+  localBbox?: { min: Point3; max: Point3 };
+  /** With a kernel: exact volume (mm^3) and centroid (world). */
+  volume?: number;
+  centroid?: Point3 | null;
+  _session?: string;
+}
+
+/** Which parts a call works on: the entity selector's shape, for parts. */
+export interface PartSelector {
+  ids?: string[];
+  /** Parts of this definition. */
+  def?: string;
+  attrs?: Record<string, AttrValue | null>;
+  has?: string[];
+  /** Box overlap: 3 coordinates, or 2 for the plan (every height). Needs a kernel. */
+  bounds?: { min: number[]; max: number[] };
+}
+
+type PartRef = string | PartJson;
+/** A part, several, or a part selector. */
+export type PartTarget = PartRef | PartRef[] | PartSelector;
+
+/** A body for cut, union and intersect: a feature, or another part as placed now. */
+export type Tool =
+  | (SketchOpts & { extrude: Profile; distance: number; taper?: number })
+  | (SketchOpts & { revolve: Profile; axis: [Point2, Point2]; angle?: number })
+  | (SketchOpts & { sweep: Profile; path: PathSeg[] })
+  | { loft: LoftSection[]; ruled?: boolean }
+  | { part: PartRef };
+
+/** Edges by meaning, never by kernel topology. `feature` defaults to the first. */
+export type EdgeSel =
+  | "all"
+  | { cap: "start" | "end" | "both"; feature?: number; segs?: number[] }
+  | { lateral: number[]; feature?: number }
+  | { near: Point3[] };
+
+/** Positions in world coordinates (default) or in the part's own frame. */
+export interface FrameOpts {
+  frame?: "world" | "local";
+}
+
+function partRef(p: PartRef): string {
+  return typeof p === "string" ? p : p.id;
+}
+
+function normalizePartTarget(t: PartTarget): string | string[] | PartSelector {
+  if (typeof t === "string") return t;
+  if (Array.isArray(t)) return t.map(partRef);
+  if (t && typeof t === "object" && "id" in t) return (t as PartJson).id;
+  return t as PartSelector;
+}
+
+/** Entity objects inside profiles are sent as ids. */
+function normalizeLoop(l: ProfileLoop): ProfileLoop {
+  return l && typeof l === "object" && !Array.isArray(l) && "id" in l
+    ? (l as EntityJson).id
+    : l;
+}
+
+function normalizeProfile(p: Profile): Profile {
+  if (p && typeof p === "object" && !Array.isArray(p) && "outer" in p)
+    return {
+      outer: normalizeLoop(p.outer),
+      ...(p.holes ? { holes: p.holes.map(normalizeLoop) } : {}),
+    };
+  return normalizeLoop(p as ProfileLoop);
+}
+
+function normalizeTool(t: Tool): Tool {
+  if ("part" in t) return { part: partRef(t.part) };
+  if ("extrude" in t) return { ...t, extrude: normalizeProfile(t.extrude) };
+  if ("revolve" in t) return { ...t, revolve: normalizeProfile(t.revolve) };
+  if ("sweep" in t) return { ...t, sweep: normalizeProfile(t.sweep) };
+  return {
+    ...t,
+    loft: t.loft.map((s) => ({ ...s, profile: normalizeProfile(s.profile) })),
+  };
 }
 
 export interface CadApiBackends {
@@ -361,6 +581,13 @@ export function buildCadApi({
         layers: string[];
         /** Attribute keys in use, with how many entities carry each. */
         attrs: Record<string, number>;
+        /** Placed solid parts and part definitions. */
+        parts: number;
+        partDefs: number;
+        /** Attribute keys in use on parts, with how many parts carry each. */
+        partAttrs: Record<string, number>;
+        /** The kernel that answers part geometry ("arris 0.11.1"), or null. */
+        solidKernel: string | null;
       },
     /** Entities matching a selector (all without one); expand: block children too. */
     entities: (opts?: Selector) =>
@@ -481,6 +708,174 @@ export function buildCadApi({
     ) => call("setBlockAttrs", { name, attrs, ...opts }) as Attrs,
     blockAttrs: (name: string) =>
       call("blockAttrs", { name }) as { attrs: Attrs; shapes: Attrs[] },
+
+    // ── Solid parts (docs/api-surface.md, "Solid parts") ──────────────
+    // A part places a definition (a feature tree: shape only) in the world
+    // and carries attributes. Mm, degrees, Z up. Modifying a part changes
+    // its definition, so every part sharing it changes too. Where a kernel
+    // runs (server scripts) every change is evaluated first and a refusal
+    // throws "<call>: part p_3 ("name"), feature 4 (hole): <reason>" and
+    // changes nothing; elsewhere geometry queries throw "this build has no
+    // solid kernel".
+    /** New part: `profile` on its plane, extruded `distance` along the normal (negative: against it). */
+    extrude: (
+      profile: Profile,
+      opts: SketchOpts & NewPartOpts & { distance: number; taper?: number },
+    ) =>
+      call("extrude", {
+        ...opts,
+        profile: normalizeProfile(profile),
+      }) as PartJson,
+    /** New part: `profile` turned about `axis` (two points in profile coordinates) by `angle` (default 360). */
+    revolve: (
+      profile: Profile,
+      opts: SketchOpts &
+        NewPartOpts & { axis: [Point2, Point2]; angle?: number },
+    ) =>
+      call("revolve", {
+        ...opts,
+        profile: normalizeProfile(profile),
+      }) as PartJson,
+    /** New part: `profile` carried along `path`, which starts at the plane's origin along its normal. */
+    sweep: (
+      profile: Profile,
+      path: PathSeg[],
+      opts: SketchOpts & NewPartOpts = {},
+    ) =>
+      call("sweep", {
+        ...opts,
+        profile: normalizeProfile(profile),
+        path,
+      }) as PartJson,
+    /** New part: a solid through the sections in order (ruled: straight between them). */
+    loft: (
+      sections: LoftSection[],
+      opts: NewPartOpts & { ruled?: boolean } = {},
+    ) =>
+      call("loft", {
+        ...opts,
+        sections: sections.map((s) => ({
+          ...s,
+          profile: normalizeProfile(s.profile),
+        })),
+      }) as PartJson,
+    /** Subtract a tool body (or another part, as placed now) from a part. */
+    cut: (part: PartRef, tool: Tool, opts: FrameOpts = {}) =>
+      call("cut", {
+        target: partRef(part),
+        tool: normalizeTool(tool),
+        ...opts,
+      }) as PartJson,
+    /** Add a tool body (or another part) to a part. */
+    union: (part: PartRef, tool: Tool, opts: FrameOpts = {}) =>
+      call("union", {
+        target: partRef(part),
+        tool: normalizeTool(tool),
+        ...opts,
+      }) as PartJson,
+    /** Keep only what a part and a tool body share. */
+    intersect: (part: PartRef, tool: Tool, opts: FrameOpts = {}) =>
+      call("intersect", {
+        target: partRef(part),
+        tool: normalizeTool(tool),
+        ...opts,
+      }) as PartJson,
+    /** A hole from `at` along `dir` (default [0, 0, -1]): depth in mm or "through" (default); cbore: [dia, depth]. */
+    hole: (
+      part: PartRef,
+      opts: FrameOpts & {
+        at: Point3;
+        dir?: Point3;
+        dia: number;
+        depth?: number | "through";
+        cbore?: [number, number];
+      },
+    ) => call("hole", { target: partRef(part), ...opts }) as PartJson,
+    /** Round edges (exact); fallback "visual" is recorded for renderers, the B-rep stays exact or the call fails. */
+    fillet3d: (
+      part: PartRef,
+      opts: FrameOpts & {
+        edges: EdgeSel;
+        radius: number;
+        fallback?: "error" | "visual";
+      },
+    ) => call("fillet3d", { target: partRef(part), ...opts }) as PartJson,
+    /** Bevel edges by d (d2: the other face; kernels may only do d2 = d). */
+    chamfer3d: (
+      part: PartRef,
+      opts: FrameOpts & { edges: EdgeSel; d: number; d2?: number },
+    ) => call("chamfer3d", { target: partRef(part), ...opts }) as PartJson,
+    /** Move parts by [dx, dy, dz]. */
+    move3d: (t: PartTarget, by: Point3) =>
+      call("move3d", { target: normalizePartTarget(t), by }) as {
+        moved: string[];
+      },
+    /** Rotate parts by `angle` degrees about the line through `about` (default origin) along `axis` (default Z). */
+    rotate3d: (
+      t: PartTarget,
+      opts: { angle: number; axis?: Point3; about?: Point3 },
+    ) =>
+      call("rotate3d", { target: normalizePartTarget(t), ...opts }) as {
+        rotated: string[];
+      },
+    /**
+     * Placed copies that share the definition (no re-evaluation). Each copy
+     * is the previous one rotated, then moved; `count` copies in a row make
+     * an array. unique: each copy gets a definition of its own. attrs are
+     * merged into the source's. One part in: one part out; else an array.
+     */
+    copy3d: (
+      t: PartTarget,
+      opts: {
+        move?: Point3;
+        rotate?: { angle: number; axis?: Point3; about?: Point3 };
+        count?: number;
+        attrs?: Record<string, AttrValue | null>;
+        unique?: boolean;
+      } = {},
+    ) =>
+      call("copy3d", { target: normalizePartTarget(t), ...opts }) as
+        | PartJson
+        | PartJson[],
+    /** Remove parts; definitions no part uses any more (directly or as a tool) go too. */
+    remove3d: (t: PartTarget) =>
+      call("remove3d", { target: normalizePartTarget(t) }) as {
+        removed: string[];
+        defsRemoved: string[];
+      },
+    /** Merge attributes into parts (null removes a key; replace: start empty). All or nothing. */
+    setPartAttrs: (
+      t: PartTarget,
+      attrs: Record<string, AttrValue | null>,
+      opts: { replace?: boolean } = {},
+    ) =>
+      call("setPartAttrs", {
+        target: normalizePartTarget(t),
+        attrs,
+        ...opts,
+      }) as { updated: string[] },
+    removePartAttrs: (t: PartTarget, keys: string[]) =>
+      call("removePartAttrs", { target: normalizePartTarget(t), keys }) as {
+        updated: string[];
+      },
+    /**
+     * Parts matching a selector (all without one), with placement,
+     * attributes and (geometry, default true; needs a kernel) the tight box
+     * in the world and in the part's frame, the volume and the centroid.
+     */
+    parts: (sel: PartSelector & { geometry?: boolean } = {}) =>
+      call("parts", { ...sel }) as PartJson[],
+    part: (id: PartRef, opts: { geometry?: boolean } = {}) =>
+      call("part", { id: partRef(id), ...opts }) as PartJson,
+    /** A definition's whole feature tree (by "d_3", or a part's). */
+    partDef: (def: string | PartJson) =>
+      call("partDef", { def: typeof def === "string" ? def : def.def }) as {
+        id: string;
+        name: string;
+        features: unknown[];
+        parts: string[];
+        tools: string[];
+      },
 
     // Topology
     connectedTo: (id: string | EntityJson, tolerance?: number) =>
@@ -883,7 +1278,10 @@ export function buildCadApi({
     loadJson: (path: string) => rpc("loadJson", { path }),
     savePdf: (path = "output.pdf", opts: SavePdfOptions = {}) =>
       rpc("savePdf", { ...opts, path }),
-    /** Render the drawing to a PNG on the server (GPU, else CPU). */
+    /**
+     * Render to a PNG on the server: the drawing (GPU, else CPU), or with
+     * `view` (or mode: "3d") the document's solid parts, shaded (GPU).
+     */
     render: (opts: RenderOptions = {}) =>
       rpc("render", { out: "render.png", ...opts }) as
         | RenderResult

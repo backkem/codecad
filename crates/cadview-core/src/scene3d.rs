@@ -672,10 +672,16 @@ pub enum NamedView {
     /// Eye along (1, -1, 1): front, right and top faces visible, Z up on
     /// screen (the "south-east" isometric).
     Isometric,
+    /// Eye along (-1, -1, 1): front, left and top (south-west).
+    IsometricSw,
+    /// Eye along (1, 1, 1): back, right and top (north-east).
+    IsometricNe,
+    /// Eye along (-1, 1, 1): back, left and top (north-west).
+    IsometricNw,
 }
 
 impl NamedView {
-    pub const ALL: [NamedView; 7] = [
+    pub const ALL: [NamedView; 10] = [
         NamedView::Front,
         NamedView::Back,
         NamedView::Left,
@@ -683,11 +689,15 @@ impl NamedView {
         NamedView::Top,
         NamedView::Bottom,
         NamedView::Isometric,
+        NamedView::IsometricSw,
+        NamedView::IsometricNe,
+        NamedView::IsometricNw,
     ];
 
     /// `(yaw, pitch)` in radians for [`Camera3d`].
     pub fn yaw_pitch(self) -> (f64, f64) {
         use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
+        let iso = (1.0 / 3f64.sqrt()).asin();
         match self {
             NamedView::Front => (-FRAC_PI_2, 0.0),
             NamedView::Back => (FRAC_PI_2, 0.0),
@@ -695,7 +705,10 @@ impl NamedView {
             NamedView::Right => (0.0, 0.0),
             NamedView::Top => (-FRAC_PI_2, FRAC_PI_2),
             NamedView::Bottom => (-FRAC_PI_2, -FRAC_PI_2),
-            NamedView::Isometric => (-FRAC_PI_4, (1.0 / 3f64.sqrt()).asin()),
+            NamedView::Isometric => (-FRAC_PI_4, iso),
+            NamedView::IsometricSw => (-3.0 * FRAC_PI_4, iso),
+            NamedView::IsometricNe => (FRAC_PI_4, iso),
+            NamedView::IsometricNw => (3.0 * FRAC_PI_4, iso),
         }
     }
 
@@ -708,6 +721,9 @@ impl NamedView {
             NamedView::Top => "top",
             NamedView::Bottom => "bottom",
             NamedView::Isometric => "isometric",
+            NamedView::IsometricSw => "iso-sw",
+            NamedView::IsometricNe => "iso-ne",
+            NamedView::IsometricNw => "iso-nw",
         }
     }
 }
@@ -719,7 +735,9 @@ impl std::str::FromStr for NamedView {
             .into_iter()
             .find(|v| v.name() == s)
             .ok_or_else(|| {
-                format!("unknown view '{s}' (front|back|left|right|top|bottom|isometric)")
+                format!(
+                    "unknown view '{s}' (front|back|left|right|top|bottom|isometric|iso-sw|iso-ne|iso-nw)"
+                )
             })
     }
 }
@@ -1103,6 +1121,18 @@ pub struct ClipPlane {
 /// Most clip planes a scene may carry.
 pub const MAX_CLIP_PLANES: usize = 4;
 
+/// How a scene's clip planes combine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ClipMode {
+    /// Remove what lies beyond any plane: one plane takes off a half, two
+    /// keep a quarter.
+    #[default]
+    Any,
+    /// Remove only what lies beyond every plane: two planes take out a
+    /// wedge, the classic quarter cutaway.
+    All,
+}
+
 /// Everything a 3D view shows. Several parts are several items, each with
 /// its own placement (an exploded view is a change of placements, see
 /// [`Scene3d::explode`]) and material.
@@ -1120,9 +1150,11 @@ pub struct Scene3d {
     pub occlusion: Option<Occlusion>,
     /// A ground plane; `None` for none.
     pub ground: Option<Ground>,
-    /// Cutaway: geometry on the far side of any of these is removed (at
-    /// most [`MAX_CLIP_PLANES`]; [`build_frame`] keeps the first ones).
+    /// Cutaway: geometry on the far side of these is removed (at most
+    /// [`MAX_CLIP_PLANES`]; [`build_frame`] keeps the first ones), on the
+    /// far side of any of them or of all of them as `clip_mode` says.
     pub clip_planes: Vec<ClipPlane>,
+    pub clip_mode: ClipMode,
 }
 
 impl Default for Scene3d {
@@ -1138,6 +1170,7 @@ impl Default for Scene3d {
             occlusion: Some(Occlusion::default()),
             ground: None,
             clip_planes: Vec::new(),
+            clip_mode: ClipMode::Any,
         }
     }
 }
@@ -1184,17 +1217,22 @@ impl Scene3d {
     }
 
     /// Fit the camera to the whole scene with the 2D renderer's margin
-    /// ([`FIT_MARGIN`]). With clip planes it fits the part of the scene's
-    /// box that the planes keep (the whole box if they keep nothing).
+    /// ([`FIT_MARGIN`]). With clip planes that remove what lies beyond any
+    /// of them, it fits the part of the scene's box that the planes keep
+    /// (the whole box if they keep nothing); planes that only remove a
+    /// wedge ([`ClipMode::All`]) keep the whole box in view.
     /// Returns `false` for an empty scene.
     pub fn fit_camera(&mut self, aspect: f64) -> bool {
         let Some(all) = self.bounds() else {
             return false;
         };
-        let kept = clip_planes_of(&self.clip_planes)
-            .iter()
-            .try_fold(all, |b, p| clip_box(&b, p))
-            .unwrap_or(all);
+        let kept = match self.clip_mode {
+            ClipMode::Any => clip_planes_of(&self.clip_planes)
+                .iter()
+                .try_fold(all, |b, p| clip_box(&b, p))
+                .unwrap_or(all),
+            ClipMode::All => all,
+        };
         self.camera.fit(&kept, aspect, FIT_MARGIN)
     }
 
@@ -1416,8 +1454,11 @@ pub struct Frame3d<'a> {
     /// Ambient occlusion, if any.
     pub occlusion: Option<FrameOcclusion>,
     /// Clip planes as `[nx, ny, nz, w]` with a unit normal: a point `p` is
-    /// removed where `n . p + w > 0`. At most [`MAX_CLIP_PLANES`].
+    /// beyond a plane where `n . p + w > 0`. At most [`MAX_CLIP_PLANES`].
     pub clip_planes: Vec<[f64; 4]>,
+    /// A point is removed when it is beyond any plane, or beyond all of
+    /// them ([`ClipMode`]).
+    pub clip_mode: ClipMode,
     /// The clip range used by `projection`.
     pub near_far: (f64, f64),
     /// Device pixels per CSS pixel: scales the edge width. 1 from
@@ -1520,6 +1561,7 @@ pub fn build_frame(scene: &Scene3d, width: u32, height: u32) -> Frame3d<'_> {
         ground,
         occlusion,
         clip_planes,
+        clip_mode: scene.clip_mode,
         near_far,
         pixel_ratio: 1.0,
         pixel_world: 2.0 * cam.half_height() / height.max(1) as f64,

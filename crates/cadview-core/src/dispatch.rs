@@ -72,7 +72,7 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                     *attr_keys.entry(k.as_str()).or_default() += 1;
                 }
             }
-            let result = serde_json::json!({
+            let mut result = serde_json::json!({
                 "bounds": { "min": min, "max": max },
                 "entities": doc.entities.len(),
                 "layers": doc.layers.iter().map(|l| &l.name).collect::<Vec<_>>(),
@@ -80,6 +80,13 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 "counts": counts,
                 "attrs": attr_keys,
             });
+            // Solid parts: counts, attribute keys, the kernel (if any).
+            if let (Some(m), serde_json::Value::Object(p)) = (
+                result.as_object_mut(),
+                crate::dispatch_3d::describe_parts(doc),
+            ) {
+                m.extend(p);
+            }
             Ok(result.to_string())
         }
 

@@ -1035,6 +1035,8 @@ dependencies = [
  "axum",
  "cadview-core",
  "cadview-render",
+ "cadview-render3d",
+ "cadview-solid",
  "codelib",
  "kurbo",
  "rust-embed",

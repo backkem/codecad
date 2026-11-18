@@ -17,9 +17,10 @@ struct Globals {
     edge: vec4<f32>,
     // rgb: linear outline colour; w: outline half-width in pixels.
     outline: vec4<f32>,
-    // Clip planes (n, w): removed where dot(n, p) + w > 0.
+    // Clip planes (n, w): p is beyond a plane where dot(n, p) + w > 0.
     clip: array<vec4<f32>, 4>,
-    // x: number of clip planes; y: width of the cut line in pixels.
+    // x: number of clip planes; y: width of the cut line in pixels;
+    // z: 0 removes what is beyond any plane, 1 what is beyond all of them.
     clip_info: vec4<f32>,
     // rgb: linear ground colour; w: ground height.
     ground: vec4<f32>,
@@ -127,33 +128,51 @@ fn fs_mesh(in: MeshOut, @builtin(front_facing) front: bool) -> @location(0) vec4
     return vec4<f32>(shade(n, in.world, in.item), 1.0);
 }
 
-fn clipped(w: vec3<f32>) -> bool {
-    let count = u32(g.clip_info.x);
-    for (var i = 0u; i < count; i++) {
-        if (dot(g.clip[i].xyz, w) + g.clip[i].w > 0.0) {
-            return true;
-        }
-    }
-    return false;
+fn clip_all() -> bool {
+    return g.clip_info.z > 0.5;
 }
 
-// With clip planes, front faces: removed on the far side of a plane, and a
-// line of the edge colour where a plane cuts the face.
+fn clipped(w: vec3<f32>) -> bool {
+    let count = u32(g.clip_info.x);
+    let all_mode = clip_all();
+    for (var i = 0u; i < count; i++) {
+        let beyond = dot(g.clip[i].xyz, w) + g.clip[i].w > 0.0;
+        if (beyond && !all_mode) {
+            return true;
+        }
+        if (!beyond && all_mode) {
+            return false;
+        }
+    }
+    return all_mode && count > 0u;
+}
+
+// With clip planes, front faces: removed beyond any plane (or beyond all
+// of them), and a line of the edge colour where the removed region's
+// boundary cuts the face.
 @fragment
 fn fs_mesh_clip(in: MeshOut) -> @location(0) vec4<f32> {
     // Distances and their screen derivatives first, in uniform control flow.
-    var removed = false;
-    var cut_px = 1e9;
+    // Any: removed where max(d) > 0, and the boundary is max(d) = 0. All:
+    // removed where min(d) > 0, and the boundary is min(d) = 0. In pixels,
+    // the distance to it is min (any) or max (all) of -d / fwidth(d).
+    let all_mode = clip_all();
+    var beyond_any = false;
+    var beyond_all = true;
+    var near_any = 1e9;
+    var near_all = -1e9;
     for (var i = 0u; i < 4u; i++) {
         let d = dot(g.clip[i].xyz, in.world) + g.clip[i].w;
         let fw = fwidth(d);
         if (f32(i) < g.clip_info.x) {
-            if (d > 0.0) {
-                removed = true;
-            }
-            cut_px = min(cut_px, -d / max(fw, 1e-20));
+            beyond_any = beyond_any || d > 0.0;
+            beyond_all = beyond_all && d > 0.0;
+            near_any = min(near_any, -d / max(fw, 1e-20));
+            near_all = max(near_all, -d / max(fw, 1e-20));
         }
     }
+    let removed = select(beyond_any, beyond_all, all_mode);
+    let cut_px = select(near_any, near_all, all_mode);
     if (removed) {
         discard;
     }
@@ -196,11 +215,34 @@ fn fs_cut_depth(@builtin(position) frag: vec4<f32>) -> @builtin(frag_depth) f32 
     let d = h1.xyz / h1.w - p0;
     let count = u32(g.clip_info.x);
     var s = -1.0;
-    for (var i = 0u; i < count; i++) {
-        let nd = dot(g.clip[i].xyz, d);
-        let f0 = dot(g.clip[i].xyz, p0) + g.clip[i].w;
-        if (nd < 0.0 && f0 > 0.0) {
-            s = max(s, f0 / -nd);
+    if (clip_all()) {
+        // The removed region is the intersection of the half-spaces (a
+        // convex wedge): the ray is inside it for s in [s_in, s_out], and
+        // the cut is where it leaves, at s_out.
+        var s_in = 0.0;
+        var s_out = 1e30;
+        var inside = true;
+        for (var i = 0u; i < count; i++) {
+            let nd = dot(g.clip[i].xyz, d);
+            let f0 = dot(g.clip[i].xyz, p0) + g.clip[i].w;
+            if (nd > 0.0) {
+                s_in = max(s_in, -f0 / nd);
+            } else if (nd < 0.0) {
+                s_out = min(s_out, f0 / -nd);
+            } else if (f0 <= 0.0) {
+                inside = false;
+            }
+        }
+        if (inside && s_out > s_in && s_out < 1e29) {
+            s = s_out;
+        }
+    } else {
+        for (var i = 0u; i < count; i++) {
+            let nd = dot(g.clip[i].xyz, d);
+            let f0 = dot(g.clip[i].xyz, p0) + g.clip[i].w;
+            if (nd < 0.0 && f0 > 0.0) {
+                s = max(s, f0 / -nd);
+            }
         }
     }
     if (s < 0.0) {

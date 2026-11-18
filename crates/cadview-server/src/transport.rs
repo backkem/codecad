@@ -157,7 +157,7 @@ async fn run_yrs_sync_with_first_msg(
         let slot = reg.get_mut(doc_key).unwrap();
         slot.sync_doc.apply_update(&client_update)?;
         let rebuilt = slot.sync_doc.to_document();
-        slot.document = rebuilt;
+        slot.document.replace_keeping_solids(rebuilt);
         tracing::debug!(
             "Applied client->server update ({} bytes) for '{}'",
             client_update.len(),
@@ -188,7 +188,7 @@ async fn run_yrs_sync_with_first_msg(
                         slot.sync_doc.apply_update(&update)?;
                         let rebuilt = slot.sync_doc.to_document();
                         let count = rebuilt.entities.len();
-                        slot.document = rebuilt;
+                        slot.document.replace_keeping_solids(rebuilt);
                         let tx = slot.update_tx.clone();
                         drop(reg);
                         let _ = tx.send(update.clone());
@@ -306,6 +306,8 @@ async fn handle_rpc_call(
                         "path": path,
                         "entities": slot.document.entities.len(),
                         "attrs": cadview_core::dwg_attr_losses(&slot.document),
+                        // DWG holds 2D only; parts are left out (saveJson keeps them).
+                        "parts": cadview_core::dispatch_3d::dwg_part_losses(&slot.document),
                     })
                     .to_string()
                 }
@@ -356,7 +358,7 @@ async fn handle_rpc_call(
                     let sv_before = slot.sync_doc.state_vector();
                     slot.sync_doc.populate_from_document(&new_doc);
                     let update = slot.sync_doc.encode_diff(&sv_before).unwrap_or_default();
-                    slot.document = new_doc;
+                    slot.document.replace_keeping_solids(new_doc);
 
                     if !update.is_empty() {
                         let _ = slot.update_tx.send(update);
@@ -385,6 +387,7 @@ async fn handle_rpc_call(
                     "path": path,
                     "entities": slot.document.entities.len(),
                     "bytes": text.len(),
+                    "parts": slot.document.parts.len(),
                 })
                 .to_string(),
                 Err(e) => serde_json::json!({ "error": format!("write failed: {e}") }).to_string(),
@@ -408,7 +411,7 @@ async fn handle_rpc_call(
                     let sv_before = slot.sync_doc.state_vector();
                     slot.sync_doc.populate_from_document(&new_doc);
                     let update = slot.sync_doc.encode_diff(&sv_before).unwrap_or_default();
-                    slot.document = new_doc;
+                    slot.document.replace_keeping_solids(new_doc);
                     if !update.is_empty() {
                         let _ = slot.update_tx.send(update);
                     }

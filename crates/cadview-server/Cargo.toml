@@ -9,13 +9,17 @@ repository.workspace = true
 [features]
 default = ["gpu"]
 # GPU render backend for cad.render / --render. Without it, rendering is CPU-only.
-gpu = ["cadview-render/gpu"]
+gpu = ["cadview-render/gpu", "dep:cadview-render3d"]
 embedded-dist = ["dep:rust-embed"]
 embedded-examples = ["dep:rust-embed"]
 
 [dependencies]
 cadview-core = { path = "../cadview-core" }
 cadview-render = { path = "../cadview-render", default-features = false, features = ["cpu", "cpu-multithreading"] }
+# The solid kernel (arris) behind cadview-core's evaluator interface.
+cadview-solid = { path = "../cadview-solid" }
+# Shaded 3D renders of parts (cad.render with a view); needs the GPU.
+cadview-render3d = { path = "../cadview-render3d", optional = true }
 codelib = { git = "https://github.com/backkem/codelib" }
 kurbo = "0.13"
 wtransport = "0.7"

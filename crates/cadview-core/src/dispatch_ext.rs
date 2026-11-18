@@ -349,7 +349,10 @@ pub fn cad_call_ext(doc: &mut Document, method: &str, args: &str) -> Option<R> {
         "setBlockAttrs" => set_block_attrs(doc, args),
         "blockAttrs" => block_attrs(doc, args),
         "methods" => methods(),
-        _ => return crate::setquery::dispatch(doc, method, args),
+        _ => {
+            return crate::dispatch_3d::dispatch(doc, method, args)
+                .or_else(|| crate::setquery::dispatch(doc, method, args))
+        }
     };
     Some(r)
 }
@@ -772,6 +775,8 @@ fn clear(doc: &mut Document, args: &str) -> R {
     doc.checkpoint();
     doc.entities.clear();
     doc.layers.clear();
+    doc.parts.clear();
+    doc.part_defs.clear();
     if a.all {
         doc.blocks.clear();
         doc.linetypes = crate::document::standard_linetypes();
@@ -1463,9 +1468,33 @@ fn methods() -> R {
         {"name": "near", "args": "{point, radius, select?}", "desc": "Entities within radius of a point, nearest first, with distance"},
         {"name": "inBounds", "args": "{rect, mode?: intersect|contain, select?}", "desc": "Entities whose bounding box overlaps or lies in a rectangle"},
     ]);
+    // Solid parts (dispatch_3d.rs).
+    let solids = json!([
+        {"name": "extrude", "args": "{profile, plane?, at?, distance, taper?, attrs?, name?}", "desc": "New part: a profile extruded along its plane normal"},
+        {"name": "revolve", "args": "{profile, plane?, at?, axis, angle?, attrs?, name?}", "desc": "New part: a profile turned about an axis in its plane"},
+        {"name": "sweep", "args": "{profile, plane?, at?, path, attrs?, name?}", "desc": "New part: a profile carried along a path of lines and arcs"},
+        {"name": "loft", "args": "{sections, ruled?, attrs?, name?}", "desc": "New part: a solid through profiles on planes"},
+        {"name": "cut", "args": "{target, tool, frame?}", "desc": "Subtract a tool (extrude|revolve|sweep|loft body, or another part) from a part"},
+        {"name": "union", "args": "{target, tool, frame?}", "desc": "Add a tool body to a part"},
+        {"name": "intersect", "args": "{target, tool, frame?}", "desc": "Keep what a part and a tool body share"},
+        {"name": "hole", "args": "{target, at, dir?, dia, depth?, cbore?, frame?}", "desc": "Drill a hole (blind, through, counterbored)"},
+        {"name": "fillet3d", "args": "{target, edges, radius, fallback?, frame?}", "desc": "Round selected edges of a part"},
+        {"name": "chamfer3d", "args": "{target, edges, d, d2?, frame?}", "desc": "Bevel selected edges of a part"},
+        {"name": "move3d", "args": "{target, by}", "desc": "Move parts by [dx, dy, dz]"},
+        {"name": "rotate3d", "args": "{target, angle, axis?, about?}", "desc": "Rotate parts about an axis (degrees)"},
+        {"name": "copy3d", "args": "{target, move?, rotate?, count?, attrs?, unique?}", "desc": "Placed copies sharing the definition (unique: own definitions)"},
+        {"name": "remove3d", "args": "{target}", "desc": "Remove parts; unused definitions go too"},
+        {"name": "setPartAttrs", "args": "{target, attrs, replace?}", "desc": "Merge attributes into parts"},
+        {"name": "removePartAttrs", "args": "{target, keys}", "desc": "Remove attribute keys from parts"},
+        {"name": "parts", "args": "{ids?, def?, attrs?, has?, bounds?, geometry?}", "desc": "Parts with placement, attributes, box, volume, centroid"},
+        {"name": "part", "args": "{id, geometry?}", "desc": "One part"},
+        {"name": "partDef", "args": "{def}", "desc": "A definition's whole feature tree"},
+    ]);
     let mut m = m;
-    if let (Some(all), Value::Array(more)) = (m.as_array_mut(), more) {
-        all.extend(more);
+    for extra in [more, solids] {
+        if let (Some(all), Value::Array(extra)) = (m.as_array_mut(), extra) {
+            all.extend(extra);
+        }
     }
     ok(m)
 }

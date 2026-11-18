@@ -792,6 +792,76 @@ fn cutaway_shows_section_and_cavity() {
     }
 }
 
+/// A quarter cutaway: two clip planes with `ClipMode::All` take a wedge
+/// out of a 100 mm cube (x > 50 and y < 50), isometric. Where the view
+/// ray crosses the wedge it meets the cut face in the section colour
+/// (within 1 level); a point beyond only one plane keeps its face's
+/// reference shading (within 2), where `ClipMode::Any` removes it. The
+/// camera fit is the uncut one: the wedge takes nothing off the box.
+#[test]
+fn quarter_cutaway_removes_only_the_wedge() {
+    use cadview_core::scene3d::ClipMode;
+    let test = "quarter_cutaway_removes_only_the_wedge";
+    let m = Material::from_srgb8(176, 190, 204);
+    let mesh = shapes::cuboid(Point3::ORIGIN, Point3::new(100.0, 100.0, 100.0));
+    let mut s = iso(one(&mesh, m));
+    s.occlusion = None;
+    let opts = RenderOptions3d::default();
+    let uncut = prepare_scene(&s, &opts);
+    for normal in [Vec3::X, -Vec3::Y] {
+        s.clip_planes.push(ClipPlane {
+            point: Point3::new(50.0, 50.0, 0.0),
+            normal,
+        });
+    }
+    s.clip_mode = ClipMode::All;
+    let Some(img) = render(test, &s, &opts) else {
+        return;
+    };
+    let prepared = prepare_scene(&s, &opts);
+    assert_eq!(prepared.camera, uncut.camera, "the fit keeps the whole box");
+    let f = frame_of(&prepared, &opts);
+    let cam = &prepared.camera;
+    let section = default_section_color(&m).map(encode_srgb);
+    // The view ray through (90, 20, 100) runs in the wedge until it meets
+    // the cut face y = 50 at (60, 50, 70).
+    assert_close(
+        at(&img, &f, cam, Point3::new(90.0, 20.0, 100.0)),
+        section,
+        1,
+        "cut face seen through the wedge",
+    );
+    // Beyond one plane only: kept.
+    let top = Point3::new(75.0, 75.0, 100.0);
+    let front = Point3::new(25.0, 0.0, 50.0);
+    let kept = [(top, Vec3::Z, "top face"), (front, -Vec3::Y, "front face")];
+    for (p, n, what) in kept {
+        assert_close(at(&img, &f, cam, p), f.expected_srgb(p, n, &m), 2, what);
+    }
+    // The same planes with ClipMode::Any remove both.
+    s.clip_mode = ClipMode::Any;
+    let any = render(test, &s, &opts).unwrap();
+    let pa = prepare_scene(&s, &opts);
+    let fa = frame_of(&pa, &opts);
+    for (p, n, what) in kept {
+        let seen = at(&any, &fa, &pa.camera, p);
+        let face = fa.expected_srgb(p, n, &m);
+        assert!(
+            seen.iter().zip(face).any(|(a, b)| a.abs_diff(b) > 8),
+            "any: {what} is removed, got {seen:?}"
+        );
+    }
+    let cut = img
+        .rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|p| (0..3).all(|i| p[i].abs_diff(section[i]) <= 1))
+        .count();
+    eprintln!("quarter cutaway: {cut} section pixels");
+    assert!(cut > 1000, "{cut}");
+}
+
 /// 500 boxes: with one shared mesh the renderer prepares one mesh, with a
 /// mesh each it prepares 500; both give the same bytes, warm renders equal
 /// the first, and a warm render at 960x640 takes under a second.

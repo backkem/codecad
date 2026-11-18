@@ -26,17 +26,18 @@ tool and the data.
 
 ## Features
 
-**Drawings (2D)**, in the browser with no backend, and on the server:
+**Drawings (2D)**
 
-- **DWG viewer**: opens .dwg files (R13-R2018) with infinite vector zoom.
-  Dual renderer: Vello (GPU compute, WebGPU) with egui CPU fallback.
+- **DWG viewer and editor**: opens .dwg files (R13-R2018) with infinite
+  vector zoom. Dual renderer: Vello (GPU compute, WebGPU) with egui CPU
+  fallback.
 - **Multi-document tabs**: several drawings side-by-side, each with
   isolated camera, layers, and undo history.
-- **Scriptable**: every drawing operation is a `cad_call(method, args_json)`
-  you can drive from the browser console or your own code.
-- **Output**: DWG and PDF from the server.
+- **Scriptable**: every drawing operation is a function call you can
+  drive from the console, a script, or your own code.
+- **Output**: DWG, PDF and PNG.
 
-**Models (3D)**, built on the server:
+**Models (3D)**
 
 - **Solid parts**: extrude, revolve, sweep, loft, cut, union, holes,
   fillets and chamfers, kept as exact feature trees. Copies share one
@@ -44,20 +45,22 @@ tool and the data.
 - **Checks**: set queries (overlaps, contacts, distances, containment) for
   rules you write in script.
 - **Renders**: a fast working render and a path-traced presentation
-  render, to PNG.
+  render, in the viewer and to PNG.
 - **Drawings from models**: exact projected views (`cad.project`) for
   shop drawings, and part lists from attributes.
-- **In the browser**: a prebaked scene (`cad.bake3d`) opens without a
-  kernel, in both render modes (WebGPU). A kernel module
-  (`just build-kernel`) lets a page build parts itself: the app fetches it
-  on the first call that needs geometry, the example pages never do.
+- **Prebaked scenes**: a model saved with `cad.bake3d` opens anywhere
+  without the solid kernel; the kernel loads only when something new has
+  to be built.
 
-**With server**: run `cadview-server` for persistence, sync, and automation:
+**One API, in the page or with the server.** The same calls and the same
+core run in the browser and in `cadview-server`. Run the server when you
+want:
 
 - **Real-time sync**: edits propagate instantly to all connected browsers
   via Yrs CRDT over WebTransport.
-- **Server-side scripting**: JS in a [codelib](https://github.com/backkem/codelib)
-  sandbox (wasmtime) with direct document access. Mutations batch and broadcast to all viewers.
+- **Sandboxed scripts**: JS in a [codelib](https://github.com/backkem/codelib)
+  sandbox (wasmtime) with direct document access, with files written to
+  disk. Mutations batch and broadcast to all viewers.
 - **HTTP API**: `POST /api/run` to execute scripts from curl, CI, or MCP.
 
 **General by design**: the core knows geometry, not what it means. A floor
